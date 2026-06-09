@@ -68,7 +68,7 @@ def flux_transit(period, rp, a, incl, ecc, w, t, t0=0.):
     return m_transit.light_curve(params_transit)
 
 
-def PhaseCurve(period, rp, a, incl, ecc, w, fp, R_star, offset=0, t=[], t0=0.):
+def PhaseCurve(period, rp, a, incl, ecc, w, fp, R_star, offset=0, t=[], t0=0., A=1.):
     """
     Returns (t, flux): timestamps and the full phase curve combining transit, secondary eclipse, and sinusoidal phase modulation.
     Phase modulation is computed from the true anomaly (correct for eccentric orbits); offset shifts the atmospheric hotspot in degrees.
@@ -77,7 +77,7 @@ def PhaseCurve(period, rp, a, incl, ecc, w, fp, R_star, offset=0, t=[], t0=0.):
 
     f = true_anomaly(t, period, ecc, w, t0=t0)
     f_eclipse = 3. * np.pi / 2. - np.radians(w)
-    phase_mod = (np.cos(f - f_eclipse + np.radians(offset)) + 1) / 2
+    phase_mod = 1 + A/2 * (np.cos(f - f_eclipse + np.radians(offset)) - 1)
 
     t_corr = light_travel_time_correction(t, period, ecc, w, incl, a, R_star, t0=t0)
     phase_curve = flux_transit(period, rp, a, incl, ecc, w, t, t0=t0)+(flux_eclipse(period, rp, a, incl, ecc, w, fp, t, t0=t0)-1)*phase_mod
