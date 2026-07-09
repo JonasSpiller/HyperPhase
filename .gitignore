@@ -45,3 +45,9 @@ ENV/
 .env
 .env.*
 *.key
+
+# ========================
+# Project related
+# ========================
+/Literature/
+/Old_and_unused.py
