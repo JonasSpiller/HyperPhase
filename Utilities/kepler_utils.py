@@ -31,11 +31,17 @@ def eclipse_time(period, ecc, w, t0=0.):
     f_eclipse = 3. * np.pi / 2. - w_rad
 
     M_transit = eccentric_to_mean(true_to_eccentric(f_transit, ecc), ecc)
-    M_eclipse = eccentric_to_mean(true_to_eccentric(f_eclipse,  ecc), ecc)
+    M_eclipse = eccentric_to_mean(true_to_eccentric(f_eclipse, ecc), ecc)
 
     delta_M = (M_eclipse - M_transit) % (2. * np.pi)
     t_ecl = delta_M / (2. * np.pi) * period + t0
     return t_ecl
+
+
+def AU_to_RS(a, rs):
+    """Returns the distance in solar radii for a given distance a in AU.
+    a in AU, rs (stellar radius) in solar radii."""
+    return a * 1.495978707e11 / 6.957e8 / rs
 
 
 def true_anomaly(t, period, ecc, w, t0=0.):
@@ -50,3 +56,4 @@ def true_anomaly(t, period, ecc, w, t0=0.):
     M = (M_transit + 2. * np.pi * (t - t0) / period) % (2. * np.pi)
     E = mean_to_eccentric(M, ecc)
     return eccentric_to_true(E, ecc) % (2. * np.pi)
+
