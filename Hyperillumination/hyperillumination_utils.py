@@ -9,11 +9,11 @@ from PIL import Image
 
 sigma = 5.670374e-8  # W ⋅ m⁻² ⋅ K⁻⁴
 
-def terminator_nightside(r1, r2, R, unit="rad"):
+def terminator_nightside(r1, r2, R, unit="rad"): # x2
     if unit=="rad": return np.arccos((r1-r2)/R)
     elif unit=="deg": return np.degrees(np.arccos((r1-r2)/R))
 
-def terminator_penumbra(r1, r2, R, unit="rad"):
+def terminator_penumbra(r1, r2, R, unit="rad"): # x1
     if unit=="rad": return np.arccos((r1 + r2) / R)
     elif unit=="deg": return np.degrees(np.arccos((r1 + r2) / R))
 
@@ -260,7 +260,8 @@ def plot_tempmap(phase, r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_
 
     temp = np.full_like(X, np.nan)
     if insolation_model=="kopal": temp[disk] = BBtemp_from_insolation(insolation_kopal(gamma1[disk], r1, r2, R, T2_eff, u=u))
-    else: temp[disk] = BBtemp_from_insolation(naive_insolation(gamma1[disk], r2, R, T2_eff))
+    elif insolation_model == "naive": temp[disk] = BBtemp_from_insolation(naive_insolation(gamma1[disk], r2, R, T2_eff))
+    else: raise ValueError("Insolation model must be either 'kopal' or 'naive'")
 
     if min_temp is None: min_temp = np.nanmin(temp) * 0.9
     if max_temp is None: max_temp = np.nanmax(temp) * 1.1
@@ -308,8 +309,10 @@ def plot_quad_tempmap(r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_gr
         # re-rendering all four maps just to find their combined range
         if insolation_model == "kopal":
             t_hot = BBtemp_from_insolation(insolation_kopal(np.array([0.]), r1, r2, R, T2_eff, u=u))[0]
-        else:
+        elif insolation_model == "naive":
             t_hot = BBtemp_from_insolation(naive_insolation(np.array([0.]), r2, R, T2_eff))[0]
+        else:
+            raise ValueError("Insolation model must be either 'kopal' or 'naive'")
         if min_temp is None: min_temp = 0.
         if max_temp is None: max_temp = 1.1 * t_hot
 
@@ -341,11 +344,11 @@ def animation_tempmap(r1, r2, R, T2_eff, filename="output_tempmap", u=0, min_tem
     bg_rgb = (0, 0, 0) if theme == "black" else (255, 255, 255)
     tc_rgb = (4, 217, 255) if theme == "black" else (0, 0, 0)   # matches "#04d9ff"
 
-    if min_temp is None or max_temp is None:
-        if insolation_model == "kopal": t_hot = BBtemp_from_insolation(insolation_kopal(np.array([0.]), r1, r2, R, T2_eff, u=u))[0]
-        else: t_hot = BBtemp_from_insolation(naive_insolation(np.array([0.]), r2, R, T2_eff))[0]
-        if min_temp is None: min_temp = 0.
-        if max_temp is None: max_temp = 1.1 * t_hot
+    if insolation_model == "kopal": t_hot = BBtemp_from_insolation(insolation_kopal(np.array([0.]), r1, r2, R, T2_eff, u=u))[0]
+    elif insolation_model == "naive": t_hot = BBtemp_from_insolation(naive_insolation(np.array([0.]), r2, R, T2_eff))[0]
+    else: raise ValueError("insolation_model must be either 'kopal' or 'naive'")
+    if min_temp is None: min_temp = 0.
+    if max_temp is None: max_temp = 1.1 * t_hot
 
 
     # seed palette: the full inferno gradient (every color any frame's heatmap could possibly use) plus the background, terminator-line, and colorbar-text colors
