@@ -47,6 +47,12 @@ ENV/
 *.key
 
 # ========================
+# Generated media (animations/plots)
+# ========================
+*.gif
+*.mp4
+
+# ========================
 # Project related
 # ========================
 /Literature/

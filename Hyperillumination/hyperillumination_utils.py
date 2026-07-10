@@ -1,6 +1,11 @@
+import io
 import time
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import matplotlib.animation as animation
 from scipy.integrate import quad
+from PIL import Image
 
 sigma = 5.670374e-8  # W ⋅ m⁻² ⋅ K⁻⁴
 
@@ -66,7 +71,7 @@ def insolation_fullyilluminated_kopal(gamma1, r1, r2, R, T2_eff, u=0):
 # Penumbra: Kopal implementation (eq. 36-41) without small-disk approximation and with corrections (lambda inconsistency, ...), see Goodnotes derivation
 # Evaluated with fixed-order Gauss-Legendre quadrature, vectorized across all gamma1 points at once (instead of looping scipy.integrate.quad per point)
 # 1e4 time improvement on insolation_penumbra_kopal_simpleint
-def insolation_penumbra_kopal(gamma1, r1, r2, R, T2_eff, u=0.0, order=32):
+def insolation_penumbra_kopal(gamma1, r1, r2, R, T2_eff, u=0.0, order=32, runtime=False):
     t0 = time.perf_counter()
     gamma1 = np.atleast_1d(np.asarray(gamma1, dtype=float))
 
@@ -98,7 +103,8 @@ def insolation_penumbra_kopal(gamma1, r1, r2, R, T2_eff, u=0.0, order=32):
         Jp += I0 * u * J2
     result = np.pi * Jp                                   # F = pi * I'   (eq. 36)
 
-    print(f"insolation_penumbra_kopal runtime: {time.perf_counter() - t0:.4f} s")
+    if runtime: print(f"insolation_penumbra_kopal runtime: {time.perf_counter() - t0:.4f} s")
+
     return result
 def _theta_kernels_vec(theta, alpha, rho, r2):
     """Return (cosb/rp^2, sinb/rp^2, cos theta', Delta) at polar angle theta -- vectorized
@@ -121,9 +127,6 @@ def _theta_kernels_vec(theta, alpha, rho, r2):
 
 
 
-
-
-
 ###########################################################################################################################
 #####
 #####   Other Penumbra Implementations
@@ -133,10 +136,10 @@ def _theta_kernels_vec(theta, alpha, rho, r2):
 
 # Penumbra: Kopal implementation (eq. 36-41) without small-disk approximation and with corrections (lambda inconsistency, ...), see Goodnotes derivation
 # Penumbra: baseline/ground-truth implementation via scipy.integrate.quad, per-point adaptive quadrature
-def insolation_penumbra_kopal_simpleint(gamma1, r1, r2, R, T2_eff, u=0.0, **quad_kw):
+def insolation_penumbra_kopal_simpleint(gamma1, r1, r2, R, T2_eff, u=0.0, runtime=False, **quad_kw):
     t0 = time.perf_counter()
     result = np.array([_insolation_penumbra_kopal_simpleint_scalar(g, r1, r2, R, T2_eff, u, **quad_kw) for g in gamma1])
-    print(f"insolation_penumbra_kopal_simpleint runtime: {time.perf_counter() - t0:.4f} s")
+    if runtime: print(f"insolation_penumbra_kopal_simpleint runtime: {time.perf_counter() - t0:.4f} s")
     return result
 def _insolation_penumbra_kopal_simpleint_scalar(gamma1, r1, r2, R, T2_eff, u, **quad_kw):
     alpha, rho = alpha_(gamma1, R, r1)
@@ -182,14 +185,10 @@ def _theta_kernels_simpleint(theta, alpha, rho, r2):
 
 
 # Penumbra: Quick solution through masking for integral validation (long runtimes, only accurate for relatively high nth, nom)
-def insolation_penumbra_mask(gamma1, r1, r2, R, T2_eff, u=0.0, nth=400, nom=800):
-    """Brute-force exact 2-D disk integral with cos(zeta)>0 mask (ground truth).
-    Accepts scalar or array gamma1 (dispatches per-point internally -- the (nth x nom)
-    grid is already large at default resolution, so batching all points into one grid
-    at once is not memory-practical)."""
+def insolation_penumbra_mask(gamma1, r1, r2, R, T2_eff, u=0.0, nth=400, nom=800, runtime=False):
     t0 = time.perf_counter()
     result = np.array([_insolation_penumbra_mask_scalar(g, r1, r2, R, T2_eff, u, nth, nom) for g in gamma1])
-    print(f"insolation_penumbra_mask runtime: {time.perf_counter() - t0:.4f} s")
+    if runtime: print(f"insolation_penumbra_mask runtime: {time.perf_counter() - t0:.4f} s")
     return result
 def _insolation_penumbra_mask_scalar(gamma1, r1, r2, R, T2_eff, u, nth, nom):
     alpha, rho = alpha_(gamma1, R, r1)
@@ -209,14 +208,13 @@ def _insolation_penumbra_mask_scalar(gamma1, r1, r2, R, T2_eff, u, nth, nom):
     Iem = I0 * (1 - u + u * cos_tp)
     integ = np.where((cz > 0) & (cos_tp > 0),
                      Iem * cz * cos_tp * (r2**2 * np.sin(TH)) / rp2, 0.0)
-    return np.trapz(np.trapz(integ, om, axis=1), th)
+    return np.trapezoid(np.trapezoid(integ, om, axis=1), th)
 
 
 # Penumbra: Kopal's analytic penumbral approximation, lambda sign-corrected (only valid for r2<<R!, inaccurate for close-in Exoplanets)
-def insolation_penumbra_kopal_approx(gamma1, r1, r2, R, T2_eff, u=0.0):
-    """Small-disk analytic form from eqs. (43)-(48), using the SELF-CONSISTENT sign
-    x = sin(lambda) = -(rho/r2)cos(alpha)  (opposite to printed eq. 56).
-    Returns incident flux = pi * I0 * [(1-u)J1' + u J2'] with I0 chosen s.t. L2=pi r2^2."""
+def insolation_penumbra_kopal_approx(gamma1, r1, r2, R, T2_eff, u=0.0, runtime=False):
+    """Small-disk analytic form from eqs. (43)-(48), using the self consistent sign
+    x = sin(lambda) = -(rho/r2)cos(alpha)  (opposite to printed eq. 56)."""
     t0 = time.perf_counter()
     alpha, rho = alpha_(gamma1, R, r1)
     I0 = sigma * T2_eff ** 4 / np.pi / (1 - u / 3)
@@ -229,5 +227,169 @@ def insolation_penumbra_kopal_approx(gamma1, r1, r2, R, T2_eff, u=0.0):
     J2 = (r2 ** 2 / (3 * rho ** 2)) * (1 - sl * (1 + cl ** 2 / 2)) * ca \
          + (r2 ** 3 / (8 * rho ** 3)) * cl ** 4 * sa  # corrected: r2^3 (eq.48 prints r1^3)
     result = np.pi * I0 * ((1 - u) * J1 + u * J2)
-    print(f"insolation_penumbra_kopal_approx runtime: {time.perf_counter() - t0:.4f} s")
+    if runtime: print(f"insolation_penumbra_kopal_approx runtime: {time.perf_counter() - t0:.4f} s")
     return result
+
+
+
+###########################################################################################################################
+#####
+#####   Plotting
+#####
+###########################################################################################################################
+
+
+def plot_tempmap(phase, r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, insolation_model="kopal"):
+
+    mycmap = plt.cm.inferno   # same colormap spiderman's plot_planet defaults to
+    bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
+
+    # equatorial (edge-on) view: sub-observer direction lies in the orbital plane, at
+    # longitude `phase` from the substellar direction (1,0,0); "up" in the image is the spin axis
+    z_obs = np.array([np.cos(2*np.pi*phase), -np.sin(2*np.pi*phase), 0.])   # direction toward the observer
+    y_obs = np.array([0., 0., 1.])                          # spin axis -- already unit and perp to z_obs
+    x_obs = np.cross(y_obs, z_obs)
+
+    xg = np.linspace(-1., 1., n_grid)
+    X, Y = np.meshgrid(xg, xg)
+    disk = X**2 + Y**2 <= 1.0
+    Zdepth = np.where(disk, np.sqrt(np.clip(1.0 - X**2 - Y**2, 0., None)), 0.)
+
+    nx = X * x_obs[0] + Y * y_obs[0] + Zdepth * z_obs[0]   # body-frame x-component (substellar direction)
+    gamma1 = np.where(disk, np.arccos(np.clip(nx, -1., 1.)), np.nan)
+
+    temp = np.full_like(X, np.nan)
+    if insolation_model=="kopal": temp[disk] = BBtemp_from_insolation(insolation_kopal(gamma1[disk], r1, r2, R, T2_eff, u=u))
+    else: temp[disk] = BBtemp_from_insolation(naive_insolation(gamma1[disk], r2, R, T2_eff))
+
+    if min_temp is None: min_temp = np.nanmin(temp) * 0.9
+    if max_temp is None: max_temp = np.nanmax(temp) * 1.1
+
+    if ax is None: _, ax = plt.subplots(facecolor=bg)
+    im = ax.imshow(temp, extent=[-1, 1, -1, 1], origin="lower", cmap=mycmap, vmin=min_temp, vmax=max_temp,
+                    interpolation="bilinear")
+    im.set_clip_path(patches.Circle((0, 0), 1.0, transform=ax.transData))
+
+    # add terminator line
+    if terminator and not np.isclose(phase % 1.0, 0.) and not np.isclose(phase % 1.0, 0.5):
+        theta_t = np.linspace(0., 2. * np.pi, 720)
+        n_t = np.stack([np.zeros_like(theta_t), np.cos(theta_t), np.sin(theta_t)])
+        Xt = n_t[0] * x_obs[0] + n_t[1] * x_obs[1] + n_t[2] * x_obs[2]
+        Yt = n_t[0] * y_obs[0] + n_t[1] * y_obs[1] + n_t[2] * y_obs[2]
+        visible_t = (n_t[0] * z_obs[0] + n_t[1] * z_obs[1] + n_t[2] * z_obs[2]) >= 0.15
+        ax.plot(np.where(visible_t, Xt, np.nan), np.where(visible_t, Yt, np.nan),
+                color="grey", linewidth=1.5, zorder=5)
+
+    ax.set_facecolor(bg)
+    ax.set(aspect=1, xlim=(1.05, -1.05), ylim=(-1.05, 1.05))
+    for spine in ax.spines.values():
+        spine.set_color(tc if show_axes else bg)
+    ax.get_xaxis().set_visible(show_axes)
+    ax.get_yaxis().set_visible(show_axes)
+
+    if show_axes: ax.tick_params(colors=tc)
+
+    if show_cax:
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.ax.tick_params(colors=tc)
+        cbar.set_label("T (K)", color=tc)
+
+    return ax
+
+
+def plot_quad_tempmap(r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_grid=500,
+                     theme='black', show_cax=True, show_axes=False, terminator=False,
+                     insolation_model="kopal", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75):
+    bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
+
+    if min_temp is None or max_temp is None:
+        # the substellar point (gamma1=0) is always this model's global hottest point, and
+        # the night side (temp=0) is always its coldest -- reuse these directly instead of
+        # re-rendering all four maps just to find their combined range
+        if insolation_model == "kopal":
+            t_hot = BBtemp_from_insolation(insolation_kopal(np.array([0.]), r1, r2, R, T2_eff, u=u))[0]
+        else:
+            t_hot = BBtemp_from_insolation(naive_insolation(np.array([0.]), r2, R, T2_eff))[0]
+        if min_temp is None: min_temp = 0.
+        if max_temp is None: max_temp = 1.1 * t_hot
+
+    fig, axs = plt.subplots(2, 2, figsize=(8 / 0.865, 8), facecolor=bg)
+
+    for ax, phase in zip(axs.ravel(), [phase1, phase2, phase3, phase4]):
+        plot_tempmap(phase, r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
+                           n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
+                           terminator=terminator, insolation_model=insolation_model)
+
+    if show_cax:
+        im = axs[0, 0].images[0]
+        fig.subplots_adjust(wspace=0, hspace=0, right=0.80)
+        cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
+        cbar = fig.colorbar(im, cax=cbar_ax)
+        cbar.ax.tick_params(colors=tc)
+        cbar.set_label("T (K)", color=tc)
+    else:
+        fig.subplots_adjust(wspace=0, hspace=0)
+
+    return fig
+
+
+
+def animation_tempmap(r1, r2, R, T2_eff, filename="output_tempmap", u=0, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
+                      show_axes=False, terminator=False, insolation_model="kopal", n_frames=1000, fps=20, phase_start=0., phase_end=1.):
+
+    bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
+    bg_rgb = (0, 0, 0) if theme == "black" else (255, 255, 255)
+    tc_rgb = (4, 217, 255) if theme == "black" else (0, 0, 0)   # matches "#04d9ff"
+
+    if min_temp is None or max_temp is None:
+        if insolation_model == "kopal": t_hot = BBtemp_from_insolation(insolation_kopal(np.array([0.]), r1, r2, R, T2_eff, u=u))[0]
+        else: t_hot = BBtemp_from_insolation(naive_insolation(np.array([0.]), r2, R, T2_eff))[0]
+        if min_temp is None: min_temp = 0.
+        if max_temp is None: max_temp = 1.1 * t_hot
+
+
+    # seed palette: the full inferno gradient (every color any frame's heatmap could possibly use) plus the background, terminator-line, and colorbar-text colors
+    grad = (plt.cm.inferno(np.linspace(0., 1., 200))[:, :3] * 255).astype(np.uint8)
+    extra = np.array([bg_rgb, (128, 128, 128), tc_rgb], dtype=np.uint8)   # background, terminator grey, colorbar text
+    seed = np.concatenate([grad, extra], axis=0).reshape(1, -1, 3)
+    palette_img = Image.fromarray(seed, mode="RGB").quantize(colors=256)
+
+    fig, ax = plt.subplots(facecolor=bg)
+    phases = np.linspace(phase_start, phase_end, n_frames, endpoint=False)
+
+    plot_tempmap(phases[0], r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
+                 n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
+                 terminator=terminator, insolation_model=insolation_model)
+    if show_cax:
+        cbar = fig.colorbar(ax.images[0], ax=ax)
+        cbar.ax.tick_params(colors=tc)
+        cbar.set_label("T (K)", color=tc)
+
+    w, h = fig.canvas.get_width_height()
+
+
+    mp4_writer = animation.FFMpegWriter(fps=fps)
+    mp4_writer.setup(fig, filename+".mp4", dpi=fig.dpi)
+
+    pil_frames = []
+
+    def capture_frame():
+        mp4_writer.grab_frame(facecolor=bg)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="rgba", facecolor=bg)
+        buf.seek(0)
+        frame = Image.frombuffer("RGBA", (w, h), buf.getbuffer(), "raw", "RGBA", 0, 1).convert("RGB")
+        pil_frames.append(frame.quantize(palette=palette_img, dither=Image.FLOYDSTEINBERG))
+
+    capture_frame()
+    for phase in phases[1:]:
+        ax.clear()
+        plot_tempmap(phase, r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
+                     n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
+                     terminator=terminator, insolation_model=insolation_model)
+        capture_frame()
+
+    plt.close(fig)
+
+    mp4_writer.finish()
+    pil_frames[0].save(filename+".gif", save_all=True, append_images=pil_frames[1:], duration=int(1000 / fps), loop=0, disposal=2)
