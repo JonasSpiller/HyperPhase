@@ -283,7 +283,21 @@ def insolation_penumbra_kopal_approx(gamma1, r1, r2, R, T2_eff, u=0.0, runtime=F
 ###########################################################################################################################
 
 
-def plot_tempmap(phase, r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, insolation_model="kopal", n_tab=3000, gp_table=None):
+def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=1.5, zorder=5):
+    """Draw the locus of points at constant angle `gamma1_val` from the substellar point, clipped to the observer-visible hemisphere."""
+    if not np.isfinite(gamma1_val) or gamma1_val <= 0. or gamma1_val >= np.pi:
+        return
+    theta_t = np.linspace(0., 2. * np.pi, 720)
+    nx_val, r_val = np.cos(gamma1_val), np.sin(gamma1_val)
+    n_t = np.stack([np.full_like(theta_t, nx_val), r_val * np.cos(theta_t), r_val * np.sin(theta_t)])
+    Xt = n_t[0] * x_obs[0] + n_t[1] * x_obs[1] + n_t[2] * x_obs[2]
+    Yt = n_t[0] * y_obs[0] + n_t[1] * y_obs[1] + n_t[2] * y_obs[2]
+    visible_t = (n_t[0] * z_obs[0] + n_t[1] * z_obs[1] + n_t[2] * z_obs[2]) >= 0.15
+    ax.plot(np.where(visible_t, Xt, np.nan), np.where(visible_t, Yt, np.nan),
+            color=color, linewidth=linewidth, zorder=zorder)
+
+
+def plot_tempmap(phase, r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", n_tab=3000, gp_table=None):
 
     mycmap = plt.cm.inferno   # same colormap spiderman's plot_planet defaults to
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
@@ -317,15 +331,17 @@ def plot_tempmap(phase, r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_
                     interpolation="bilinear")
     im.set_clip_path(patches.Circle((0, 0), 1.0, transform=ax.transData))
 
-    # add terminator line
-    if terminator and not np.isclose(phase % 1.0, 0.) and not np.isclose(phase % 1.0, 0.5):
-        theta_t = np.linspace(0., 2. * np.pi, 720)
-        n_t = np.stack([np.zeros_like(theta_t), np.cos(theta_t), np.sin(theta_t)])
-        Xt = n_t[0] * x_obs[0] + n_t[1] * x_obs[1] + n_t[2] * x_obs[2]
-        Yt = n_t[0] * y_obs[0] + n_t[1] * y_obs[1] + n_t[2] * y_obs[2]
-        visible_t = (n_t[0] * z_obs[0] + n_t[1] * z_obs[1] + n_t[2] * z_obs[2]) >= 0.15
-        ax.plot(np.where(visible_t, Xt, np.nan), np.where(visible_t, Yt, np.nan),
-                color="grey", linewidth=1.5, zorder=5)
+    # add terminator line / penumbra border lines
+    if show_penumbra not in (None, False, "both", "inner", "outer"):
+        raise ValueError("show_penumbra must be one of None, False, 'both', 'inner', 'outer'")
+
+    if (terminator or show_penumbra) and not np.isclose(phase % 1.0, 0.) and not np.isclose(phase % 1.0, 0.5):
+        if terminator:
+            _plot_iso_gamma1_line(ax, np.pi / 2., x_obs, y_obs, z_obs, color="grey")
+        if show_penumbra in ("both", "inner"):
+            _plot_iso_gamma1_line(ax, terminator_penumbra(r1, r2, R), x_obs, y_obs, z_obs, color="green")
+        if show_penumbra in ("both", "outer"):
+            _plot_iso_gamma1_line(ax, terminator_nightside(r1, r2, R), x_obs, y_obs, z_obs, color="green")
 
     ax.set_facecolor(bg)
     ax.set(aspect=1, xlim=(1.05, -1.05), ylim=(-1.05, 1.05))
@@ -345,7 +361,7 @@ def plot_tempmap(phase, r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_
 
 
 def plot_quad_tempmap(r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_grid=500,
-                     theme='black', show_cax=True, show_axes=False, terminator=False,
+                     theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None,
                      insolation_model="kopal", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000):
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
 
@@ -361,7 +377,7 @@ def plot_quad_tempmap(r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_gr
     for ax, phase in zip(axs.ravel(), [phase1, phase2, phase3, phase4]):
         plot_tempmap(phase, r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
                            n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                           terminator=terminator, insolation_model=insolation_model, gp_table=gp_table)
+                           terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, gp_table=gp_table)
 
     if show_cax:
         im = axs[0, 0].images[0]
@@ -378,7 +394,7 @@ def plot_quad_tempmap(r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_gr
 
 
 def animation_tempmap(r1, r2, R, T2_eff, filename="output_tempmap", u=0, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
-                      show_axes=False, terminator=False, insolation_model="kopal", n_frames=1000, fps=20, phase_start=0., phase_end=1., n_tab=3000):
+                      show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", n_frames=1000, fps=20, phase_start=0., phase_end=1., n_tab=3000):
 
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
     bg_rgb = (0, 0, 0) if theme == "black" else (255, 255, 255)
@@ -391,9 +407,9 @@ def animation_tempmap(r1, r2, R, T2_eff, filename="output_tempmap", u=0, min_tem
     if max_temp is None: max_temp = 1.1 * t_hot
 
 
-    # seed palette: the full inferno gradient (every color any frame's heatmap could possibly use) plus the background, terminator-line, and colorbar-text colors
+    # seed palette: the full inferno gradient (every color any frame's heatmap could possibly use) plus the background, terminator-line, penumbra-border, and colorbar-text colors
     grad = (plt.cm.inferno(np.linspace(0., 1., 200))[:, :3] * 255).astype(np.uint8)
-    extra = np.array([bg_rgb, (128, 128, 128), tc_rgb], dtype=np.uint8)   # background, terminator grey, colorbar text
+    extra = np.array([bg_rgb, (128, 128, 128), (0, 128, 0), tc_rgb], dtype=np.uint8)   # background, terminator grey, penumbra green, colorbar text
     seed = np.concatenate([grad, extra], axis=0).reshape(1, -1, 3)
     palette_img = Image.fromarray(seed, mode="RGB").quantize(colors=256)
 
@@ -402,7 +418,7 @@ def animation_tempmap(r1, r2, R, T2_eff, filename="output_tempmap", u=0, min_tem
 
     plot_tempmap(phases[0], r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
                  n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                 terminator=terminator, insolation_model=insolation_model, gp_table=gp_table)
+                 terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, gp_table=gp_table)
     if show_cax:
         cbar = fig.colorbar(ax.images[0], ax=ax)
         cbar.ax.tick_params(colors=tc)
@@ -429,7 +445,7 @@ def animation_tempmap(r1, r2, R, T2_eff, filename="output_tempmap", u=0, min_tem
         ax.clear()
         plot_tempmap(phase, r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
                      n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                     terminator=terminator, insolation_model=insolation_model, gp_table=gp_table)
+                     terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, gp_table=gp_table)
         capture_frame()
 
     plt.close(fig)
