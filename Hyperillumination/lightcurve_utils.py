@@ -5,7 +5,7 @@ from hyperillumination_utils import *
 
 # Directional reflected-light signal toward a distant observer
 # Inspired by Kopal eq. 4
-def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, A=1.0, n_eta=150, n_phi=80, n_tab=1000, runtime=False, insolation_model="kopal"):
+def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, L2=None, A=1.0, n_eta=150, n_phi=80, n_tab=1000, runtime=False, insolation_model="kopal"):
     """
     epsilon : angle substellar spot to line of sight
     n_eta, n_phi: Gauss-Legendre order for the inner (eta) / outer (phi) integral
@@ -24,10 +24,10 @@ def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, A=1.0, n_eta=150, n_
         if insolation_model=="kopal":
             # tabulate F_fi, F_pen on a gamma1-grid once and interpolate at quadrature nodes
             gp_fi_grid = np.linspace(0., gp1, n_tab)
-            Ffi_grid = insolation_fullyilluminated_kopal(gp_fi_grid, r1, r2, R, T2_eff, u=u)
+            Ffi_grid = insolation_fullyilluminated_kopal(gp_fi_grid, r1, r2, R, T2_eff, u=u, L2=L2)
 
             gp_pen_grid = np.linspace(gp1, gp2, n_tab)
-            Fpen_grid = insolation_penumbra_kopal(gp_pen_grid, r1, r2, R, T2_eff, u=u)
+            Fpen_grid = insolation_penumbra_kopal(gp_pen_grid, r1, r2, R, T2_eff, u=u, L2=L2)
 
             return np.where(
                 gp <= gp1, np.interp(gp, gp_fi_grid, Ffi_grid),

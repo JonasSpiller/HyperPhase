@@ -47,18 +47,19 @@ def fraction_illuminated(r1, r2, R, extra=None):
     return fraction_fullyilluminated + fraction_penumbra
 
 def BBtemp_from_insolation(insol):
+    #TODO: Add albedo
     return (insol/sigma)**0.25
 
 
 # tabulates insolation(gamma1) on a 1D grid once, so 2D pixel grids
-def _tabulate_insolation(r1, r2, R, T2_eff, u, insolation_model, n_tab=3000):
+def _tabulate_insolation(r1, r2, R, T2_eff, u, L2, insolation_model, n_tab=3000):
     if insolation_model == "kopal":
         gp1 = terminator_penumbra(r1, r2, R)
         gp2 = terminator_nightside(r1, r2, R)
         gp_fi = np.linspace(0., gp1, n_tab)
-        F_fi = insolation_fullyilluminated_kopal(gp_fi, r1, r2, R, T2_eff, u=u)
+        F_fi = insolation_fullyilluminated_kopal(gp_fi, r1, r2, R, T2_eff, u=u, L2=L2)
         gp_pen = np.linspace(gp1, gp2, n_tab)
-        F_pen = insolation_penumbra_kopal(gp_pen, r1, r2, R, T2_eff, u=u)
+        F_pen = insolation_penumbra_kopal(gp_pen, r1, r2, R, T2_eff, u=u, L2=L2)
         gp_grid = np.concatenate([gp_fi, gp_pen, [np.pi]])
         F_grid = np.concatenate([F_fi, F_pen, [0.]])
     elif insolation_model == "naive":
@@ -78,15 +79,18 @@ def _tabulate_insolation(r1, r2, R, T2_eff, u, insolation_model, n_tab=3000):
 
 
 # Insolation Model without Hyperillumination
-def naive_insolation(gamma1, r2, R, T2_eff):
-    I0 = sigma * T2_eff**4 * (r2/R)**2
-    return np.where(gamma1 < np.pi/2, I0 * np.cos(gamma1), 0.)
+def naive_insolation(gamma1, r2, R, T2_eff, L2=None):
+    if L2 is None: L2 = 4*np.pi * r2**2 * sigma * T2_eff**4
+    Fp_incident = L2 / (4*np.pi*R**2)
+    return np.where(gamma1 < np.pi/2, Fp_incident * np.cos(gamma1), 0.) # incident flux on planet (W/m^2)
 
 
 
 # computes illumination on the surface of the exoplanet accounting for hyper-illumination
 # Using models from Kopal 1954
-def insolation_kopal(gamma1, r1, r2, R, T2_eff, u=0):
+def insolation_kopal(gamma1, r1, r2, R, T2_eff, u=0, L2=None):
+    #TODO: T2_eff does not have to be provided if L2 is, same for all other functions.
+
     # gamma1 is angle from substellar point; u is star's limb-darkening coefficient
     gamma1 = np.atleast_1d(gamma1)
     gp1 = terminator_penumbra(r1, r2, R)
@@ -94,31 +98,34 @@ def insolation_kopal(gamma1, r1, r2, R, T2_eff, u=0):
     fi_mask = gamma1 < gp1
     pen_mask = (gamma1 >= gp1) & (gamma1 < gp2)
 
-    result = np.zeros_like(gamma1)
-    result[fi_mask] = insolation_fullyilluminated_kopal(gamma1[fi_mask], r1, r2, R, T2_eff, u=u)
-    result[pen_mask] = insolation_penumbra_kopal(gamma1[pen_mask], r1, r2, R, T2_eff, u=u)
+    Fp_incident = np.zeros_like(gamma1)
+    Fp_incident[fi_mask] = insolation_fullyilluminated_kopal(gamma1[fi_mask], r1, r2, R, T2_eff, u=u, L2=L2)
+    Fp_incident[pen_mask] = insolation_penumbra_kopal(gamma1[pen_mask], r1, r2, R, T2_eff, u=u, L2=L2)
 
-    return result
+    return Fp_incident # incident flux on planet (W/m^2)
 
 
 # Fully illuminated zone: Kopal implementation (eq. 33-35)
-def insolation_fullyilluminated_kopal(gamma1, r1, r2, R, T2_eff, u=0):
+def insolation_fullyilluminated_kopal(gamma1, r1, r2, R, T2_eff, u=0, L2=None):
     mu = np.cos(gamma1)
-    L2 = r2**2 * sigma * T2_eff**4 # Kopal: L2 = np.pi * r2**2 * I0 * (1 - u/3) - Kopal (corrected by the pi's)
-    return L2 * (R * mu - r1) / (R**2 + r1**2 - 2. * r1 * R * mu)**1.5   # eq (34) Kopal1954
+    if L2 is None: L2 = 4*np.pi * r2**2 * sigma * T2_eff**4
+    Fp_incident =  L2/(4*np.pi) * (R * mu - r1) / (R**2 + r1**2 - 2. * r1 * R * mu)**1.5   # eq (34) Kopal1954
+    return Fp_incident # incident flux on planet (W/m^2)
 
 
 # Penumbra: inspired by Kopal (eq. 36-41) without small-disk approximation and with corrections (lambda inconsistency, ...), see Goodnotes derivation
 # Evaluated with fixed-order Gauss-Legendre quadrature, vectorized across all gamma1 points at once (instead of looping scipy.integrate.quad per point)
 # 1e4 time improvement on insolation_penumbra_kopal_simpleint
-def insolation_penumbra_kopal(gamma1, r1, r2, R, T2_eff, u=0.0, order=32, runtime=False):
+def insolation_penumbra_kopal(gamma1, r1, r2, R, T2_eff, u=0.0, L2=None, order=32, runtime=False):
     t0 = time.perf_counter()
     gamma1 = np.atleast_1d(np.asarray(gamma1, dtype=float))
 
     nodes, weights = _leggauss_cached(order)   # on [-1, 1]
 
     alpha, rho = alpha_(gamma1, R, r1)
-    I0 = sigma * T2_eff ** 4 / np.pi / (1 - u / 3)
+    if L2 is None: I0 = sigma * T2_eff ** 4 / np.pi / (1 - u / 3)
+    else: I0 = L2 / (4*np.pi**2 * r2**2 * (1 - u / 3))
+
     theta_max = np.arccos(r2 / rho)
 
     # map nodes to [0, theta_max] per point: theta = theta_max/2 * (x+1)
@@ -144,7 +151,7 @@ def insolation_penumbra_kopal(gamma1, r1, r2, R, T2_eff, u=0.0, order=32, runtim
 
     if runtime: print(f"insolation_penumbra_kopal runtime: {time.perf_counter() - t0:.4f} s")
 
-    return result
+    return result  # incident flux on planet (W/m^2)
 @lru_cache(maxsize=None)
 def _leggauss_cached(order):
     return np.polynomial.legendre.leggauss(order)
@@ -173,7 +180,7 @@ def _theta_kernels_vec(theta, alpha, rho, r2):
 
 ###########################################################################################################################
 #####
-#####   Other Penumbra Implementations
+#####   Other Penumbra Implementations (missing custom L2)
 #####
 ###########################################################################################################################
 
@@ -297,7 +304,10 @@ def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=
             color=color, linewidth=linewidth, zorder=zorder)
 
 
-def plot_tempmap(phase, r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", n_tab=3000, gp_table=None):
+def plot_insolmap(phase, r1, r2, R, T2_eff, u=0, L2=None, min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", unit="flux", n_tab=3000, gp_table=None):
+
+    if unit not in ("temperature", "flux"):
+        raise ValueError("unit must be either 'temperature' or 'flux'")
 
     mycmap = plt.cm.inferno   # same colormap spiderman's plot_planet defaults to
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
@@ -317,17 +327,27 @@ def plot_tempmap(phase, r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_
     gamma1 = np.where(disk, np.arccos(np.clip(nx, -1., 1.)), np.nan)
 
     if gp_table is None:
-        gp_table = _tabulate_insolation(r1, r2, R, T2_eff, u, insolation_model, n_tab=n_tab)
+        gp_table = _tabulate_insolation(r1, r2, R, T2_eff, u, L2, insolation_model, n_tab=n_tab)
     gp_grid, F_grid = gp_table
 
-    temp = np.full_like(X, np.nan)
-    temp[disk] = BBtemp_from_insolation(np.interp(gamma1[disk], gp_grid, F_grid))
+    F_interp = np.interp(gamma1[disk], gp_grid, F_grid)
+    mapval = np.full_like(X, np.nan)
+    if unit == "temperature":
+        mapval[disk] = BBtemp_from_insolation(F_interp)
+    else:   # flux, normalized to 1 at the substellar point (gp_grid[0] == 0)
+        mapval[disk] = F_interp / F_grid[0]
 
-    if min_temp is None: min_temp = np.nanmin(temp) * 0.9
-    if max_temp is None: max_temp = np.nanmax(temp) * 1.1
+    if min_temp is None or max_temp is None:
+        if unit == "temperature":
+            t_hot = BBtemp_from_insolation(F_grid[0])
+            if min_temp is None: min_temp = -t_hot*0.1
+            if max_temp is None: max_temp = 1.1 * t_hot
+        else:   # flux, normalized to 1 at the substellar point
+            if min_temp is None: min_temp = -0.1
+            if max_temp is None: max_temp = 1.0
 
     if ax is None: _, ax = plt.subplots(facecolor=bg)
-    im = ax.imshow(temp, extent=[-1, 1, -1, 1], origin="lower", cmap=mycmap, vmin=min_temp, vmax=max_temp,
+    im = ax.imshow(mapval, extent=[-1, 1, -1, 1], origin="lower", cmap=mycmap, vmin=min_temp, vmax=max_temp,
                     interpolation="bilinear")
     im.set_clip_path(patches.Circle((0, 0), 1.0, transform=ax.transData))
 
@@ -355,29 +375,36 @@ def plot_tempmap(phase, r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_
     if show_cax:
         cbar = plt.colorbar(im, ax=ax)
         cbar.ax.tick_params(colors=tc)
-        cbar.set_label("T (K)", color=tc)
+        cbar.set_label("T (K)" if unit == "temperature" else "Relative brightness", color=tc)
 
     return ax
 
 
-def plot_quad_tempmap(r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_grid=500,
-                     theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None,
-                     insolation_model="kopal", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000):
+def plot_quad_insolmap(r1, r2, R, T2_eff, u=0, L2=None, min_temp=None, max_temp=None, n_grid=500,
+                       theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None,
+                       insolation_model="kopal", unit="flux", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000):
+    if unit not in ("temperature", "flux"):
+        raise ValueError("unit must be either 'temperature' or 'flux'")
+
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
 
-    gp_table = _tabulate_insolation(r1, r2, R, T2_eff, u, insolation_model, n_tab=n_tab)
+    gp_table = _tabulate_insolation(r1, r2, R, T2_eff, u, L2, insolation_model, n_tab=n_tab)
 
     if min_temp is None or max_temp is None:
-        t_hot = BBtemp_from_insolation(gp_table[1][0])
-        if min_temp is None: min_temp = 0.
-        if max_temp is None: max_temp = 1.1 * t_hot
+        if unit == "temperature":
+            t_hot = BBtemp_from_insolation(gp_table[1][0])
+            if min_temp is None: min_temp = -t_hot*0.1
+            if max_temp is None: max_temp = 1.1 * t_hot
+        else:   # flux, normalized to 1 at the substellar point
+            if min_temp is None: min_temp = -0.1
+            if max_temp is None: max_temp = 1.0
 
     fig, axs = plt.subplots(2, 2, figsize=(8 / 0.865, 8), facecolor=bg)
 
     for ax, phase in zip(axs.ravel(), [phase1, phase2, phase3, phase4]):
-        plot_tempmap(phase, r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
-                           n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                           terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, gp_table=gp_table)
+        plot_insolmap(phase, r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
+                      n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
+                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, unit=unit, gp_table=gp_table)
 
     if show_cax:
         im = axs[0, 0].images[0]
@@ -385,7 +412,7 @@ def plot_quad_tempmap(r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_gr
         cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
         cbar = fig.colorbar(im, cax=cbar_ax)
         cbar.ax.tick_params(colors=tc)
-        cbar.set_label("T (K)", color=tc)
+        cbar.set_label("T (K)" if unit == "temperature" else "Relative brightness", color=tc)
     else:
         fig.subplots_adjust(wspace=0, hspace=0)
 
@@ -393,18 +420,25 @@ def plot_quad_tempmap(r1, r2, R, T2_eff, u=0, min_temp=None, max_temp=None, n_gr
 
 
 
-def animation_tempmap(r1, r2, R, T2_eff, filename="output_tempmap", u=0, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
-                      show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", n_frames=1000, fps=20, phase_start=0., phase_end=1., n_tab=3000):
+def animation_insolmap(r1, r2, R, T2_eff, filename="output_map", u=0, L2=None, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
+                       show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", unit="flux", n_frames=1000, fps=20, phase_start=0., phase_end=1., n_tab=3000):
+
+    if unit not in ("temperature", "flux"):
+        raise ValueError("unit must be either 'temperature' or 'flux'")
 
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
     bg_rgb = (0, 0, 0) if theme == "black" else (255, 255, 255)
     tc_rgb = (4, 217, 255) if theme == "black" else (0, 0, 0)   # matches "#04d9ff"
 
-    gp_table = _tabulate_insolation(r1, r2, R, T2_eff, u, insolation_model, n_tab=n_tab)
+    gp_table = _tabulate_insolation(r1, r2, R, T2_eff, u, L2, insolation_model, n_tab=n_tab)
 
-    t_hot = BBtemp_from_insolation(gp_table[1][0])
-    if min_temp is None: min_temp = 0.
-    if max_temp is None: max_temp = 1.1 * t_hot
+    if unit == "temperature":
+        t_hot = BBtemp_from_insolation(gp_table[1][0])
+        if min_temp is None: min_temp = -t_hot*0.1
+        if max_temp is None: max_temp = 1.1 * t_hot
+    else:   # flux, normalized to 1 at the substellar point
+        if min_temp is None: min_temp = -0.1
+        if max_temp is None: max_temp = 1.0
 
 
     # seed palette: the full inferno gradient (every color any frame's heatmap could possibly use) plus the background, terminator-line, penumbra-border, and colorbar-text colors
@@ -416,13 +450,13 @@ def animation_tempmap(r1, r2, R, T2_eff, filename="output_tempmap", u=0, min_tem
     fig, ax = plt.subplots(facecolor=bg)
     phases = np.linspace(phase_start, phase_end, n_frames, endpoint=False)
 
-    plot_tempmap(phases[0], r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
-                 n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                 terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, gp_table=gp_table)
+    plot_insolmap(phases[0], r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
+                  n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
+                  terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, unit=unit, gp_table=gp_table)
     if show_cax:
         cbar = fig.colorbar(ax.images[0], ax=ax)
         cbar.ax.tick_params(colors=tc)
-        cbar.set_label("T (K)", color=tc)
+        cbar.set_label("T (K)" if unit == "temperature" else "Relative brightness", color=tc)
 
     w, h = fig.canvas.get_width_height()
 
@@ -443,9 +477,9 @@ def animation_tempmap(r1, r2, R, T2_eff, filename="output_tempmap", u=0, min_tem
     capture_frame()
     for phase in phases[1:]:
         ax.clear()
-        plot_tempmap(phase, r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
-                     n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                     terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, gp_table=gp_table)
+        plot_insolmap(phase, r1, r2, R, T2_eff, u=u, min_temp=min_temp, max_temp=max_temp,
+                      n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
+                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, unit=unit, gp_table=gp_table)
         capture_frame()
 
     plt.close(fig)
