@@ -3,14 +3,18 @@ import time
 import numpy as np
 from hyperillumination_utils import *
 
-# Directional reflected-light signal toward a distant observer
+sigma = 5.670374e-8  # W m^-2 K^-4
+
+# Reflected light curve signal accounting for hyperillumination
 # Inspired by Kopal eq. 4
-def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, L2=None, A=1.0, n_eta=150, n_phi=80, n_tab=1000, runtime=False, insolation_model="kopal"):
+def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, unit="normalized", lambda_band_ratio=1., A=0.1, n_eta=150, n_phi=80, n_tab=1000, runtime=False, insolation_model="kopal"):
     """
-    epsilon : angle substellar spot to line of sight
+    epsilon: angle substellar spot to line of sight
+    unit: Whether to return normalized light curve signal (Fp/Fs) or radiant intensity ([W/sr])
+    lambda_band_ratio: Only relevant for unit=='radiant intensity'. If measurements are taken in a wavelength band (not bolometric), this is the ratio Fs_band/Fs.
+    A: Bolometric or band integrated albedo. For bolometric measurements, this function is also suitable to calculate reflected + THERMAL light curve signal - for this set A=1.
     n_eta, n_phi: Gauss-Legendre order for the inner (eta) / outer (phi) integral
     n_tab: resolution of the gamma1-grid used to tabulate F_fi/F_pen
-    runtime : bool             print timing if True
     """
 
     t0 = time.perf_counter()
@@ -24,10 +28,10 @@ def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, L2=None, A=1.0, n_et
         if insolation_model=="kopal":
             # tabulate F_fi, F_pen on a gamma1-grid once and interpolate at quadrature nodes
             gp_fi_grid = np.linspace(0., gp1, n_tab)
-            Ffi_grid = insolation_fullyilluminated_kopal(gp_fi_grid, r1, r2, R, T2_eff, u=u, L2=L2)
+            Ffi_grid = insolation_fullyilluminated_kopal(gp_fi_grid, r1, r2, R, T2_eff, u=u)
 
             gp_pen_grid = np.linspace(gp1, gp2, n_tab)
-            Fpen_grid = insolation_penumbra_kopal(gp_pen_grid, r1, r2, R, T2_eff, u=u, L2=L2)
+            Fpen_grid = insolation_penumbra_kopal(gp_pen_grid, r1, r2, R, T2_eff, u=u)
 
             return np.where(
                 gp <= gp1, np.interp(gp, gp_fi_grid, Ffi_grid),
@@ -57,16 +61,33 @@ def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, L2=None, A=1.0, n_et
     outer = inner @ (np.cos(psi) * psi_w)                               # (n_epsilon,)
 
     result = (A * r1 ** 2 / np.pi) * outer
+    result = result.reshape(epsilon.shape)
 
     if runtime: print(f"reflected_lightcurve runtime: {time.perf_counter() - t0:.4f} s")
 
-    return result.reshape(epsilon.shape)
+    if unit == "normalized":
+        return result / (sigma * r2**2 * T2_eff**4) # Fp/Fs
+    elif unit == "radiant intensity":
+        return  result * lambda_band_ratio # radiant intensity (power/solid angle emitted towards the observer [W/sr]) - measured is flux [W/m^2]: result/d^2
+    else: raise ValueError("unit must be either 'normalized' or 'radiant intensity'")
 
-# Lambertian phase function for a Lambert-scattering sphere (isotropic, angle-independent single-scattering albedo
-def lambertian_reflectance(epsilon, r1, r2, R, T2_eff, A=1.):
+
+# Naive reflected phase curve signal for a Lambert-scattering sphere (isotropic, angle-independent single-scattering albedo)
+def lambertian_reflectance(epsilon, r1, r2, R, T2_eff, unit="normalized", lambda_band_ratio=1., A=0.1):
+    """
+    epsilon: Angle substellar spot to line of sight
+    unit: Whether to return normalized light curve signal (Fp/Fs) or radiant intensity ([W/sr])
+    lambda_band_ratio: Only relevant for unit=='radiant intensity'. If measurements are taken in a wavelength band (not bolometric), this is the ratio Fs_band/Fs.
+    A: Bolometric or band integrated albedo. For bolometric measurements, this function is also suitable to calculate reflected + THERMAL light curve signal - for this set A=1.
+    """
     eps = np.abs(((epsilon + np.pi) % (2 * np.pi)) - np.pi)  # fold into [0, pi]
     phase_function = (np.sin(eps) + (np.pi - eps) * np.cos(eps)) / np.pi
-    sigma = 5.670374e-8  # W m^-2 K^-4
 
-    return A * (r1 / R) ** 2 * phase_function * sigma * r2 ** 2 * T2_eff ** 4   *2/3
-
+    if unit == "normalized":
+        result = 2/3*A * (r1/R)**2 * phase_function
+        return result # Fp/Fs
+    elif unit == "radiant intensity":
+        Fp_incident = (r2 / R) ** 2 * sigma * T2_eff ** 4
+        result = 2/3*A * r1**2 * Fp_incident * phase_function * lambda_band_ratio
+        return result  # radiant intensity (power/solid angle emitted towards the observer [W/sr]) - measured is flux [W/m^2]: result/d^2
+    else: raise ValueError("unit must be either 'normalized' or 'radiant intensity'")
