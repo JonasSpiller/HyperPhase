@@ -21,19 +21,19 @@ def eccentric_to_true(E, ecc):
     return 2. * np.arctan2(np.sqrt(1. + ecc) * np.sin(E / 2.), np.sqrt(1. - ecc) * np.cos(E / 2.))
 
 
-def eclipse_time(period, ecc, w, t0=0.):
+def occultation_time(period, ecc, w, t0=0.):
     """
-    Returns the time offset (same units as period) from transit center to secondary eclipse center.
+    Returns the time offset (same units as period) from transit center to secondary eclipse / occultation center.
     Uses true-anomaly → eccentric anomaly → mean anomaly conversion (Kepler's equation).
     """
     w_rad = np.radians(w)
     f_transit = np.pi / 2. - w_rad
-    f_eclipse = 3. * np.pi / 2. - w_rad
+    f_occultation = 3. * np.pi / 2. - w_rad
 
     M_transit = eccentric_to_mean(true_to_eccentric(f_transit, ecc), ecc)
-    M_eclipse = eccentric_to_mean(true_to_eccentric(f_eclipse, ecc), ecc)
+    M_occultation = eccentric_to_mean(true_to_eccentric(f_occultation, ecc), ecc)
 
-    delta_M = (M_eclipse - M_transit) % (2. * np.pi)
+    delta_M = (M_occultation - M_transit) % (2. * np.pi)
     t_ecl = delta_M / (2. * np.pi) * period + t0
     return t_ecl
 

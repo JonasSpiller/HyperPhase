@@ -5,6 +5,23 @@ from hyperillumination_utils import *
 
 sigma = 5.670374e-8  # W m^-2 K^-4
 
+
+###########################################################################################################################
+#####
+#####   Utilities
+#####
+###########################################################################################################################
+
+
+
+
+###########################################################################################################################
+#####
+#####   Reflected Lightcurve
+#####
+###########################################################################################################################
+
+
 # Reflected light curve signal accounting for hyperillumination
 # Inspired by Kopal eq. 4
 def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, unit="normalized", lambda_band_ratio=1., A=0.1, n_eta=150, n_phi=80, n_tab=1000, runtime=False, insolation_model="kopal"):
@@ -91,3 +108,11 @@ def lambertian_reflectance(epsilon, r1, r2, R, T2_eff, unit="normalized", lambda
         result = 2/3*A * r1**2 * Fp_incident * phase_function * lambda_band_ratio
         return result  # radiant intensity (power/solid angle emitted towards the observer [W/sr]) - measured is flux [W/m^2]: result/d^2
     else: raise ValueError("unit must be either 'normalized' or 'radiant intensity'")
+
+
+
+###########################################################################################################################
+#####
+#####   Thermal Lightcurve
+#####
+###########################################################################################################################
