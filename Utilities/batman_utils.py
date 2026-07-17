@@ -26,7 +26,7 @@ def flux_occultation(period, rp, a, incl, ecc, w, fp, t, t0=0.):
     """
     params_occultation = batman.TransitParams() # called params_eclipse in Batman tutorials
 
-    params_occultation.t0 = t0  # time of transit center
+    params_occultation.t0 = t0  # time of transit center (units consistent with period)
     params_occultation.per = period  # orbital period
     params_occultation.rp = rp  # planet radius (in units of stellar radii)
     params_occultation.a = a  # semi-major axis (in units of stellar radii)
@@ -52,7 +52,7 @@ def flux_transit(period, rp, a, incl, ecc, w, t, t0=0.):
     """
     params_transit = batman.TransitParams()
 
-    params_transit.t0 = t0  # time of transit center
+    params_transit.t0 = t0  # time of transit center (units consistent with period)
     params_transit.per = period  # orbital period
     params_transit.rp = rp  # planet radius (in units of stellar radii)
     params_transit.a = a  # semi-major axis (in units of stellar radii)
@@ -68,12 +68,12 @@ def flux_transit(period, rp, a, incl, ecc, w, t, t0=0.):
     return m_transit.light_curve(params_transit)
 
 
-def PhaseCurve(period, rp, a, incl, ecc, w, fp, R_star, offset=0, t=[], t0=0., A=1.):
+def PhaseCurve(period, rp, a, incl, ecc, w, fp, R_star, offset=0, t=None, t0=0., A=1.):
     """
     Returns (t, flux): timestamps and the full phase curve combining transit, secondary eclipse / occultation, and sinusoidal phase modulation.
     Phase modulation is computed from the true anomaly (correct for eccentric orbits); offset shifts the atmospheric hotspot in degrees.
     """
-    if len(t) == 0: t = np.linspace(t0 - period / 4, t0 + period * 3 / 4, 10000)
+    if t is None: t = np.linspace(t0, t0+period, 10000)
 
     f = true_anomaly(t, period, ecc, w, t0=t0)
     f_occultation = 3. * np.pi / 2. - np.radians(w)
