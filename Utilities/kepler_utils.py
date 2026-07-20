@@ -23,7 +23,7 @@ def eccentric_to_true(E, ecc):
 
 def occultation_time(period, ecc, w, t0=0.):
     """
-    Returns the time offset (same units as period) from transit center to secondary eclipse / occultation center.
+    Returns the time (same units as period) of secondary eclipse / occultation.
     Uses true-anomaly → eccentric anomaly → mean anomaly conversion (Kepler's equation).
     """
     w_rad = np.radians(w)

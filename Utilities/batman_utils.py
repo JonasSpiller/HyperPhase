@@ -73,7 +73,7 @@ def Cosine_PhaseCurve(period, rp, a, incl, ecc, w, fp, R_star, offset=0, t=None,
     Returns (t, flux): timestamps and the full phase curve combining transit, secondary eclipse / occultation, and sinusoidal phase modulation.
     Phase modulation is computed from the true anomaly (correct for eccentric orbits); offset shifts the atmospheric hotspot in degrees.
     """
-    if t is None: t = np.linspace(t0, t0+period, 10000)
+    if t is None: t = np.linspace(0., period, 10000)
 
     f = true_anomaly(t, period, ecc, w, t0=t0)
     f_occultation = 3. * np.pi / 2. - np.radians(w)
