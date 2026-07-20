@@ -299,7 +299,7 @@ def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=
             color=color, linewidth=linewidth, zorder=zorder)
 
 
-def plot_insolmap(phase, r1, r2, R, T2_eff, u=0, A_B = None, emissivity=None, min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", unit="flux", n_tab=3000, gp_table=None):
+def plot_insolmap(phase, r1, r2, R, T2_eff, u=0, A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", unit="flux", n_tab=3000, gp_table=None):
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
@@ -375,7 +375,7 @@ def plot_insolmap(phase, r1, r2, R, T2_eff, u=0, A_B = None, emissivity=None, mi
     return ax
 
 
-def plot_quad_insolmap(r1, r2, R, T2_eff, u=0, A_B = None, emissivity=None, min_temp=None, max_temp=None, n_grid=500,
+def plot_quad_insolmap(r1, r2, R, T2_eff, u=0, A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=500,
                        theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None,
                        insolation_model="kopal", unit="flux", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000):
     if unit not in ("temperature", "flux"):
@@ -415,8 +415,8 @@ def plot_quad_insolmap(r1, r2, R, T2_eff, u=0, A_B = None, emissivity=None, min_
 
 
 
-def animation_insolmap(r1, r2, R, T2_eff, A_B = None, emissivity=None, filename="output_map", u=0, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
-                       show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", unit="flux", n_frames=1000, fps=20, phase_start=0., phase_end=1., n_tab=3000):
+def animation_insolmap(r1, r2, R, T2_eff, A_B = 0.1, emissivity=1., filename="output_map", u=0, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
+                       show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", unit="flux", n_frames=1000, fps=50, phase_start=0., phase_end=1., n_tab=3000):
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")

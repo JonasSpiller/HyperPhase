@@ -1,5 +1,4 @@
 # translating the insolation model with hyperillumination to a light curve signal
-import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath('')), 'Utilities'))
 import time
 import numpy as np
 from hyperillumination_utils import *
@@ -31,7 +30,7 @@ def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, unit="normalized", l
     """
     epsilon: angle substellar spot to line of sight [rad]
     unit: Whether to return normalized light curve signal (Fp/Fs) or radiant intensity ([W/sr])
-    lambda_band_ratio: Only relevant for unit=='radiant intensity'. If measurements are taken in a wavelength band (not bolometric), this is the ratio Fs_band/Fs.
+    lambda_band_ratio: Only relevant for unit=='radiant intensity'. If measurements are taken in a wavelength band (not bolometric), this is the ratio Fs_band/Fs. Needed to correctly scale the absolute radial intensity in that band.
     A: Bolometric or band integrated albedo. For bolometric measurements, this function is also suitable to calculate reflected + THERMAL light curve signal - for this set A=1.
     n_eta, n_phi: Gauss-Legendre order for the inner (eta) / outer (phi) integral
     n_tab: resolution of the gamma1-grid used to tabulate F_fi/F_pen
@@ -116,31 +115,11 @@ def lambertian_reflectance(epsilon, r1, r2, R, T2_eff, unit="normalized", lambda
 
 ###########################################################################################################################
 #####
-#####   Thermal Lightcurve
-#####
-###########################################################################################################################
-
-
-
-
-
-###########################################################################################################################
-#####
-#####   Phase Curve
+#####   Reflected Phase Curve
 #####
 ###########################################################################################################################
 
 # Reflected light curve evaluated at times t.
-def orbital_reflected_lightcurve(t, period, incl, ecc, w, r1, r2, a, T2_eff, t0=0., **kwargs):
-    f = kepler_utils.true_anomaly(t, period, ecc, w, t0=t0)
-    epsilon = np.arccos(-np.sin(np.radians(incl)) * np.sin(np.radians(w) + f))
-
-    # momentary planetary distance from stellar center
-    # R = a * (1. - ecc**2) / (1. + ecc * np.cos(f))
-    R = a # THIS NEGLECTS CHANGES IN R THROUGHOUT THE ORBIT! All functions are designed for scalar R, which is why the formula above currently fails. Needs adjustment for ecc>0.
-
-    return reflected_lightcurve(epsilon, r1, r2, R, T2_eff, **kwargs)
-
 def orbital_reflected_lightcurve(t, period, incl, ecc, w, r1, r2, a, T2_eff, t0=0., n_eps=300, **kwargs):
     f = kepler_utils.true_anomaly(t, period, ecc, w, t0=t0)
     epsilon = np.arccos(-np.sin(np.radians(incl)) * np.sin(np.radians(w) + f))
@@ -155,21 +134,32 @@ def orbital_reflected_lightcurve(t, period, incl, ecc, w, r1, r2, a, T2_eff, t0=
     return np.interp(epsilon, eps_grid, ref_grid)
 
 # Returns (t, flux): timestamps and the full reflected phase curve combining transit, secondary eclipse / occultation, and sinusoidal phase modulation.
-def reflected_PhaseCurve(period, incl, ecc, w, r1, r2, a, T2_eff, R_star, t=None, t0=0., **kwargs):
+def reflected_PhaseCurve(period, incl, ecc, w, r1, r2, a, T2_eff, R_star, t=None, t0=0., u=[0.1, 0.3], **kwargs):
     #  r1, r2, a: planetary radius, stellar radius, semi major axis in consistent units
     # R_star: stellar radius in solar radii
     kwargs.pop("unit", None) # no unit can be provided, must be "normalized"
     if t is None: t = np.linspace(t0, t0+period, 1000)
 
+    t_corr = batman_utils.light_travel_time_correction(t, period, ecc, w, incl, a / r2, R_star, t0=t0)
+
     orbital_ref_lightcurve = orbital_reflected_lightcurve(t, period, incl, ecc, w, r1, r2, a, T2_eff, t0=t0, **kwargs)
     eps_occultation = np.arccos(np.sin(np.radians(incl)))  # epsilon at full phase
     fp = reflected_lightcurve(eps_occultation, r1, r2, a, T2_eff, **kwargs)
-    if fp==0.: raise ValueError("reflected light curve is zero.")
+    if fp==0.: return t_corr, batman_utils.flux_transit(period, r1/r2, a/r2, incl, ecc, w, t, t0=t0, u=u) # no reflection (e.g. when albedo=0) -> no phase curve, only transit
     phase_mod = orbital_ref_lightcurve / fp
 
-    t_corr = batman_utils.light_travel_time_correction(t, period, ecc, w, incl, a/r2, R_star, t0=t0)
-
     # Full Phase Curve Model. This model ignores the exact eclipse geometry during ingress and egress, instead it assumes the integrated flux to be uniformly distributed over the disk
-    phase_curve = batman_utils.flux_transit(period, r1/r2, a/r2, incl, ecc, w, t, t0=t0)+(batman_utils.flux_occultation(period, r1/r2, a/r2, incl, ecc, w, fp, t, t0=t0)-1)*phase_mod
+    phase_curve = batman_utils.flux_transit(period, r1/r2, a/r2, incl, ecc, w, t, t0=t0, u=u)+(batman_utils.flux_occultation(period, r1/r2, a/r2, incl, ecc, w, fp, t, t0=t0, u=u)-1)*phase_mod
 
     return t_corr, phase_curve
+
+
+
+###########################################################################################################################
+#####
+#####   Thermal Phase Curve (Spiderman)
+#####
+###########################################################################################################################
+
+
+
