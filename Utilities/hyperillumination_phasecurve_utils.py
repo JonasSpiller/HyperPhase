@@ -171,7 +171,7 @@ def reflected_PhaseCurve(period, incl, ecc, w, r1, r2, a, T2_eff, R_star, t=None
 
 
 # Generated custom temperature grid from a given insolation model (insolation_model = hyperillumination, naive) as input for spiderman custom forward model
-def custom_temperature_grid(r1, r2, R, T2_eff, u=0, n_lo=200, n_la=100, insolation_model="kopal", **kwargs):
+def custom_temperature_grid(r1, r2, R, T2_eff, u=0, n_lo=200, n_la=100, insolation_model="kopal", A_B = 0.1, emissivity=1.):
     lo = np.linspace(-180, 180, n_lo)  # longitude [deg], 0 = substellar meridian
     la = np.linspace(-90, 90, n_la)  # latitude [deg], 0 = equator
     LO, LA = np.meshgrid(np.radians(lo), np.radians(la))  # shape (n_la, n_lo), radians
@@ -183,17 +183,17 @@ def custom_temperature_grid(r1, r2, R, T2_eff, u=0, n_lo=200, n_la=100, insolati
         insol_grid = naive_insolation(gamma1_grid, r2, R, T2_eff)
     else:
         raise ValueError("insolation_model must be either 'kopal' or 'naive'")
-    temp_grid = BBtemp_from_insolation(insol_grid, **kwargs)
+    temp_grid = BBtemp_from_insolation(insol_grid, A_B = A_B, emissivity=emissivity)
 
     return lo, la, temp_grid  # Custom temperature map [lo (deg), la (deg), T (K)]
 
 
 # Generating a thermal phase curve from the spiderman custom forward model (inputting a custom temperature map)
-def thermal_PhaseCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", **kwargs):
+def thermal_PhaseCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", A_B = 0.1, emissivity=1., N_LAYERS=30):
     #  r1, r2, R: planetary radius, stellar radius, semi major axis in consistent units
     # R_star: stellar radius in solar radii
 
-    lo, la, temp_grid = custom_temperature_grid(r1, r2, R, T2_eff, u=u, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, **kwargs)
+    lo, la, temp_grid = custom_temperature_grid(r1, r2, R, T2_eff, u=u, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B = A_B, emissivity=emissivity)
 
     # pass indexing='ij' meshgrids in deg and the transposed temp_grid (wrong orientation fails silently!)
     # Floor the map: 0 K nightside + sharp terminator makes the bicubic spline overshoot to negative temperatures ("CANNOT DO NEGATIVE TEMPERATURES"); ~100 K adds negligible flux at 1-10 um
@@ -202,7 +202,7 @@ def thermal_PhaseCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_r
     grid = sp.format_grid(LO_deg, LA_deg, np.maximum(temp_grid, T_floor).T)
 
     spider_params = sp.ModelParams(brightness_model="direct_T", stellar_model=stellar_model)  # stellar model can also be custom or PHOENIX
-    spider_params.n_layers = 30  # Number of layers in the brightness map
+    spider_params.n_layers = N_LAYERS  # Number of layers in the brightness map
 
     spider_params.t0 = t0  # Central time of PRIMARY transit [days]
     spider_params.per = period  # Period [days]
@@ -218,8 +218,7 @@ def thermal_PhaseCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_r
     spider_params.T_s = T2_eff  # Temperature of the star [K]
     spider_params.grid = grid  # Custom temperature map [lo (deg), la (deg), T (K)]
 
-    spider_params.l1 = lambda_range[0]  # The starting wavelength in meters
-    spider_params.l2 = lambda_range[1]  # The ending wavelength in meters
+    spider_params.l1, spider_params.l2 = lambda_range  # The starting & ending wavelength in meters
 
     # Get occultation depth. In the standard spiderman model spider_params.eclipse_depth() segfaults with direct_T, hence the model has to run explicitly without the eclipse to get the depth.
     t_occultation = kepler_utils.occultation_time(period, ecc, w, t0=t0)
@@ -240,11 +239,11 @@ def thermal_PhaseCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_r
 
 
 # Generating a thermal light curve (only the planetary phase modulation without occultation and transit) from the spiderman custom forward model (inputting a custom temperature map)
-def thermal_LightCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", **kwargs):
+def thermal_LightCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", A_B = 0.1, emissivity=1., exclude_occultation=True, N_LAYERS=30):
     #  r1, r2, R: planetary radius, stellar radius, semi major axis in consistent units
     # R_star: stellar radius in solar radii
 
-    lo, la, temp_grid = custom_temperature_grid(r1, r2, R, T2_eff, u=u, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, **kwargs)
+    lo, la, temp_grid = custom_temperature_grid(r1, r2, R, T2_eff, u=u, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B = A_B, emissivity=emissivity)
 
     # pass indexing='ij' meshgrids in deg and the transposed temp_grid (wrong orientation fails silently!)
     # Floor the map: 0 K nightside + sharp terminator makes the bicubic spline overshoot to negative temperatures ("CANNOT DO NEGATIVE TEMPERATURES"); ~100 K adds negligible flux at 1-10 um
@@ -253,7 +252,7 @@ def thermal_LightCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_r
     grid = sp.format_grid(LO_deg, LA_deg, np.maximum(temp_grid, T_floor).T)
 
     spider_params = sp.ModelParams(brightness_model="direct_T", stellar_model=stellar_model)  # stellar model can also be custom or PHOENIX
-    spider_params.n_layers = 30  # Number of layers in the brightness map
+    spider_params.n_layers = N_LAYERS  # Number of layers in the brightness map
 
     spider_params.t0 = t0  # Central time of PRIMARY transit [days]
     spider_params.per = period  # Period [days]
@@ -269,10 +268,10 @@ def thermal_LightCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_r
     spider_params.T_s = T2_eff  # Temperature of the star [K]
     spider_params.grid = grid  # Custom temperature map [lo (deg), la (deg), T (K)]
 
-    spider_params.l1 = lambda_range[0]  # The starting wavelength in meters
-    spider_params.l2 = lambda_range[1]  # The ending wavelength in meters
+    spider_params.l1, spider_params.l2 = lambda_range  # The starting & ending wavelength in meters
 
-    spider_params.eclipse = False # Only phase modulation, no occultation
+    if exclude_occultation: spider_params.eclipse = False # Only phase modulation, no occultation
+    else: spider_params.eclipse = True
 
     if t is None: t = np.linspace(0., period, 1000)
 
