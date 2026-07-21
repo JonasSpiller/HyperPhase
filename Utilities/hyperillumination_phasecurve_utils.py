@@ -11,13 +11,6 @@ sigma = 5.670374e-8  # W m^-2 K^-4
 
 ###########################################################################################################################
 #####
-#####   Utilities
-#####
-###########################################################################################################################
-
-
-###########################################################################################################################
-#####
 #####   Reflected Lightcurve
 #####
 ###########################################################################################################################
@@ -31,10 +24,11 @@ def reflected_lightcurve(epsilon, r1, r2, R, T2_eff, u=0.0, unit="normalized", l
     epsilon: angle substellar spot to line of sight [rad]
     unit: Whether to return normalized light curve signal (Fp/Fs) or radiant intensity ([W/sr])
     lambda_band_ratio: Only relevant for unit=='radiant intensity'. If measurements are taken in a wavelength band (not bolometric), this is the ratio Fs_band/Fs. Needed to correctly scale the absolute radial intensity in that band.
-    A: Bolometric or band integrated albedo. For bolometric measurements, this function is also suitable to calculate reflected + THERMAL light curve signal - for this set A=1.
+    A: Bolometric or band/throughput-integrated albedo. For bolometric measurements, this function is also suitable to calculate reflected + THERMAL light curve signal - for this set A=1.
     n_eta, n_phi: Gauss-Legendre order for the inner (eta) / outer (phi) integral
     n_tab: resolution of the gamma1-grid used to tabulate F_fi/F_pen
     """
+    #TODO: When passing a filter one can calculate lambda_band_ratio = ∫T(λ)B_λ(T_eff)dλ / σT_eff⁴
 
     t0 = time.perf_counter()
     epsilon = np.asarray(epsilon, dtype=float)
@@ -133,8 +127,7 @@ def orbital_reflected_lightcurve(t, period, incl, ecc, w, r1, r2, a, T2_eff, t0=
 
     # evaluating the expensive integral on a coarse monotonic epsilon grid, then interpolate onto t
     eps_grid = np.linspace(epsilon.min(), epsilon.max(), n_eps)
-    ref_grid = reflected_lightcurve(eps_grid, r1, r2, R, T2_eff,
-                                    **kwargs)  #TODO add , u=u but only when hi model quadratic
+    ref_grid = reflected_lightcurve(eps_grid, r1, r2, R, T2_eff, **kwargs)  #TODO add , u=u but only when hi model quadratic
     return np.interp(epsilon, eps_grid, ref_grid)
 
 
@@ -152,15 +145,14 @@ def reflected_PhaseCurve(period, incl, ecc, w, r1, r2, a, T2_eff, R_star, t=None
                                                           **kwargs)  #TODO add , u=u but only when hi model quadratic
     eps_occultation = np.arccos(np.sin(np.radians(incl)))  # epsilon at full phase
     fp = reflected_lightcurve(eps_occultation, r1, r2, a, T2_eff, **kwargs)
-    if fp == 0.: return t_corr, batman_utils.flux_transit(period, r1 / r2, a / r2, incl, ecc, w, t, t0=t0,
-                                                          u=u)  # no reflection (e.g. when albedo=0) -> no phase curve, only transit
+    if fp == 0.: return t_corr, batman_utils.flux_transit(period, r1 / r2, a / r2, incl, ecc, w, t, t0=t0, u=u)  # no reflection (e.g. when albedo=0) -> no phase curve, only transit
     phase_mod = orbital_ref_lightcurve / fp
 
     # Full Phase Curve Model. This model ignores the exact eclipse geometry during ingress and egress, instead it assumes the integrated flux to be uniformly distributed over the disk
     phase_curve = batman_utils.flux_transit(period, r1 / r2, a / r2, incl, ecc, w, t, t0=t0, u=u) + (
                 batman_utils.flux_occultation(period, r1 / r2, a / r2, incl, ecc, w, fp, t, t0=t0, u=u) - 1) * phase_mod
 
-    return t_corr, phase_curve, fp
+    return t_corr, phase_curve, fp*1e6
 
 
 ###########################################################################################################################
@@ -189,9 +181,10 @@ def custom_temperature_grid(r1, r2, R, T2_eff, u=0, n_lo=200, n_la=100, insolati
 
 
 # Generating a thermal phase curve from the spiderman custom forward model (inputting a custom temperature map)
-def thermal_PhaseCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", A_B = 0.1, emissivity=1., N_LAYERS=30):
+def thermal_PhaseCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=30):
     #  r1, r2, R: planetary radius, stellar radius, semi major axis in consistent units
     # R_star: stellar radius in solar radii
+    # For lambda_range, either pass the effective ranges without a filter_path (spiderman assumes tophat) or provide lambda_range and filter_path.
 
     lo, la, temp_grid = custom_temperature_grid(r1, r2, R, T2_eff, u=u, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B = A_B, emissivity=emissivity)
 
@@ -220,18 +213,22 @@ def thermal_PhaseCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_r
 
     spider_params.l1, spider_params.l2 = lambda_range  # The starting & ending wavelength in meters
 
+    # Add filter throughput
+    spider_params.filter = filter_path
+    stellar_grid = sp.stellar_grid.gen_grid(spider_params.l1, spider_params.l2, logg=4.5, response=spider_params.filter, stellar_model=stellar_model)
+
     # Get occultation depth. In the standard spiderman model spider_params.eclipse_depth() segfaults with direct_T, hence the model has to run explicitly without the eclipse to get the depth.
     t_occultation = kepler_utils.occultation_time(period, ecc, w, t0=t0)
     spider_params.eclipse = False
-    f_unblocked_occ = spider_params.lightcurve([t_occultation])[0] # full dayside flux
+    f_unblocked_occ = spider_params.lightcurve([t_occultation], stellar_grid=stellar_grid)[0] # full dayside flux
     spider_params.eclipse = True
-    f_blocked_occ = spider_params.lightcurve([t_occultation])[0] # pure stellar flux
-    fp = f_unblocked_occ - f_blocked_occ
+    f_blocked_occ = spider_params.lightcurve([t_occultation], stellar_grid=stellar_grid)[0] # pure stellar flux
+    fp = (f_unblocked_occ - f_blocked_occ)*1e6  # Occultation depth Fp/Fs(alpha=0) in ppm
 
     # PhaseCurve
     if t is None: t = np.linspace(0., period, 1000)
 
-    light_curve = spider_params.lightcurve(t)  # phase modulation + occultation, no transit
+    light_curve = spider_params.lightcurve(t, stellar_grid=stellar_grid)  # phase modulation + occultation, no transit
     f_transit = batman_utils.flux_transit(period, r1/r2, R/r2, incl, ecc, w, t, t0=t0, u=u)
     phase_curve = f_transit + (light_curve - 1.)
 
@@ -239,9 +236,10 @@ def thermal_PhaseCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_r
 
 
 # Generating a thermal light curve (only the planetary phase modulation without occultation and transit) from the spiderman custom forward model (inputting a custom temperature map)
-def thermal_LightCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", A_B = 0.1, emissivity=1., exclude_occultation=True, N_LAYERS=30):
+def thermal_LightCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., include_occultation=False, N_LAYERS=30):
     #  r1, r2, R: planetary radius, stellar radius, semi major axis in consistent units
     # R_star: stellar radius in solar radii
+    # For lambda_range, either pass the effective ranges without a filter_path (spiderman assumes tophat) or provide lambda_range and filter_path.
 
     lo, la, temp_grid = custom_temperature_grid(r1, r2, R, T2_eff, u=u, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B = A_B, emissivity=emissivity)
 
@@ -270,10 +268,25 @@ def thermal_LightCurve(period, incl, ecc, w, r1, r2, R, T2_eff, R_star, lambda_r
 
     spider_params.l1, spider_params.l2 = lambda_range  # The starting & ending wavelength in meters
 
-    if exclude_occultation: spider_params.eclipse = False # Only phase modulation, no occultation
-    else: spider_params.eclipse = True
+    # Add filter throughput
+    spider_params.filter = filter_path
+    stellar_grid = sp.stellar_grid.gen_grid(spider_params.l1, spider_params.l2, logg=4.5, response=spider_params.filter, stellar_model=stellar_model)
+
+    # Include Occultation?
+    spider_params.eclipse = include_occultation
 
     if t is None: t = np.linspace(0., period, 1000)
 
-    light_curve = spider_params.lightcurve(t)-1  # phase modulation, no transit & occultation
+    light_curve = spider_params.lightcurve(t, stellar_grid=stellar_grid)-1
     return t, light_curve, spider_params
+
+
+# Calculates the occultation depth of a spiderman model (spider_params.eclipse_depth() does not work with direct_T)
+def occultation_depth(spider_params):
+    set_ecl = spider_params.eclipse
+    stellar_grid = sp.stellar_grid.gen_grid(spider_params.l1, spider_params.l2, logg=4.5, response=spider_params.filter, stellar_model=spider_params.stellar_model)
+    t_occ = kepler_utils.occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
+    spider_params.eclipse = False; f_open = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
+    spider_params.eclipse = True;  f_closed = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
+    spider_params.eclipse = set_ecl
+    return (f_open - f_closed)*1e6 # Fp/Fs(alpha=0) in ppm
