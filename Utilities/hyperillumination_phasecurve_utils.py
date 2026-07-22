@@ -9,6 +9,23 @@ import batman_utils
 sigma = 5.670374e-8  # W m^-2 K^-4
 
 
+###########################################################################################################################
+#####
+#####   Full PhaseCurve (reflected + thermal)
+#####
+###########################################################################################################################
+
+def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], A=0.1, n_eta=150, n_phi=80, n_tab=1000, n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=60):
+    # Reflected Part including transit
+    t_comb, refl, fp_refl = reflected_PhaseCurve(planet, t=t, t0=t0, u=u, include_transit=True, A=A, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
+    # Thermal part, without stellar flux (no transit)
+    _,  therm, fp_therm, _ = thermal_PhaseCurve(planet, lambda_range, t=t_comb, t0=t0, u=u, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, stellar_model=stellar_model, filter_path=filter_path, A_B = A_B, emissivity=emissivity, include_transit=False, N_LAYERS=N_LAYERS)
+
+    total = refl + therm
+    fp = fp_refl + fp_therm
+
+    return t_comb, total, fp
+
 
 ###########################################################################################################################
 #####
