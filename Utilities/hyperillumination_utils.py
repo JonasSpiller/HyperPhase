@@ -71,13 +71,12 @@ def alpha_(gamma1, R, r1):
 
 def BBtemp_from_insolation(insol, A_B = 0.1, emissivity=1.):
     # A_B is always bond albedo (even for lambda-band measurements)
+    # spiderman model (in thermal_PhaseCurve assumes emissivity=1 during emission, so emissivity=1 should be kept here as well for consistency)
     return ((1-A_B) * insol / (emissivity * sigma))**0.25
 
 
 # tabulates insolation(gamma1) on a 1D grid once, so 2D pixel grids
 def _tabulate_insolation(planet, u, insolation_model, n_tab=3000):
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
-
     if insolation_model == "kopal":
         gp1 = planet.terminator_penumbra()
         gp2 = planet.terminator_nightside()
@@ -102,6 +101,10 @@ def _tabulate_insolation(planet, u, insolation_model, n_tab=3000):
 #####
 ###########################################################################################################################
 
+def insolation(gamma1, planet, insolation_model, u=0):
+    if insolation_model == "kopal": return insolation_kopal(gamma1, planet, u=u)
+    elif insolation_model == "naive": return naive_insolation(gamma1, planet)
+    else: raise ValueError("insolation_model must be either 'kopal' or 'naive'")
 
 # Insolation Model without Hyperillumination
 def naive_insolation(gamma1, planet):
@@ -116,7 +119,6 @@ def naive_insolation(gamma1, planet):
 # Using models from Kopal 1954
 def insolation_kopal(gamma1, planet, u=0):
     # gamma1 is angle from substellar point; u is star's limb-darkening coefficient
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     gamma1 = np.atleast_1d(gamma1)
     gp1 = planet.terminator_penumbra()
@@ -208,121 +210,6 @@ def _theta_kernels_vec(theta, alpha, rho, r2):
 
 ###########################################################################################################################
 #####
-#####   Other Penumbra Implementations
-#####
-###########################################################################################################################
-
-
-# Penumbra: Inspired by Kopal (eq. 36-41) without small-disk approximation and with corrections (lambda inconsistency, ...), see Goodnotes derivation
-# Penumbra: baseline/ground-truth implementation via scipy.integrate.quad, per-point adaptive quadrature
-def insolation_penumbra_kopal_simpleint(gamma1, planet, u=0.0, runtime=False, **quad_kw):
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
-
-    t0 = time.perf_counter()
-    result = np.array([_insolation_penumbra_kopal_simpleint_scalar(g, planet, u, **quad_kw) for g in gamma1])
-    if runtime: print(f"insolation_penumbra_kopal_simpleint runtime: {time.perf_counter() - t0:.4f} s")
-    return result
-def _insolation_penumbra_kopal_simpleint_scalar(gamma1, planet, u, **quad_kw):
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
-
-    alpha, rho = alpha_(gamma1, R, r1)
-    I0 = sigma * T2_eff ** 4 / np.pi / (1 - u / 3)
-
-    # integrands for M_n, N_n (n = 1, 2)
-    def integ_M(theta, n):
-        A, _, cos_tp, Delta = _theta_kernels_simpleint(theta, alpha, rho, r2)
-        return A * Delta * cos_tp**n * np.sin(theta)
-
-    def integ_N(theta, n):
-        _, B, cos_tp, Delta = _theta_kernels_simpleint(theta, alpha, rho, r2)
-        return B * np.sin(Delta) * cos_tp**n * np.sin(theta)
-
-    kw = dict(epsabs=1e-12, epsrel=1e-10, limit=200)
-    kw.update(quad_kw)
-
-    Mn = lambda n: 2.0 * r2**2 / np.pi * quad(integ_M, 0.0, np.arccos(r2 / rho), args=(n,), **kw)[0]
-    Nn = lambda n: 2.0 * r2**2 / np.pi * quad(integ_N, 0.0, np.arccos(r2 / rho), args=(n,), **kw)[0]
-
-    ca, sa = np.cos(alpha), np.sin(alpha)
-    J1 = Mn(1) * ca + Nn(1) * sa                          # eq. 39, n=1
-    Jp = I0 * (1.0 - u) * J1
-    if u != 0.0:
-        J2 = Mn(2) * ca + Nn(2) * sa                      # eq. 39, n=2
-        Jp += I0 * u * J2
-    return np.pi * Jp                                     # F = pi * I'   (eq. 36)
-def _theta_kernels_simpleint(theta, alpha, rho, r2):
-    """Return (cosb/rp^2, sinb/rp^2, cos theta', Delta) at polar angle theta."""
-    ct = np.cos(theta)
-    st = np.sin(theta)
-    rp2 = rho**2 + r2**2 - 2.0 * rho * r2 * ct          # rho'^2                (eq. 20)
-    rp = np.sqrt(rp2)
-    cos_beta = (rho - r2 * ct) / rp                      # cos beta              (eq. 18)
-    sin_beta = r2 * st / rp                              # sin beta
-    cos_tp = (rho * ct - r2) / rp                        # cos theta'            (eq. 19)
-    # exact visible azimuthal half-width Delta(theta)
-    cot_beta = (rho - r2 * ct) / (r2 * st) if st > 0 else np.inf
-    g = -cot_beta / np.tan(alpha) if np.tan(alpha) != 0 else 0.0   # -cot(a) cot(b)
-    Delta = np.arccos(np.clip(g, -1.0, 1.0))            # in [0, pi]
-    return cos_beta / rp2, sin_beta / rp2, cos_tp, Delta
-
-
-
-# Penumbra: Quick solution through masking for integral validation (long runtimes, only accurate for relatively high nth, nom)
-def insolation_penumbra_mask(gamma1, planet, u=0.0, nth=400, nom=800, runtime=False):
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
-
-    t0 = time.perf_counter()
-    result = np.array([_insolation_penumbra_mask_scalar(g, planet, u, nth, nom) for g in gamma1])
-    if runtime: print(f"insolation_penumbra_mask runtime: {time.perf_counter() - t0:.4f} s")
-    return result
-def _insolation_penumbra_mask_scalar(gamma1, planet, u, nth, nom):
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
-
-    alpha, rho = alpha_(gamma1, R, r1)
-    I0 = sigma * T2_eff ** 4 / np.pi / (1 - u / 3)
-
-    theta_max = np.arccos(r2 / rho)
-    th = np.linspace(1e-7, theta_max, nth)
-    om = np.linspace(0.0, 2 * np.pi, nom, endpoint=False)
-    TH, OM = np.meshgrid(th, om, indexing="ij")
-    ct = np.cos(TH)
-    rp2 = rho**2 + r2**2 - 2 * rho * r2 * ct
-    rp = np.sqrt(rp2)
-    cb = (rho - r2 * ct) / rp
-    sb = r2 * np.sin(TH) / rp
-    cos_tp = (rho * ct - r2) / rp
-    cz = np.cos(alpha) * cb + np.sin(alpha) * sb * np.cos(OM)     # cos zeta (eq.17)
-    Iem = I0 * (1 - u + u * cos_tp)
-    integ = np.where((cz > 0) & (cos_tp > 0),
-                     Iem * cz * cos_tp * (r2**2 * np.sin(TH)) / rp2, 0.0)
-    return np.trapezoid(np.trapezoid(integ, om, axis=1), th)
-
-
-# Penumbra: Kopal's analytic penumbral approximation, lambda sign-corrected (only valid for r2<<R!, inaccurate for close-in Exoplanets)
-def insolation_penumbra_kopal_approx(gamma1, planet, u=0.0, runtime=False):
-    """Small-disk analytic form from eqs. (43)-(48), using the self consistent sign
-    x = sin(lambda) = -(rho/r2)cos(alpha)  (opposite to printed eq. 56)."""
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
-
-    t0 = time.perf_counter()
-    alpha, rho = alpha_(gamma1, R, r1)
-    I0 = sigma * T2_eff ** 4 / np.pi / (1 - u / 3)
-
-    x = np.clip(-(rho / r2) * np.cos(alpha), -1.0, 1.0)
-    lam = np.arcsin(x)
-    cl, sl, ca, sa = np.cos(lam), np.sin(lam), np.cos(alpha), np.sin(alpha)
-    J1 = (r2 ** 2 / rho ** 2) * (0.5 - (lam + sl * cl) / np.pi) * ca \
-         + (2 * r2 ** 3 / (3 * np.pi * rho ** 3)) * cl ** 3 * sa
-    J2 = (r2 ** 2 / (3 * rho ** 2)) * (1 - sl * (1 + cl ** 2 / 2)) * ca \
-         + (r2 ** 3 / (8 * rho ** 3)) * cl ** 4 * sa  # corrected: r2^3 (eq.48 prints r1^3)
-    result = np.pi * I0 * ((1 - u) * J1 + u * J2)
-    if runtime: print(f"insolation_penumbra_kopal_approx runtime: {time.perf_counter() - t0:.4f} s")
-    return result
-
-
-
-###########################################################################################################################
-#####
 #####   Plotting
 #####
 ###########################################################################################################################
@@ -343,7 +230,6 @@ def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=
 
 
 def plot_insolmap(phase, planet, u=0, A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", unit="flux", n_tab=3000, gp_table=None):
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
@@ -422,7 +308,6 @@ def plot_insolmap(phase, planet, u=0, A_B = 0.1, emissivity=1., min_temp=None, m
 def plot_quad_insolmap(planet, u=0, A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=500,
                        theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None,
                        insolation_model="kopal", unit="flux", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000):
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
@@ -463,7 +348,6 @@ def plot_quad_insolmap(planet, u=0, A_B = 0.1, emissivity=1., min_temp=None, max
 
 def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", u=0, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
                        show_axes=False, terminator=False, show_penumbra=None, insolation_model="kopal", unit="flux", n_frames=1000, fps=50, phase_start=0., phase_end=1., n_tab=3000):
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
@@ -528,3 +412,121 @@ def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", 
 
     mp4_writer.finish()
     pil_frames[0].save(filename+".gif", save_all=True, append_images=pil_frames[1:], duration=int(1000 / fps), loop=0, disposal=2)
+
+
+
+
+
+###########################################################################################################################
+#####
+#####   Other Penumbra Implementations (unused, for validation)
+#####
+###########################################################################################################################
+
+
+# Penumbra: Inspired by Kopal (eq. 36-41) without small-disk approximation and with corrections (lambda inconsistency, ...), see Goodnotes derivation
+# Penumbra: baseline/ground-truth implementation via scipy.integrate.quad, per-point adaptive quadrature
+def insolation_penumbra_kopal_simpleint(gamma1, planet, u=0.0, runtime=False, **quad_kw):
+
+    t0 = time.perf_counter()
+    result = np.array([_insolation_penumbra_kopal_simpleint_scalar(g, planet, u, **quad_kw) for g in gamma1])
+    if runtime: print(f"insolation_penumbra_kopal_simpleint runtime: {time.perf_counter() - t0:.4f} s")
+    return result
+def _insolation_penumbra_kopal_simpleint_scalar(gamma1, planet, u, **quad_kw):
+    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
+
+    alpha, rho = alpha_(gamma1, R, r1)
+    I0 = sigma * T2_eff ** 4 / np.pi / (1 - u / 3)
+
+    # integrands for M_n, N_n (n = 1, 2)
+    def integ_M(theta, n):
+        A, _, cos_tp, Delta = _theta_kernels_simpleint(theta, alpha, rho, r2)
+        return A * Delta * cos_tp**n * np.sin(theta)
+
+    def integ_N(theta, n):
+        _, B, cos_tp, Delta = _theta_kernels_simpleint(theta, alpha, rho, r2)
+        return B * np.sin(Delta) * cos_tp**n * np.sin(theta)
+
+    kw = dict(epsabs=1e-12, epsrel=1e-10, limit=200)
+    kw.update(quad_kw)
+
+    Mn = lambda n: 2.0 * r2**2 / np.pi * quad(integ_M, 0.0, np.arccos(r2 / rho), args=(n,), **kw)[0]
+    Nn = lambda n: 2.0 * r2**2 / np.pi * quad(integ_N, 0.0, np.arccos(r2 / rho), args=(n,), **kw)[0]
+
+    ca, sa = np.cos(alpha), np.sin(alpha)
+    J1 = Mn(1) * ca + Nn(1) * sa                          # eq. 39, n=1
+    Jp = I0 * (1.0 - u) * J1
+    if u != 0.0:
+        J2 = Mn(2) * ca + Nn(2) * sa                      # eq. 39, n=2
+        Jp += I0 * u * J2
+    return np.pi * Jp                                     # F = pi * I'   (eq. 36)
+def _theta_kernels_simpleint(theta, alpha, rho, r2):
+    """Return (cosb/rp^2, sinb/rp^2, cos theta', Delta) at polar angle theta."""
+    ct = np.cos(theta)
+    st = np.sin(theta)
+    rp2 = rho**2 + r2**2 - 2.0 * rho * r2 * ct          # rho'^2                (eq. 20)
+    rp = np.sqrt(rp2)
+    cos_beta = (rho - r2 * ct) / rp                      # cos beta              (eq. 18)
+    sin_beta = r2 * st / rp                              # sin beta
+    cos_tp = (rho * ct - r2) / rp                        # cos theta'            (eq. 19)
+    # exact visible azimuthal half-width Delta(theta)
+    cot_beta = (rho - r2 * ct) / (r2 * st) if st > 0 else np.inf
+    g = -cot_beta / np.tan(alpha) if np.tan(alpha) != 0 else 0.0   # -cot(a) cot(b)
+    Delta = np.arccos(np.clip(g, -1.0, 1.0))            # in [0, pi]
+    return cos_beta / rp2, sin_beta / rp2, cos_tp, Delta
+
+
+
+# Penumbra: Quick solution through masking for integral validation (long runtimes, only accurate for relatively high nth, nom)
+def insolation_penumbra_mask(gamma1, planet, u=0.0, nth=400, nom=800, runtime=False):
+
+    t0 = time.perf_counter()
+    result = np.array([_insolation_penumbra_mask_scalar(g, planet, u, nth, nom) for g in gamma1])
+    if runtime: print(f"insolation_penumbra_mask runtime: {time.perf_counter() - t0:.4f} s")
+    return result
+def _insolation_penumbra_mask_scalar(gamma1, planet, u, nth, nom):
+    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
+
+    alpha, rho = alpha_(gamma1, R, r1)
+    I0 = sigma * T2_eff ** 4 / np.pi / (1 - u / 3)
+
+    theta_max = np.arccos(r2 / rho)
+    th = np.linspace(1e-7, theta_max, nth)
+    om = np.linspace(0.0, 2 * np.pi, nom, endpoint=False)
+    TH, OM = np.meshgrid(th, om, indexing="ij")
+    ct = np.cos(TH)
+    rp2 = rho**2 + r2**2 - 2 * rho * r2 * ct
+    rp = np.sqrt(rp2)
+    cb = (rho - r2 * ct) / rp
+    sb = r2 * np.sin(TH) / rp
+    cos_tp = (rho * ct - r2) / rp
+    cz = np.cos(alpha) * cb + np.sin(alpha) * sb * np.cos(OM)     # cos zeta (eq.17)
+    Iem = I0 * (1 - u + u * cos_tp)
+    integ = np.where((cz > 0) & (cos_tp > 0),
+                     Iem * cz * cos_tp * (r2**2 * np.sin(TH)) / rp2, 0.0)
+    return np.trapezoid(np.trapezoid(integ, om, axis=1), th)
+
+
+# Penumbra: Kopal's analytic penumbral approximation, lambda sign-corrected (only valid for r2<<R!, inaccurate for close-in Exoplanets)
+def insolation_penumbra_kopal_approx(gamma1, planet, u=0.0, runtime=False):
+    """Small-disk analytic form from eqs. (43)-(48), using the self consistent sign
+    x = sin(lambda) = -(rho/r2)cos(alpha)  (opposite to printed eq. 56)."""
+    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
+
+    t0 = time.perf_counter()
+    alpha, rho = alpha_(gamma1, R, r1)
+    I0 = sigma * T2_eff ** 4 / np.pi / (1 - u / 3)
+
+    x = np.clip(-(rho / r2) * np.cos(alpha), -1.0, 1.0)
+    lam = np.arcsin(x)
+    cl, sl, ca, sa = np.cos(lam), np.sin(lam), np.cos(alpha), np.sin(alpha)
+    J1 = (r2 ** 2 / rho ** 2) * (0.5 - (lam + sl * cl) / np.pi) * ca \
+         + (2 * r2 ** 3 / (3 * np.pi * rho ** 3)) * cl ** 3 * sa
+    J2 = (r2 ** 2 / (3 * rho ** 2)) * (1 - sl * (1 + cl ** 2 / 2)) * ca \
+         + (r2 ** 3 / (8 * rho ** 3)) * cl ** 4 * sa  # corrected: r2^3 (eq.48 prints r1^3)
+    result = np.pi * I0 * ((1 - u) * J1 + u * J2)
+    if runtime: print(f"insolation_penumbra_kopal_approx runtime: {time.perf_counter() - t0:.4f} s")
+    return result
+
+
+

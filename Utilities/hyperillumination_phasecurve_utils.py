@@ -36,7 +36,7 @@ def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], A=0.1, n_
 
 
 # Reflected light curve signal accounting for hyperillumination
-# This assumes Lambertian reflectance
+# This assumes Lambertian (isotropic, grey) reflectance, circular planet
 # Inspired by Kopal eq. 4
 def reflected_lightcurve(epsilon, planet, u=0.0, unit="normalized", lambda_band_ratio=1., A=0.1, n_eta=150, n_phi=80, n_tab=1000, runtime=False, insolation_model="kopal"):
     """
@@ -157,8 +157,8 @@ def orbital_reflected_lightcurve(t, planet, t0=0., n_eps=300, A=0.1, n_eta=150, 
 # Returns (t, flux): timestamps and the full reflected phase curve combining transit, secondary eclipse / occultation, and sinusoidal phase modulation.
 # Reflected phasecurve valid for any wavelength range/filter and stellar spectrum as wavelength dependence cancels out in Fp/Fs (Fp linearly dependent on Fs)
 # Band-integrated albedo A however depends on both detector throughput (wavelength range) and stellar spectrum.
-# To assume independence on the stellar spectrum we have to neglect stellar limb reddening - this would have an effect on the penumbral reflection
-# Lambertian reflection is assumed
+# To assume independence on the stellar spectrum we have to neglect stellar limb darkening + reddening - this would have an effect on the penumbral reflection (this is justified since limb darkening weak in IR)
+# This assumes Lambertian (isotropic, grey) reflectance, circular planet
 def reflected_PhaseCurve(planet, t=None, t0=0., u=[0.1, 0.3], include_transit=True, A=0.1, n_eta=150, n_phi=80, n_tab=1000, insolation_model="kopal"):
     #  r1, r2, R: planetary radius, stellar radius, semi major axis in consistent units
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
@@ -194,26 +194,23 @@ def reflected_PhaseCurve(planet, t=None, t0=0., u=[0.1, 0.3], include_transit=Tr
 
 # Generated custom temperature grid from a given insolation model (insolation_model = hyperillumination, naive) as input for spiderman custom forward model
 def custom_temperature_grid(planet, u=0, n_lo=200, n_la=100, insolation_model="kopal", A_B = 0.1, emissivity=1.):
-    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
+    # THE CURRENT CODE NEGLECTS CHANGES IN R THROUGHOUT THE ORBIT! All functions are designed for scalar R, which is why the formula below currently fails. Needs adjustment for ecc>0.
+    # The current code fixes the planet-star distance to the semi-major axis R
+    # R_real = R * (1. - ecc**2) / (1. + ecc * np.cos(f))
 
     lo = np.linspace(-180, 180, n_lo)  # longitude [deg], 0 = substellar meridian
     la = np.linspace(-90, 90, n_la)  # latitude [deg], 0 = equator
     LO, LA = np.meshgrid(np.radians(lo), np.radians(la))  # shape (n_la, n_lo), radians
 
     gamma1_grid = np.arccos(np.cos(LA) * np.cos(LO))  # angular distance from substellar point
-    if insolation_model == "kopal":
-        insol_grid = insolation_kopal(gamma1_grid, planet)  #TODO add , u=u but only when hi model quadratic
-    elif insolation_model == "naive":
-        insol_grid = naive_insolation(gamma1_grid, planet)
-    else:
-        raise ValueError("insolation_model must be either 'kopal' or 'naive'")
+    insol_grid = insolation(gamma1_grid, planet, insolation_model)  #TODO add , u=u but only when hi model quadratic
     temp_grid = BBtemp_from_insolation(insol_grid, A_B = A_B, emissivity=emissivity)
 
     return lo, la, temp_grid  # Custom temperature map [lo (deg), la (deg), T (K)]
 
 
 # Generating a thermal phase curve from the spiderman custom forward model (inputting a custom temperature map)
-def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=20, include_transit=True, include_occultation=True):
+def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=200, n_la=100, insolation_model="kopal", stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=60, include_transit=True, include_occultation=True):
     # N_LAYERS = 20 usually sufficient for insolation_model="kopal", insolation_model="naive" needs N_LAYERS = 60
     #  r1, r2, R: planetary radius, stellar radius, semi major axis in consistent units
     # For lambda_range, either pass the effective ranges without a filter_path (spiderman assumes tophat) or provide lambda_range and filter_path.
@@ -222,7 +219,7 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=2
     lo, la, temp_grid = custom_temperature_grid(planet, u=u, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B = A_B, emissivity=emissivity)
 
     # pass indexing='ij' meshgrids in deg and the transposed temp_grid (wrong orientation fails silently!)
-    # Floor the map: 0 K nightside + sharp terminator makes the bicubic spline overshoot to negative temperatures ("CANNOT DO NEGATIVE TEMPERATURES"); ~100 K adds negligible flux at 1-10 um
+    # Floor the map: 0 K nightside + sharp terminator makes the bicubic spline overshoot to negative temperatures ("CANNOT DO NEGATIVE TEMPERATURES"); ~100 K adds negligible flux at 1-20 um
     T_floor = 100.  # temperature floor for nightside [K]
     LO_deg, LA_deg = np.meshgrid(lo, la, indexing='ij')  # longitude/latitude meshgrids [deg]
     grid = sp.format_grid(LO_deg, LA_deg, np.maximum(temp_grid, T_floor).T)
@@ -252,12 +249,7 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=2
         stellar_grid = sp.stellar_grid.gen_grid(spider_params.l1, spider_params.l2, logg=4.5, response=spider_params.filter, stellar_model=stellar_model)
 
     # Get occultation depth. In the standard spiderman model spider_params.eclipse_depth() segfaults with direct_T, hence the model has to run explicitly without the eclipse to get the depth.
-    t_occultation = kepler_utils.occultation_time(period, ecc, w, t0=t0)
-    spider_params.eclipse = False
-    f_unblocked_occ = spider_params.lightcurve([t_occultation], stellar_grid=stellar_grid)[0] # full dayside flux
-    spider_params.eclipse = True
-    f_blocked_occ = spider_params.lightcurve([t_occultation], stellar_grid=stellar_grid)[0] # pure stellar flux
-    fp = (f_unblocked_occ - f_blocked_occ)*1e6  # Occultation depth Fp/Fs(alpha=0) in ppm
+    fp = occultation_depth(spider_params, stellar_grid=stellar_grid)  # Occultation depth Fp/Fs(alpha=0) in ppm
 
     # Include Occultation?
     spider_params.eclipse = include_occultation
@@ -276,15 +268,16 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], n_lo=2
 
 
 # Calculates the occultation depth of a spiderman model (spider_params.eclipse_depth() does not work with direct_T)
-def occultation_depth(spider_params):
+def occultation_depth(spider_params, stellar_grid=None):
     set_ecl = spider_params.eclipse
-    with contextlib.redirect_stdout(io.StringIO()): # mute notification: "no stellar models provided, using blackbody approximation"
-        stellar_grid = sp.stellar_grid.gen_grid(spider_params.l1, spider_params.l2, logg=4.5, response=spider_params.filter, stellar_model=spider_params.stellar_model)
+    if stellar_grid is None:
+        with contextlib.redirect_stdout(io.StringIO()): # mute notification: "no stellar models provided, using blackbody approximation"
+            stellar_grid = sp.stellar_grid.gen_grid(spider_params.l1, spider_params.l2, logg=4.5, response=spider_params.filter, stellar_model=spider_params.stellar_model)
     t_occ = kepler_utils.occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
-    spider_params.eclipse = False; f_open = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
-    spider_params.eclipse = True;  f_closed = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
+    spider_params.eclipse = False; f_unblocked_occ = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
+    spider_params.eclipse = True;  f_blocked_occ = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
     spider_params.eclipse = set_ecl
-    return (f_open - f_closed)*1e6 # Fp/Fs(alpha=0) in ppm
+    return (f_unblocked_occ - f_blocked_occ)*1e6 # Fp/Fs(alpha=0) in ppm
 
 # Equivalent to thermal_PhaseCurve(..., insolation_model="naive") but faster.
 def Louden_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], stellar_model="blackbody", filter_path=False, A_B = 0.1, N_LAYERS=60, include_transit=True, include_occultation=True):
@@ -314,7 +307,7 @@ def Louden_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], stellar
         stellar_grid = sp.stellar_grid.gen_grid(sp_louden.l1, sp_louden.l2, logg=4.5, response=sp_louden.filter, stellar_model=stellar_model)
 
     # Get occultation depth.
-    fp = occultation_depth(sp_louden)  # Occultation depth Fp/Fs(alpha=0) in ppm
+    fp = occultation_depth(sp_louden, stellar_grid=stellar_grid)  # Occultation depth Fp/Fs(alpha=0) in ppm
 
     # Include Occultation?
     sp_louden.eclipse = include_occultation
