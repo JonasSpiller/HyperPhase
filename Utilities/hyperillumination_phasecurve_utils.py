@@ -1,7 +1,7 @@
 # translating the insolation model with hyperillumination to a light curve signal
 import time
 import numpy as np
-import spiderman as sp
+import fspiderman as sp
 from hyperillumination_utils import *
 import kepler_utils
 import batman_utils

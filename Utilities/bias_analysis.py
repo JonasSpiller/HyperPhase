@@ -2,8 +2,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 import spiderman as sp
 from scipy.optimize import minimize_scalar
-from hyperillumination_phasecurve_utils import (custom_temperature_grid,
-                                                reflected_PhaseCurve, fast_lightcurve)
+from hyperillumination_phasecurve_utils import (custom_temperature_grid, reflected_PhaseCurve, fast_lightcurve)
 
 
 ###########################################################################################################################

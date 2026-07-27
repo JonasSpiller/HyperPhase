@@ -57,8 +57,10 @@ ENV/
 # ========================
 /Literature/
 /Hyperillumination/Plots/
-/Basic PhaseCurve Test/local_spiderman_fixes.md
+/SPIDERMAN_fixes/local_spiderman_fixes.md
 /Filters/raw Pandeira/
 /Filters/raw SVO/
 /Hyperillumination/2026-07-26-Spiderman-Performance-Analysis.ipynb
-/Hyperillumination/spiderman-speed.patch
+/SPIDERMAN_fixes/spiderman-speed.patch
+/SPIDERMAN_fixes/local_spiderman_speed_patches.md
+/SPIDERMAN_fixes/spiderman-version.patch
