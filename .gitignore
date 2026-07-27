@@ -61,6 +61,4 @@ ENV/
 /Filters/raw Pandeira/
 /Filters/raw SVO/
 /Hyperillumination/2026-07-26-Spiderman-Performance-Analysis.ipynb
-/SPIDERMAN_fixes/spiderman-speed.patch
 /SPIDERMAN_fixes/local_spiderman_speed_patches.md
-/SPIDERMAN_fixes/spiderman-version.patch
