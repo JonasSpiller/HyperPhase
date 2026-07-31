@@ -20,7 +20,7 @@ def light_travel_time_correction(t, planet, t0=0.):
     return t + dt
 
 
-def flux_occultation(planet, fp, t, t0=0., u=[0.1, 0.3]):
+def flux_occultation(planet, fp, t, t0=0.):
     """
     Returns the secondary eclipse / occultation light curve (normalized flux array) computed via batman.
     """
@@ -36,8 +36,8 @@ def flux_occultation(planet, fp, t, t0=0., u=[0.1, 0.3]):
     params_occultation.ecc = ecc  # eccentricity
     params_occultation.w = w  # longitude of periastron (in degrees)
 
-    params_occultation.limb_dark = "quadratic"  # limb darkening model (assumed "quadratic", consistent with Hyperillumination model)
-    params_occultation.u = u  # limb darkening coefficients [u1, u2] (placeholders, not from K2-141 data)
+    params_occultation.limb_dark = "quadratic"  # placeholder, limb darkening not needed for occultation
+    params_occultation.u = [0.1, 0.3]  # placeholder, limb darkening not needed for occultation
 
     params_occultation.fp = fp  # planet-to-star flux ratio (occultation depth)
     params_occultation.t_secondary = occultation_time(period, ecc, w, t0=t0)  # time of occultation center
@@ -86,6 +86,6 @@ def Cosine_PhaseCurve(planet, fp, offset=0, t=None, t0=0., Amp=1., u=[0.1, 0.3])
     phase_mod = 1 + Amp/2 * (np.cos(f - f_occultation + np.radians(offset)) - 1)
 
     t_corr = light_travel_time_correction(t, planet, t0=t0)
-    phase_curve = flux_transit(planet, t, t0=t0, u=u)+(flux_occultation(planet, fp, t, t0=t0, u=u)-1)*phase_mod
+    phase_curve = flux_transit(planet, t, t0=t0, u=u)+(flux_occultation(planet, fp, t, t0=t0)-1)*phase_mod
 
     return t_corr, phase_curve

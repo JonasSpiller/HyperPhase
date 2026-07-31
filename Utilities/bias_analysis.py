@@ -4,6 +4,19 @@ import spiderman as sp
 from scipy.optimize import minimize_scalar
 from hyperillumination_phasecurve_utils import (custom_temperature_grid, reflected_PhaseCurve, fast_lightcurve)
 
+###########################################################################################################################
+#####
+#####   Nested Sampling
+#####
+###########################################################################################################################
+
+
+
+
+
+
+
+
 
 ###########################################################################################################################
 #####
@@ -27,7 +40,7 @@ def bin_curve(t, y, minutes_binning):
 
 ###########################################################################################################################
 #####
-#####   A_B-Bias fitting model
+#####   Simple A_B-Bias fitting model
 #####
 ###########################################################################################################################
 
@@ -49,6 +62,7 @@ class BiasConfig:
     rp: float               # default Rp/Rs
     A_B_true: float         # true Bond albedo used to generate the hyperillumination truth
     sigma_bin: float        # per-bin detection error [ppm]
+    u_B: float = 0.         # hyperillumination-model limb-darkening coefficient (0 = uniform disk)
     reflected: bool = True  # True -> full (reflected + thermal); False -> thermal only
     T_floor: float = 200.   # min temperature for the direct_T grid [K]; blocks negative-T spline overshoot
     bounds: tuple = (0.0, 0.6)  # albedo search bounds for the naive fit
@@ -62,7 +76,7 @@ def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_=None, n_t=100
     t_ = np.linspace(0., cfg.period, int(n_t))
     planet = replace(cfg.planet, R=a_rs, T2_eff=T_s, r1=rp_)
     _, refl, _ = reflected_PhaseCurve(planet, t=t_, include_transit=False, A=1.,
-                                      insolation_model=insolation_model)
+                                      u_B=cfg.u_B, insolation_model=insolation_model)
     return refl * 1e6
 
 
@@ -76,8 +90,7 @@ def model_lc(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=100
     planet = replace(cfg.planet, R=a_rs, T2_eff=T_s, r1=rp_)
 
     # Thermal Part
-    lo, la, Tg = custom_temperature_grid(planet, n_lo=n_lo, n_la=n_la,
-                                         insolation_model=insolation_model, A_B=A_B_)
+    lo, la, Tg = custom_temperature_grid(planet, u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B=A_B_)
     LO, LA = np.meshgrid(lo, la, indexing="ij")
     p = sp.ModelParams(brightness_model="direct_T", stellar_model="blackbody")
     p.n_layers = n_layers
@@ -114,8 +127,8 @@ def fit_naive(cfg, truth, free_offset=True, bounds=None, xatol=1e-3, **kw):
     return res.x, res.fun  # chi2 = cost(A_fit) = weighted sum of squared residuals
 
 
-# One grid cell of a bias map: generate the kopal truth, fit the naive model, return the recovered-A_B bias.
+# One grid cell of a bias map: generate the hyperillumination truth, fit the naive model, return the recovered-A_B bias.
 def bias_cell(cfg, free_offset=True, **kw):
-    _, truth = model_lc(cfg, "kopal", cfg.A_B_true, **kw)
+    _, truth = model_lc(cfg, "hyperillum", cfg.A_B_true, **kw)
     A_fit, _ = fit_naive(cfg, truth, free_offset=free_offset, **kw)
     return A_fit - cfg.A_B_true

@@ -42,7 +42,7 @@ SPIDERMAN (last commit Aug 2020) has two problems for this project:
 
 1. it does **not build or run** on a modern scientific-Python stack, and
 2. its `lightcurve()` C routine is the dominant **runtime bottleneck** of the fitting and
-   MCMC workloads.
+   MCMC workloads. This is especially true for the direct_T model, when providing custom temperature maps (e.g. produced by a hyperillumination model) instead of using a prewritten model.
 
 I therefore run a **patched build**. The patches live in [`SPIDERMAN_fixes/`](SPIDERMAN_fixes/)
 as two independent unified diffs against a pristine upstream clone, each with a companion
@@ -56,7 +56,7 @@ write-up:
 The three subsections below reproduce, from scratch, a plain `spiderman` install with (1) only the
 version fixes, (2) only the speed patch, or (3) **both** (what I use).
 
-### Requirements (all three recipes)
+### Requirements
 
 - A **C compiler**
 - An activated Python environment with **`numpy`, `setuptools`, `wheel`** installed.
