@@ -1,7 +1,9 @@
 # translating the insolation model with hyperillumination to a light curve signal
 import time
 import numpy as np
-import fspiderman as sp
+import contextlib, io
+with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
+    import fspiderman as sp
 from hyperillumination_utils import *
 import kepler_utils
 import batman_utils
@@ -16,9 +18,9 @@ sigma = 5.670374e-8  # W m^-2 K^-4
 #####
 ###########################################################################################################################
 
-def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0., A=0.1, n_eta=150, n_phi=80, n_tab=1000, n_lo=200, n_la=100, insolation_model="hyperillum", stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=60):
+def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0., A=0.1, n_eta=150, n_phi=80, n_tab=1000, n_lo=200, n_la=100, insolation_model="hyperillum", stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=60, include_transit=True):
     # Reflected Part including transit
-    t_comb, refl, fp_refl = reflected_PhaseCurve(planet, t=t, t0=t0, u=u, u_B=u_B, include_transit=True, A=A, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
+    t_comb, refl, fp_refl = reflected_PhaseCurve(planet, t=t, t0=t0, u=u, u_B=u_B, include_transit=include_transit, A=A, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
     # Thermal part, without stellar flux (no transit)
     _,  therm, fp_therm, _ = thermal_PhaseCurve(planet, lambda_range, t=t_comb, t0=t0, u=u, u_B=u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, stellar_model=stellar_model, filter_path=filter_path, A_B = A_B, emissivity=emissivity, include_transit=False, N_LAYERS=N_LAYERS)
 
@@ -48,6 +50,7 @@ def reflected_lightcurve(epsilon, planet, u_B=0., unit="normalized", lambda_band
     n_tab: resolution of the gamma1-grid used to tabulate F_fi/F_pen
     """
     #TODO: When passing a filter T(λ) one can calculate lambda_band_ratio = ∫T(λ)B_λ(T_eff)dλ / σT_eff⁴
+    # TODO: For reflected light insolation_penumbra_hyperillum() should actually take u (MIR band), not u_B. For simplicity (since quadratic limb darkening is not implemented in the hyperillum model) we pass the bolometric u_B and assume the impact to be negligible for now.
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     t0 = time.perf_counter()
@@ -61,7 +64,7 @@ def reflected_lightcurve(epsilon, planet, u_B=0., unit="normalized", lambda_band
         if insolation_model == "hyperillum":
             # tabulate F_fi, F_pen on a gamma1-grid once and interpolate at quadrature nodes
             gp_fi_grid = np.linspace(0., gp1, n_tab)
-            Ffi_grid = insolation_fullyilluminated_hyperillum(gp_fi_grid, planet, u_B=u_B)
+            Ffi_grid = insolation_fullyilluminated_hyperillum(gp_fi_grid, planet)
 
             gp_pen_grid = np.linspace(gp1, gp2, n_tab)
             Fpen_grid = insolation_penumbra_hyperillum(gp_pen_grid, planet, u_B=u_B)

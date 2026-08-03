@@ -1,6 +1,8 @@
 from dataclasses import dataclass, replace
 import numpy as np
-import spiderman as sp
+import contextlib, io
+with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
+    import fspiderman as sp
 from scipy.optimize import minimize_scalar
 from hyperillumination_phasecurve_utils import (custom_temperature_grid, reflected_PhaseCurve, fast_lightcurve)
 
@@ -38,6 +40,8 @@ def bin_curve(t, y, minutes_binning):
     return t_bin[m], tot[m] / cnt[m]
 
 
+
+
 ###########################################################################################################################
 #####
 #####   Simple A_B-Bias fitting model
@@ -61,19 +65,30 @@ class BiasConfig:
     T_eff: float            # default stellar effective temperature [K]
     rp: float               # default Rp/Rs
     A_B_true: float         # true Bond albedo used to generate the hyperillumination truth
-    sigma_bin: float        # per-bin detection error [ppm]
+    sigma_1min: float = 323.  # detection error [ppm per minute of integration]
+    n_orbits: int = 3  # number of orbits observed and phase-folded
+    n_bins: int = 27  # bins per period; the width is DERIVED so it tiles exactly
     u_B: float = 0.         # hyperillumination-model limb-darkening coefficient (0 = uniform disk)
     reflected: bool = True  # True -> full (reflected + thermal); False -> thermal only
     T_floor: float = 200.   # min temperature for the direct_T grid [K]; blocks negative-T spline overshoot
     bounds: tuple = (0.0, 0.6)  # albedo search bounds for the naive fit
 
+# Exact block-average bins (valid only when n_t is a multiple of n_bins)
+def binned(cfg, y):
+    k = len(y) // cfg.n_bins
+    if k * cfg.n_bins != len(y):
+        raise ValueError(f"n_t={len(y)} is not a multiple of n_bins={cfg.n_bins}; "
+                         f"use n_t = {cfg.n_bins} * k (e.g. {cfg.n_bins * 40})")
+    return y.reshape(cfg.n_bins, k).mean(axis=1)
 
 # Reflected phase-curve shape at unit albedo (A = 1)
-def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_=None, n_t=1000, **_):
+def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_=None, n_t=None, **_):
     a_rs = cfg.a if a_rs is None else a_rs
     T_s = cfg.T_eff if T_s is None else T_s
     rp_ = cfg.rp if rp_ is None else rp_
-    t_ = np.linspace(0., cfg.period, int(n_t))
+    n_t = 50 * cfg.n_bins if n_t is None else n_t
+
+    t_ = np.linspace(0., cfg.period, int(n_t), endpoint=False)
     planet = replace(cfg.planet, R=a_rs, T2_eff=T_s, r1=rp_)
     _, refl, _ = reflected_PhaseCurve(planet, t=t_, include_transit=False, A=1.,
                                       u_B=cfg.u_B, insolation_model=insolation_model)
@@ -81,12 +96,14 @@ def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_=None, n_t=100
 
 
 # Fast, stripped-down phase curve [ppm] for the fitting loop
-def model_lc(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=1000, n_layers=40, n_lo=300, n_la=150, refl_unit=None):
+def model_lc(cfg, insolation_model, A_B_, A=None, a_rs=None, T_s=None, rp_=None, n_t=None, n_layers=40, n_lo=300, n_la=150, refl_unit=None):
     a_rs = cfg.a if a_rs is None else a_rs
     T_s = cfg.T_eff if T_s is None else T_s
     rp_ = cfg.rp if rp_ is None else rp_
+    n_t = 50 * cfg.n_bins if n_t is None else n_t
+    A = A_B_ if A is None else A
 
-    t_ = np.linspace(0., cfg.period, int(n_t))
+    t_ = np.linspace(0., cfg.period, int(n_t), endpoint=False)
     planet = replace(cfg.planet, R=a_rs, T2_eff=T_s, r1=rp_)
 
     # Thermal Part
@@ -109,26 +126,46 @@ def model_lc(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=100
     # Reflected Part (linear in A=A_B)
     if refl_unit is None:
         refl_unit = reflected_unit(cfg, insolation_model, a_rs=a_rs, T_s=T_s, rp_=rp_, n_t=n_t)
-    return t_, thermal + A_B_ * refl_unit
+    return t_, thermal + A * refl_unit
 
 
 # Best-fit naive albedo A (= A_B) against a hyperillumination-generated truth, returning (A_fit, chi2).
-def fit_naive(cfg, truth, free_offset=True, bounds=None, xatol=1e-3, **kw):
+def fit_naive(cfg, truth, free_offset=True, bounds=None, xatol=1e-4, **kw):
+    sigma_bin = cfg.sigma_1min / np.sqrt(cfg.n_orbits * cfg.period * 24 * 60 / cfg.n_bins)
+
     bounds = cfg.bounds if bounds is None else bounds
     refl_unit = reflected_unit(cfg, "naive", **kw) if cfg.reflected else None
 
+    yb_truth = binned(cfg, truth)
+
+    def resid(A_):
+        r = yb_truth - binned(cfg, model_lc(cfg, "naive", A_, refl_unit=refl_unit, **kw)[1])
+        return r - r.mean() if free_offset else r
+
     def cost(A_):
-        r = truth - model_lc(cfg, "naive", A_, refl_unit=refl_unit, **kw)[1]
-        if free_offset:
-            r = r - r.mean()  # real TSO fits have a free baseline
-        return np.sum((r / cfg.sigma_bin) ** 2)
+        return np.sum((resid(A_) / sigma_bin) ** 2)
 
     res = minimize_scalar(cost, bounds=bounds, method="bounded", options={"xatol": xatol})
-    return res.x, res.fun  # chi2 = cost(A_fit) = weighted sum of squared residuals
+    r = resid(res.x)
+    resid_rms = np.sqrt(np.mean(r ** 2))
+    return res.x, res.fun, resid_rms # chi2 = cost(A_fit) = weighted sum of squared residuals
 
 
 # One grid cell of a bias map: generate the hyperillumination truth, fit the naive model, return the recovered-A_B bias.
-def bias_cell(cfg, free_offset=True, **kw):
+# NaN if the fit railed against a bound, i.e. the naive model cannot reproduce the truth at ANY albedo.
+def bias_cell(cfg, free_offset=True, rail_tol=1e-3, temp_bias=False, **kw):
+    """Recovered-A_B bias for one map cell. NaN if the fit railed against a bound,
+    i.e. the naive model cannot reproduce the truth at ANY albedo."""
     _, truth = model_lc(cfg, "hyperillum", cfg.A_B_true, **kw)
-    A_fit, _ = fit_naive(cfg, truth, free_offset=free_offset, **kw)
-    return A_fit - cfg.A_B_true
+    A_fit, _, _ = fit_naive(cfg, truth, free_offset=free_offset, **kw)
+    lo, hi = cfg.bounds
+    if (A_fit - lo) < rail_tol or (hi - A_fit) < rail_tol:
+        return np.nan
+    A_B_bias = A_fit - cfg.A_B_true
+    if temp_bias: return temperature_bias(cfg, A_B_bias)
+    else: return A_B_bias
+
+# A_B bias converted to a bias in surface temperature ΔT/T = -3/4 * ΔA_B/(1−A_B) (linearized BBtemp_from_insolation())
+def temperature_bias(cfg, A_B_bias):
+    # A_B_bias = A_fit - A_B_true
+    return -3/4*A_B_bias/(1-cfg.A_B_true)

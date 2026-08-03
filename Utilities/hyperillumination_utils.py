@@ -81,7 +81,7 @@ def _tabulate_insolation(planet, u_B, insolation_model, n_tab=3000):
         gp1 = planet.terminator_penumbra()
         gp2 = planet.terminator_nightside()
         gp_fi = np.linspace(0., gp1, n_tab)
-        F_fi = insolation_fullyilluminated_hyperillum(gp_fi, planet, u_B=u_B)
+        F_fi = insolation_fullyilluminated_hyperillum(gp_fi, planet)
         gp_pen = np.linspace(gp1, gp2, n_tab)
         F_pen = insolation_penumbra_hyperillum(gp_pen, planet, u_B=u_B)
         gp_grid = np.concatenate([gp_fi, gp_pen, [np.pi]])
@@ -107,6 +107,7 @@ def insolation(gamma1, planet, insolation_model, u_B=0.):
     else: raise ValueError("insolation_model must be either 'hyperillum' or 'naive'")
 
 # Insolation Model without Hyperillumination
+# point source at the planet centre with a hard terminator at 90°. Equivalent to SPIDERMAN Louden model
 def naive_insolation(gamma1, planet):
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
@@ -127,14 +128,15 @@ def insolation_hyperillum(gamma1, planet, u_B=0.):
     pen_mask = (gamma1 >= gp1) & (gamma1 < gp2)
 
     Fp_incident = np.zeros_like(gamma1)
-    Fp_incident[fi_mask] = insolation_fullyilluminated_hyperillum(gamma1[fi_mask], planet, u_B=u_B)
+    Fp_incident[fi_mask] = insolation_fullyilluminated_hyperillum(gamma1[fi_mask], planet)
     Fp_incident[pen_mask] = insolation_penumbra_hyperillum(gamma1[pen_mask], planet, u_B=u_B)
 
     return Fp_incident # incident flux on planet (W/m^2)
 
 
 # Fully illuminated zone: Kopal implementation (eq. 33-35)
-def insolation_fullyilluminated_hyperillum(gamma1, planet, u_B=0.):
+# fully illuminated zone is independent of limb darkening (integral term vanishes through symmetry)
+def insolation_fullyilluminated_hyperillum(gamma1, planet):
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     mu = np.cos(gamma1)
