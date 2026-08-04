@@ -1,4 +1,5 @@
 from dataclasses import dataclass, replace
+from collections.abc import Callable
 import numpy as np
 import contextlib, io
 with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
@@ -65,6 +66,7 @@ class BiasConfig:
     T_eff: float            # default stellar effective temperature [K]
     rp: float               # default Rp/Rs
     A_B_true: float         # true Bond albedo used to generate the hyperillumination truth
+    A_: Callable            # band integrated albedo as function of bond albedo
     sigma_1min: float = 323.  # detection error [ppm per minute of integration]
     n_orbits: int = 3  # number of orbits observed and phase-folded
     n_bins: int = 27  # bins per period; the width is DERIVED so it tiles exactly
@@ -96,12 +98,13 @@ def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_=None, n_t=Non
 
 
 # Fast, stripped-down phase curve [ppm] for the fitting loop
-def model_lc(cfg, insolation_model, A_B_, A=None, a_rs=None, T_s=None, rp_=None, n_t=None, n_layers=40, n_lo=300, n_la=150, refl_unit=None):
+def model_lc(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=None, n_layers=40, n_lo=300, n_la=150, refl_unit=None):
     a_rs = cfg.a if a_rs is None else a_rs
     T_s = cfg.T_eff if T_s is None else T_s
     rp_ = cfg.rp if rp_ is None else rp_
     n_t = 50 * cfg.n_bins if n_t is None else n_t
-    A = A_B_ if A is None else A
+
+    A = cfg.A_(A_B_)
 
     t_ = np.linspace(0., cfg.period, int(n_t), endpoint=False)
     planet = replace(cfg.planet, R=a_rs, T2_eff=T_s, r1=rp_)
@@ -123,7 +126,7 @@ def model_lc(cfg, insolation_model, A_B_, A=None, a_rs=None, T_s=None, rp_=None,
     if not cfg.reflected:
         return t_, thermal
 
-    # Reflected Part (linear in A=A_B)
+    # Reflected Part (linear in A)
     if refl_unit is None:
         refl_unit = reflected_unit(cfg, insolation_model, a_rs=a_rs, T_s=T_s, rp_=rp_, n_t=n_t)
     return t_, thermal + A * refl_unit
@@ -138,12 +141,12 @@ def fit_naive(cfg, truth, free_offset=True, bounds=None, xatol=1e-4, **kw):
 
     yb_truth = binned(cfg, truth)
 
-    def resid(A_):
-        r = yb_truth - binned(cfg, model_lc(cfg, "naive", A_, refl_unit=refl_unit, **kw)[1])
+    def resid(A_B_):
+        r = yb_truth - binned(cfg, model_lc(cfg, "naive", A_B_, refl_unit=refl_unit, **kw)[1])
         return r - r.mean() if free_offset else r
 
-    def cost(A_):
-        return np.sum((resid(A_) / sigma_bin) ** 2)
+    def cost(A_B_):
+        return np.sum((resid(A_B_) / sigma_bin) ** 2)
 
     res = minimize_scalar(cost, bounds=bounds, method="bounded", options={"xatol": xatol})
     r = resid(res.x)
@@ -157,11 +160,11 @@ def bias_cell(cfg, free_offset=True, rail_tol=1e-3, temp_bias=False, **kw):
     """Recovered-A_B bias for one map cell. NaN if the fit railed against a bound,
     i.e. the naive model cannot reproduce the truth at ANY albedo."""
     _, truth = model_lc(cfg, "hyperillum", cfg.A_B_true, **kw)
-    A_fit, _, _ = fit_naive(cfg, truth, free_offset=free_offset, **kw)
+    A_B_fit, _, _ = fit_naive(cfg, truth, free_offset=free_offset, **kw)
     lo, hi = cfg.bounds
-    if (A_fit - lo) < rail_tol or (hi - A_fit) < rail_tol:
+    if (A_B_fit - lo) < rail_tol or (hi - A_B_fit) < rail_tol:
         return np.nan
-    A_B_bias = A_fit - cfg.A_B_true
+    A_B_bias = A_B_fit - cfg.A_B_true
     if temp_bias: return temperature_bias(cfg, A_B_bias)
     else: return A_B_bias
 
