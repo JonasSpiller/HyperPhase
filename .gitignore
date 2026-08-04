@@ -62,9 +62,7 @@ ENV/
 /Filters/raw SVO/
 /Hyperillumination/2026-07-26-Spiderman-Performance-Analysis.ipynb
 /SPIDERMAN_fixes/local_spiderman_speed_patches.md
-/Trash/
+/Unused/
 /Hyperillumination/Bias Analysis/
-/Import NASA ExoplanetArchive/Column-reference.md
-/Import NASA ExoplanetArchive/last_update_time.txt
-/Import NASA ExoplanetArchive/default_params1.csv
-/Import NASA ExoplanetArchive/default_params0.csv
+/NASAExoplanetArchive/NASAExoArchive_*_aggregate.csv
+/NASAExoplanetArchive/pscomppars_*

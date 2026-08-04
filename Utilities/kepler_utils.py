@@ -1,5 +1,10 @@
 import numpy as np
 from scipy.optimize import newton
+from astropy import constants as const
+
+H_PLANCK = const.h.value
+C_LIGHT = const.c.value
+K_BOLTZ = const.k_B.value
 
 def true_to_eccentric(f, ecc):
     """Returns the eccentric anomaly (radians) for a given true anomaly f (radians) and eccentricity."""
@@ -56,4 +61,44 @@ def true_anomaly(t, period, ecc, w, t0=0.):
     M = (M_transit + 2. * np.pi * (t - t0) / period) % (2. * np.pi)
     E = mean_to_eccentric(M, ecc)
     return eccentric_to_true(E, ecc) % (2. * np.pi)
+
+
+
+def transit_duration_t14(period_days, a_over_r2, r1_over_r2, inclination_deg):
+    """
+    First to fourth transit contact T14 in hours (Winn 2010, eq. 14).
+    NaN where the impact parameter exceeds 1 + r1/r2, i.e. the geometry does not actually transit.
+    Assumes circular orbit
+    """
+    inc = np.radians(inclination_deg)
+    b = a_over_r2 * np.cos(inc)
+    arg = (1.0 + r1_over_r2) ** 2 - b ** 2
+    root = np.sqrt(arg.where(arg > 0))
+    sin_arg = (root / (a_over_r2 * np.sin(inc))).where(lambda s: s.abs() <= 1.0)
+    return period_days / np.pi * np.arcsin(sin_arg) * 24.0
+
+
+def roche_radius_over_r1(q, a_over_r2, r1_over_r2):
+    """Eggleton (1983) Roche-lobe radius around planet, in units of the planet radius."""
+    q13, q23 = q ** (1.0 / 3.0), q ** (2.0 / 3.0)
+    return 0.49 * q23 / (0.6 * q23 + np.log1p(q13)) * a_over_r2 / r1_over_r2
+
+
+
+def planck_ratio(rprs2, Ts, Tp, wavelength_m):
+    """
+    Occultation depth in ppm for a blackbody planet: F_p/F_s = (r1/r2)² · B_λ(T_p)/B_λ(T_s)
+    B_λ(T) = 2hc²/λ⁵ · 1/(exp(hc/λkT) − 1)
+    rprs2 = (r1/r2)^2
+    """
+    x_s = H_PLANCK * C_LIGHT / (wavelength_m * K_BOLTZ * Ts)
+    x_p = H_PLANCK * C_LIGHT / (wavelength_m * K_BOLTZ * Tp)
+    return rprs2 * 1e6 * (np.exp(x_s) - 1.0) / (np.exp(x_p) - 1.0)
+
+
+def planck_ratio_logderiv(Tp, wavelength_m):
+    """d ln(occ_depth) / d ln(Tp), for propagating a temperature uncertainty into an occultation depth."""
+    x_p = H_PLANCK * C_LIGHT / (wavelength_m * K_BOLTZ * Tp)
+    return x_p * np.exp(x_p) / (np.exp(x_p) - 1.0)
+
 
