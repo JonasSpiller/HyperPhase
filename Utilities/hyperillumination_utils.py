@@ -50,6 +50,11 @@ class PlanetParams:
             return {"fully illuminated": fraction_fullyilluminated, "penumbra": fraction_penumbra}
         return fraction_fullyilluminated + fraction_penumbra
 
+    # Fractional change in substellar insolation/temperature through hyperillumination (compared to naive point-source approximation)
+    def substellar_boost(self, insolation=True):
+        if insolation: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self)) - 1
+        else: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self))**0.25 - 1
+
 
 ###########################################################################################################################
 #####

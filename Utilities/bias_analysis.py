@@ -6,6 +6,8 @@ with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanr
     import fspiderman as sp
 from scipy.optimize import minimize_scalar
 from hyperillumination_phasecurve_utils import (custom_temperature_grid, reflected_PhaseCurve, fast_lightcurve)
+import pandas as pd
+import matplotlib.pyplot as plt
 
 ###########################################################################################################################
 #####
@@ -170,3 +172,28 @@ def bias_cell(cfg, free_offset=True, rail_tol=1e-3, temp_bias=False, **kw):
 def temperature_bias(cfg, A_B_bias):
     # A_B_bias = A_fit - A_B_true
     return -3/4*A_B_bias/(1-cfg.A_B_true)
+
+
+def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10):
+    """Overplot archive planets that fall inside the current bias map (x = a/Rs = `a_over_r2`, y = `ykey`).
+    The `n_highlight` planets with the smallest a/Rs get individual colours + legend labels; the rest are faint background dots.
+    """
+
+    _exo = pd.read_csv(AGG)
+    # physical planets only: finite a/Rs, T_eff, Rp/Rs and Rp/Rs < 1 (a real planet is smaller than its star;
+    # this drops white-dwarf companions / unphysical entries like ZTF J1828+2308 b). K2-141b is drawn separately.
+    _phys = _exo[np.isfinite(_exo.a_over_r2) & np.isfinite(_exo.st_teff) & np.isfinite(_exo.pl_ratror)
+                 & (_exo.pl_ratror > 0) & (_exo.pl_ratror < 1)
+                 & (_exo.pl_name != "K2-141 b")].drop_duplicates("pl_name").copy()
+
+    x = "a_over_r2"
+    m = _phys[(_phys[x] >= a_rs_lim[0]) & (_phys[x] <= a_rs_lim[1])
+              & (_phys[ykey] >= ylim[0]) & (_phys[ykey] <= ylim[1])]
+    top = m.nsmallest(n_highlight, x)
+    bg = m.drop(top.index)
+    ax.scatter(bg[x], bg[ykey], s=16, facecolor="#40c4d6", edgecolor="w", linewidths=.3,
+               alpha=.6, zorder=3, label=f"other known planets (N={len(bg)})")
+    for color, (_, r) in zip(plt.cm.tab10(np.arange(n_highlight)), top.iterrows()):
+        ax.scatter(r[x], r[ykey], s=60, color=color, edgecolor="w", linewidths=.7, zorder=5,
+                   label=f"{r.pl_name}  ($a/R_\\star$={r[x]:.2f})")
+    return m

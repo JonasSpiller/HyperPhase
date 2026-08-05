@@ -77,7 +77,10 @@ SHORT_COLUMNS = [
     "pl_rprs2",                 # (r1/r2)^2, geometric occultation depth [fraction]
     "pl_ratdor",                # a/r2 at MID-TRANSIT, as the archive defines it
     "a_over_r2",                # true semi-major axis / r2; differs from pl_ratdor when e > 0
+    "pl_orbsmax",               # semi-major axis [AU]
     "pl_orbeccen",              # eccentricity, often fixed at 0 rather than measured
+    "pl_orbincl",                # inclination , often fixed at 0 rather than measured
+    "pl_orblper",               # argument of periastron
     "e_fitted",                 # True only if the eccentricity was actually fit
     "st_teff",                  # stellar effective temperature [K]
     "st_rad",                   # stellar radius [R_sun]
