@@ -96,7 +96,8 @@ setuptools 82**:
 REPO=/path/to/this/repo
 git clone https://github.com/tomlouden/SPIDERMAN.git
 cd SPIDERMAN
-git apply "$REPO/SPIDERMAN_fixes/spiderman-version.patch"
+git apply "$REPO/SPIDERMAN_fixes/spiderman-version.patch" # 1. modern-stack compatibility
+git apply "$REPO/SPIDERMAN_fixes/spiderman-memoryleak.patch"  # optional: fix a small per-call memory leak in web_lightcurve (c_src/_web.c)
 pip uninstall -y spiderman-package          # remove any broken PyPI install (ok if absent)
 pip install . --no-build-isolation
 python -c "import spiderman; print('OK', spiderman.__file__)"
@@ -122,7 +123,8 @@ except a ≤ 0.04 ppm float-rounding difference on the bicubic path at sharp ter
 REPO=/path/to/this/repo
 git clone https://github.com/tomlouden/SPIDERMAN.git
 cd SPIDERMAN
-git apply "$REPO/SPIDERMAN_fixes/spiderman-speed.patch"
+git apply "$REPO/SPIDERMAN_fixes/spiderman-speed.patch" # 2. ~4-5x speedup
+git apply "$REPO/SPIDERMAN_fixes/spiderman-memoryleak.patch"  # optional: fix a small per-call memory leak in web_lightcurve (c_src/_web.c)
 pip uninstall -y spiderman-package
 pip install . --no-build-isolation
 python -c "import spiderman; print('OK', spiderman.__file__)"
@@ -139,8 +141,10 @@ the tree builds on a modern stack, then the speed patch. The result is a modern-
 REPO=/path/to/this/repo
 git clone https://github.com/tomlouden/SPIDERMAN.git
 cd SPIDERMAN
-git apply "$REPO/SPIDERMAN_fixes/spiderman-version.patch"   # 1. modern-stack compatibility
-git apply "$REPO/SPIDERMAN_fixes/spiderman-speed.patch"     # 2. ~4-5x speedup
+git apply "$REPO/SPIDERMAN_fixes/spiderman-version.patch"     # 1. modern-stack compatibility
+git apply "$REPO/SPIDERMAN_fixes/spiderman-speed.patch"       # 2. ~4-5x speedup
+git apply "$REPO/SPIDERMAN_fixes/spiderman-memoryleak.patch"  # optional: fix a small per-call memory leak in web_lightcurve (c_src/_web.c)
+
 pip uninstall -y spiderman-package
 pip install . --no-build-isolation
 python -c "import spiderman; print('OK', spiderman.__file__)"
