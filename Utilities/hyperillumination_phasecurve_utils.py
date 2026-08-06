@@ -18,11 +18,11 @@ sigma = 5.670374e-8  # W m^-2 K^-4
 #####
 ###########################################################################################################################
 
-def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0., A=0.1, n_eta=150, n_phi=80, n_tab=1000, n_lo=200, n_la=100, insolation_model="hyperillum", stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=60, include_transit=True):
+def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0., A=0.1, n_eta=150, n_phi=80, n_tab=1000, n_lo=200, n_la=100, insolation_model="hyperillum", stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=60, include_transit=True, include_occultation=True):
     # Reflected Part including transit
-    t_comb, refl, fp_refl = reflected_PhaseCurve(planet, t=t, t0=t0, u=u, u_B=u_B, include_transit=include_transit, A=A, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
+    t_comb, refl, fp_refl = reflected_PhaseCurve(planet, t=t, t0=t0, u=u, u_B=u_B, include_transit=include_transit, include_occultation=include_occultation, A=A, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
     # Thermal part, without stellar flux (no transit)
-    _,  therm, fp_therm, _ = thermal_PhaseCurve(planet, lambda_range, t=t_comb, t0=t0, u=u, u_B=u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, stellar_model=stellar_model, filter_path=filter_path, A_B = A_B, emissivity=emissivity, include_transit=False, N_LAYERS=N_LAYERS)
+    _,  therm, fp_therm, _ = thermal_PhaseCurve(planet, lambda_range, t=t_comb, t0=t0, u=u, u_B=u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, stellar_model=stellar_model, filter_path=filter_path, A_B = A_B, emissivity=emissivity, include_transit=False, include_occultation=include_occultation, N_LAYERS=N_LAYERS)
 
     total = refl + therm
     fp = fp_refl + fp_therm
@@ -162,28 +162,35 @@ def orbital_reflected_lightcurve(t, planet, t0=0., n_eps=300, A=0.1, u_B=0., n_e
 # Band-integrated albedo A however depends on both detector throughput (wavelength range) and stellar spectrum.
 # To assume independence on the stellar spectrum we have to neglect stellar limb darkening + reddening - this would have an effect on the penumbral reflection (this is justified since limb darkening weak in IR)
 # This assumes Lambertian (isotropic, grey) reflectance, circular planet
-def reflected_PhaseCurve(planet, t=None, t0=0., u=[0.1, 0.3], u_B=0., include_transit=True, A=0.1, n_eta=150, n_phi=80, n_tab=1000, insolation_model="hyperillum"):
+def reflected_PhaseCurve(planet, t=None, t0=0., u=[0.1, 0.3], u_B=0., include_transit=True, include_occultation=True, A=0.1, n_eta=150, n_phi=80, n_tab=1000, insolation_model="hyperillum"):
     #  r1, r2, R: planetary radius, stellar radius, semi major axis in consistent units
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     if t is None: t = np.linspace(0., period, 1000)
-
     t_corr = batman_utils.light_travel_time_correction(t, planet, t0=t0)
 
     orbital_ref_lightcurve = orbital_reflected_lightcurve(t, planet, t0=t0, A=A, u_B=u_B, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
+
     eps_occultation = np.arccos(np.sin(np.radians(incl)))  # epsilon at full phase
     fp = reflected_lightcurve(eps_occultation, planet, A=A, u_B=u_B, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
-    if fp == 0.: return t_corr, batman_utils.flux_transit(planet, t, t0=t0, u=u), fp*1e6  # no reflection (e.g. when albedo=0) -> no phase curve, only transit
+    if fp == 0.: return t_corr, include_transit*batman_utils.flux_transit(planet, t, t0=t0, u=u), fp*1e6  # no reflection (e.g. when albedo=0) -> no phase curve, only transit
 
     # Full Phase Curve Model. This model ignores the exact eclipse geometry during ingress and egress, instead it assumes the integrated flux to be uniformly distributed over the disk
-    phase_mod = orbital_ref_lightcurve / fp
-    occultation = batman_utils.flux_occultation(planet, fp, t, t0=t0)
+    if include_occultation:
+        phase_mod = orbital_ref_lightcurve / fp
+        occultation = batman_utils.flux_occultation(planet, fp, t, t0=t0)
 
-    if include_transit:
-        transit = batman_utils.flux_transit(planet, t, t0=t0, u=u)
-        phase_curve = transit + (occultation - 1) * phase_mod
+        if include_transit:
+            transit = batman_utils.flux_transit(planet, t, t0=t0, u=u)
+            phase_curve = transit + (occultation - 1) * phase_mod
+        else:
+            phase_curve = (occultation - 1) * phase_mod
     else:
-        phase_curve = (occultation - 1) * phase_mod
+        if include_transit:
+            transit = batman_utils.flux_transit(planet, t, t0=t0, u=u)
+            phase_curve = transit + orbital_ref_lightcurve
+        else:
+            phase_curve = orbital_ref_lightcurve
 
     return t_corr, phase_curve, fp*1e6
 
