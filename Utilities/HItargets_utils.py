@@ -145,6 +145,8 @@ FILTER_LAMBDA_UM = {
     "MIRI/F1800W":   [15.5725, 20.8505],
     "MIRI/LRS":      [4.8900, 10.6100],   # 5.0-12.0 um and 5.0-14.0 um versions also exist in FILTER_DIR
     "Spitzer/IRAC2": [3.6955, 5.1008],
+    "JWST_NIRSpec.G395H_NRS1": [32.8530, 3.7363], # two arrays of NIRSpec/G395H
+    "JWST_NIRSpec.G395H_NRS2": [3.7959, 5.2040] # two arrays of NIRSpec/G395H
 }
 
 # SPIDERMAN throughput files
@@ -154,7 +156,10 @@ FILTER_FILES = {
     "MIRI/F1800W":   "JWST_MIRI.F1800W.spiderman.dat",
     "MIRI/LRS":      "MIRI_LRS.5.0-10.5um.spiderman.dat",
     "Spitzer/IRAC2": "Spitzer_IRAC.I2.spiderman.dat",
+    "JWST_NIRSpec.G395H_NRS1": "JWST_NIRSpec.G395H_NRS1.spiderman.dat",
+    "JWST_NIRSpec.G395H_NRS2": "JWST_NIRSpec.G395H_NRS2.spiderman.dat"
 }
+
 
 # Converted once at import
 EFFECTIVE_LAMBDA_M = {name: 1e-6 * np.array(r) for name, r in EFFECTIVE_LAMBDA_UM.items()}
