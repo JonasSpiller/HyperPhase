@@ -5,11 +5,12 @@ import contextlib, io
 with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
     import fspiderman as sp
 from hyperillumination_utils import *
-import kepler_utils
+import astro_utils
 import batman_utils
 import contextlib, io
+from astropy import constants as const
 
-sigma = 5.670374e-8  # W m^-2 K^-4
+sigma = const.sigma_sb.value
 
 
 ###########################################################################################################################
@@ -38,14 +39,14 @@ def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0., A
 
 
 # Reflected light curve signal accounting for hyperillumination
-# This assumes Lambertian (isotropic, grey) reflectance, circular planet
+# This assumes Lambertian (isotropic, grey) reflection, circular planet
 # Inspired by Kopal eq. 4
 def reflected_lightcurve(epsilon, planet, u_B=0., unit="normalized", lambda_band_ratio=1., A=0.1, n_eta=150, n_phi=80, n_tab=1000, runtime=False, insolation_model="hyperillum"):
     """
     epsilon: angle substellar spot to line of sight [rad]
     unit: Whether to return normalized light curve signal (Fp/Fs) or radiant intensity ([W/sr])
     lambda_band_ratio: Only relevant for unit=='radiant intensity'. If measurements are taken in a wavelength band (not bolometric), this is the ratio Fs_band/Fs. Needed to correctly scale the absolute radial intensity in that band.
-    A: Lambertian bolometric or band/throughput-integrated albedo (NOT geometric albedo). For bolometric measurements, this function is also suitable to calculate reflected + THERMAL light curve signal - for this set A=1.
+    A: Spherical bolometric or band/throughput-integrated albedo (NOT geometric albedo). For bolometric measurements, this function is also suitable to calculate reflected + THERMAL light curve signal - for this set A=1.
     n_eta, n_phi: Gauss-Legendre order for the inner (eta) / outer (phi) integral
     n_tab: resolution of the gamma1-grid used to tabulate F_fi/F_pen
     """
@@ -144,7 +145,7 @@ def lambertian_reflectance(epsilon, planet, unit="normalized", lambda_band_ratio
 def orbital_reflected_lightcurve(t, planet, t0=0., n_eps=300, A=0.1, u_B=0., n_eta=150, n_phi=80, n_tab=1000, insolation_model="hyperillum"):
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
-    f = kepler_utils.true_anomaly(t, period, ecc, w, t0=t0)
+    f = astro_utils.true_anomaly(t, period, ecc, w, t0=t0)
     epsilon = np.arccos(-np.sin(np.radians(incl)) * np.sin(np.radians(w) + f))
 
     # THE CURRENT CODE NEGLECTS CHANGES IN R THROUGHOUT THE ORBIT! All functions are designed for scalar R, which is why the formula below currently fails. Needs adjustment for ecc>0.
@@ -207,7 +208,7 @@ def occultation_depth(spider_params, stellar_grid=None):
     if stellar_grid is None:
         with contextlib.redirect_stdout(io.StringIO()): # mute notification: "no stellar models provided, using blackbody approximation"
             stellar_grid = sp.stellar_grid.gen_grid(spider_params.l1, spider_params.l2, logg=4.5, response=spider_params.filter, stellar_model=spider_params.stellar_model)
-    t_occ = kepler_utils.occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
+    t_occ = astro_utils.occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
     spider_params.eclipse = False; f_unblocked_occ = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
     spider_params.eclipse = True;  f_blocked_occ = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
     spider_params.eclipse = set_ecl
@@ -363,7 +364,7 @@ def _trig_interp(y_nodes, per, t, t0=0.):
 
 def occultation_window(spider_params, pad=0.03):
     # (t_ingress, t_egress) of the occultation, padded by `pad` durations on each side.
-    t_occultation = kepler_utils.occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
+    t_occultation = astro_utils.occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
     b = spider_params.a * np.cos(np.radians(spider_params.inc))
     dur = spider_params.per / np.pi * np.arcsin(np.sqrt(max((1 + spider_params.rp) ** 2 - b ** 2, 0.)) / spider_params.a)
     return t_occultation - (0.5 + pad) * dur, t_occultation + (0.5 + pad) * dur

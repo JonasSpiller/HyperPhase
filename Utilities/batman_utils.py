@@ -1,6 +1,12 @@
 import batman
 import numpy as np
-from kepler_utils import *
+from astro_utils import *
+from astropy import constants as const
+
+c = const.c.value # m/s
+seconds_per_day = 86400.
+au = const.au.value
+
 
 def light_travel_time_correction(t, planet, t0=0.):
     """
@@ -8,10 +14,7 @@ def light_travel_time_correction(t, planet, t0=0.):
     """
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
-    c = 2.998e8             # m/s
-    seconds_per_day = 86400.
-
-    a_phys = a_AU * 1.495978707e11  #physical semi-major axis in m
+    a_phys = a_AU * au  #physical semi-major axis in m
     f = true_anomaly(t, period, ecc, w, t0=t0)
     r = a_phys * (1. - ecc**2) / (1. + ecc * np.cos(f))  #orbital radius in m
     z = - r * np.sin(f + np.radians(w)) * np.sin(np.radians(incl))  #line-of-sight displacement in m

@@ -1,10 +1,21 @@
 import numpy as np
 from scipy.optimize import newton
+from scipy.integrate import quad
 from astropy import constants as const
 
+au = const.au.value
+R_sun = const.R_sun.value
 H_PLANCK = const.h.value
 C_LIGHT = const.c.value
 K_BOLTZ = const.k_B.value
+b = 2.897771955e-3 # Wien
+STEFAN_BOLTZMANN = (2.0 * np.pi**5 * K_BOLTZ**4) / (15.0 * H_PLANCK**3 * C_LIGHT**2) # Stefan-Boltzmann constant
+
+
+# --------------------------------------------------------------------------
+# Kepler
+# --------------------------------------------------------------------------
+
 
 def true_to_eccentric(f, ecc):
     """Returns the eccentric anomaly (radians) for a given true anomaly f (radians) and eccentricity."""
@@ -46,7 +57,7 @@ def occultation_time(period, ecc, w, t0=0.):
 def AU_to_RS(a, rs):
     """Returns the distance in solar radii for a given distance a in AU.
     a in AU, rs (stellar radius) in solar radii."""
-    return a * 1.495978707e11 / 6.957e8 / rs
+    return a * (au / R_sun) / rs
 
 
 def true_anomaly(t, period, ecc, w, t0=0.):
@@ -84,6 +95,10 @@ def roche_radius_over_r1(q, a_over_r2, r1_over_r2):
     return 0.49 * q23 / (0.6 * q23 + np.log1p(q13)) * a_over_r2 / r1_over_r2
 
 
+# --------------------------------------------------------------------------
+# Planck
+# --------------------------------------------------------------------------
+
 
 def planck_ratio(rprs2, Ts, Tp, wavelength_m):
     """
@@ -102,3 +117,31 @@ def planck_ratio_logderiv(Tp, wavelength_m):
     return x_p * np.exp(x_p) / (np.exp(x_p) - 1.0)
 
 
+# Wien's displacement law
+def wien_lambda_max(T):
+    return b / T # max. wavelength [in m]
+
+# Spectral radiance [W m^-2 sr^-1 m^-1] of a blackbody at temperature T, per unit wavelength [m] (Planck function): B_lambda(T) = (2 h c^2 / lambda^5) / (exp(h c / (lambda k_B T)) - 1)
+def planck_spectrum(wavelengths, T):
+    wavelengths = np.asarray(wavelengths, dtype=float)
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        exponent = H_PLANCK * C_LIGHT / (wavelengths * K_BOLTZ * T)
+        prefactor = 2.0 * H_PLANCK * C_LIGHT ** 2 / wavelengths ** 5
+        B = prefactor / np.expm1(exponent)
+    B = np.where((wavelengths <= 0) | (exponent > 700), 0.0, B)
+    return B if B.ndim > 0 else float(B)
+
+# Scalar, overflow-safe version of the planck_spectrum for use with quad.
+def _planck_integrand(wl, T):
+    if wl<=0: return 0.
+    exponent = H_PLANCK * C_LIGHT / (wl * K_BOLTZ * T)
+    if exponent > 700: return 0.0 # avoid overflow
+    prefactor = 2.0 * H_PLANCK * C_LIGHT**2 / wl**5
+    return prefactor / np.expm1(exponent)
+
+# Percentage of a blackbody's total emitted flux that lies at wavelengths shorter than `lambda_cutoff`, at temperature T.
+# lambda_cutoff in m
+def planck_fraction_below(T, lambda_cutoff):
+    numerator, _ = quad(lambda wl: planck_spectrum(wl, T), 0.0, lambda_cutoff)
+    denominator = STEFAN_BOLTZMANN * T ** 4 / np.pi
+    return 100.0 * numerator / denominator

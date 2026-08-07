@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from astropy import constants as const
-from kepler_utils import *
+from astro_utils import *
 
 
 # ==========================================================================
@@ -123,7 +123,7 @@ SHORT_ROUNDING = {
 
 
 # --------------------------------------------------------------------------
-# Helpers  (-> Utilities/phasecurve_utils.py, kepler_utils.py)
+# Helpers  (-> Utilities/phasecurve_utils.py, astro_utils.py)
 # --------------------------------------------------------------------------
 
 def symmetric_sigma(df, base):
