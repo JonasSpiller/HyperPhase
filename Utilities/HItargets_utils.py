@@ -4,10 +4,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from astropy import constants as const
-from astro_utils import *
 
 from hyperillumination_utils import PlanetParams
-
 
 ###########################################################################################################################
 #####
@@ -125,6 +123,24 @@ def best_hi_planets_df(n_planets):
 #####   Wavelength Filters
 #####
 ###########################################################################################################################
+
+# return throughput
+@lru_cache(maxsize=None)
+def _read_filter_file(filter_path):
+    # Cached disk read
+    d = np.loadtxt(filter_path)
+    o = np.argsort(d[:, 0])
+    return d[o, 0], d[o, 1]
+
+def load_filter(lambda_range, filter_path=None, n=300):
+    l1, l2 = float(lambda_range[0]), float(lambda_range[1])
+    if filter_path is None:
+        lam = np.linspace(l1, l2, n)
+        return lam, np.ones_like(lam)
+    lam, w = _read_filter_file(str(filter_path))
+    mask = (lam > l1) & (lam < l2)
+    return lam[mask], w[mask]
+
 
 FILTER_DIR = Path(__file__).resolve().parent.parent / "Filters" / "Spiderman"
 

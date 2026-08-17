@@ -60,15 +60,13 @@ class PlanetParams:
         else: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self))**0.25 - 1
 
     # Approximate (naive) occultation depth [ppm] for blackbody planet and star: delta_occ = (r1/r2)^2 * <B_l(T1_day)> / <B_l(T2_eff)>  +  A_g * (r1/R)^2
+    # (<.> is the bandpass average weighted by stellar photon flux (B_l * l).)
     def approx_occ_depth(planet, eff_wavelength_range, A_B=0.0, f=2/3, emissivity=1.0, A_g=0.0, n_wl=400):
-        """
-        <.> is the bandpass average weighted by stellar photon flux (B_l * l).
-        f is Cowan & Agol (2011) redistribution parameter: 1/4 full redistribution, 1/2 uniform dayside, 2/3 no redistribution (disk-integrated), 1 substellar.
-        T1_day is the point-source value ignoring hyper-illumination.
-        eff_wavelength_range=[wl_min, wl_max] in meter.
-        """
-        wl_min, wl_max = eff_wavelength_range
+        # f is Cowan & Agol (2011) redistribution parameter: 1/4 full redistribution, 1/2 uniform dayside, 2/3 no redistribution (disk-integrated), 1 substellar.
 
+        wl_min, wl_max = eff_wavelength_range # [m]
+
+        # Point-source value ignoring hyper-illumination.
         T1_day = planet.T2_eff * np.sqrt(planet.r2 / planet.R) * (f * (1.0 - A_B) / emissivity) ** 0.25
 
         wl = np.linspace(wl_min, wl_max, n_wl)

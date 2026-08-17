@@ -155,10 +155,10 @@ def bias_cell(cfg, free_offset=True, rail_tol=1e-3, temp_bias=False, **kw):
     if temp_bias: return temperature_bias(cfg, A_B_bias)
     else: return A_B_bias
 
-# A_B bias converted to a bias in surface temperature ΔT/T = -3/4 * ΔA_B/(1−A_B) (linearized BBtemp_from_insolation())
+# A_B bias converted to a bias in local surface temperature
 def temperature_bias(cfg, A_B_bias):
-    # A_B_bias = A_fit - A_B_true
-    return -3/4*A_B_bias/(1-cfg.A_B_true)
+    A_fit = cfg.A_B_true + A_B_bias
+    return ((1 - A_fit) / (1 - cfg.A_B_true))**0.25 - 1
 
 
 def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10):

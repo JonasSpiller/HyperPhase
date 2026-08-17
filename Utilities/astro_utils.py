@@ -2,6 +2,8 @@ import numpy as np
 from scipy.optimize import newton
 from scipy.integrate import quad
 from astropy import constants as const
+from HItargets_utils import load_filter
+from scipy.optimize import brentq
 
 au = const.au.value
 R_sun = const.R_sun.value
@@ -95,6 +97,14 @@ def roche_radius_over_r1(q, a_over_r2, r1_over_r2):
     return 0.49 * q23 / (0.6 * q23 + np.log1p(q13)) * a_over_r2 / r1_over_r2
 
 
+# calculate Brightness Temperature (use occultation depth for dayside brightness temperature)
+def T_bright(thermal_depth, planet, lambda_range, filter_path=None, **kw):
+    # thermal_depth in ppm
+    rp = planet.r1 / planet.r2
+    tgt = 1e-6*thermal_depth * band_avg_planck(planet.T2_eff, lambda_range, filter_path, **kw) / rp**2
+    return brentq(lambda T: band_avg_planck(T, lambda_range, filter_path, **kw) - tgt, 10., 9000.)
+
+
 # --------------------------------------------------------------------------
 # Planck
 # --------------------------------------------------------------------------
@@ -131,17 +141,23 @@ def planck_spectrum(wavelengths, T):
     B = np.where((wavelengths <= 0) | (exponent > 700), 0.0, B)
     return B if B.ndim > 0 else float(B)
 
-# Scalar, overflow-safe version of the planck_spectrum for use with quad.
-def _planck_integrand(wl, T):
-    if wl<=0: return 0.
-    exponent = H_PLANCK * C_LIGHT / (wl * K_BOLTZ * T)
-    if exponent > 700: return 0.0 # avoid overflow
-    prefactor = 2.0 * H_PLANCK * C_LIGHT**2 / wl**5
-    return prefactor / np.expm1(exponent)
-
 # Percentage of a blackbody's total emitted flux that lies at wavelengths shorter than `lambda_cutoff`, at temperature T.
 # lambda_cutoff in m
 def planck_fraction_below(T, lambda_cutoff):
     numerator, _ = quad(lambda wl: planck_spectrum(wl, T), 0.0, lambda_cutoff)
     denominator = STEFAN_BOLTZMANN * T ** 4 / np.pi
     return 100.0 * numerator / denominator
+
+# Throughput-weighted mean spectral radiance [W m^-2 sr^-1 m^-1] of a blackbody at temperature T, averaged across the band.
+def band_avg_planck(T, lambda_range, filter_path=None, n=300):
+    """
+    filter_path=None  -> tophat over lambda_range   (matches SPIDERMAN's no-filter mode)
+    filter_path given -> real throughput on the file's own grid
+    """
+    lam, w = load_filter(lambda_range, filter_path=filter_path, n=n)
+    w =  w * lam / (H_PLANCK * C_LIGHT)  # convert energy integrating to photon integrating
+    # TODO: When thermal_depth is computed by SPIDERMAN, the hc/wvl issue in spiderman biases the results. To fix this, change the .dat filter files by multiplying by lambda^2. Then change the code here accordingly to * H_PLANCK * C_LIGHT / lam
+
+    B = planck_spectrum(lam, T)
+
+    return np.trapezoid(B * w, lam) / np.trapezoid(w, lam)
