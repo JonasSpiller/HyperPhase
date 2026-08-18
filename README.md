@@ -22,7 +22,7 @@ depth of 142 ppm.
   pipeline (`hyperillumination_phasecurve_utils.py`), orbital helpers (`kepler_utils.py`),
   and a fast split-evaluation `fast_lightcurve` (exact occultation + interpolated phase
   modulation, ~5× faster at unchanged accuracy).
-- **Bias analysis** (`bias_analysis.py`, notebooks in `Hyperillumination/`): fit a *naive*
+- **Bias analysis** (`simple_bias_analysis.py`, notebooks in `Hyperillumination/`): fit a *naive*
   point-source model to a hyper-illumination "truth" curve and measure the resulting bias
   in the recovered Bond albedo, mapped over `(a/R★, T_eff)` and `(a/R★, R_p/R★)`.
 - **Speed & accuracy studies** of the SPIDERMAN forward model, and a locally **patched,

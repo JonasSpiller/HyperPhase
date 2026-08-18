@@ -161,16 +161,30 @@ def temperature_bias(cfg, A_B_bias):
     return ((1 - A_fit) / (1 - cfg.A_B_true))**0.25 - 1
 
 
-def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10):
+# Emission Spectroscopy Metric (Kempton et al. 2018) formatted for a legend entry; the archive column is NaN for a few planets.
+def _fmt_esm(esm):
+    return f"{esm:.1f}" if np.isfinite(esm) else "n/a"
+
+# ESM of a single archive planet by name, for targets drawn outside overlay_planets (e.g. the K2-141b reference marker).
+def planet_esm(AGG, pl_name):
+    row = pd.read_csv(AGG).drop_duplicates("pl_name").pipe(lambda d: d[d.pl_name == pl_name])
+    return float(row.ESM.iloc[0]) if len(row) else np.nan
+
+
+def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10, max_rade=1.6):
     """Overplot archive planets that fall inside the current bias map (x = a/Rs = `a_over_r2`, y = `ykey`).
-    The `n_highlight` planets with the smallest a/Rs get individual colours + legend labels; the rest are faint background dots.
+    Restricted to rocky planets, Rp < `max_rade` Earth radii (default 1.6, Rogers 2015: above this most planets are not rocky).
+    The cut must be on the ABSOLUTE radius `pl_rade`, not on Rp/Rs: a giant around an evolved star has a small ratio
+    (e.g. Kepler-91 b, Rp/Rs = 0.022 but 15.3 R_Earth) and would otherwise sneak into the map.
+    The `n_highlight` planets with the smallest a/Rs get individual colours + legend labels (name, a/Rs, ESM); the rest are faint background dots.
     """
 
     _exo = pd.read_csv(AGG)
-    # physical planets only: finite a/Rs, T_eff, Rp/Rs and Rp/Rs < 1 (a real planet is smaller than its star;
-    # this drops white-dwarf companions / unphysical entries like ZTF J1828+2308 b). K2-141b is drawn separately.
+    # physical ROCKY planets only: finite a/Rs, T_eff, Rp/Rs and Rp/Rs < 1, plus a known radius below the rocky threshold.
+    # K2-141b is drawn separately.
     _phys = _exo[np.isfinite(_exo.a_over_r2) & np.isfinite(_exo.st_teff) & np.isfinite(_exo.pl_ratror)
                  & (_exo.pl_ratror > 0) & (_exo.pl_ratror < 1)
+                 & np.isfinite(_exo.pl_rade) & (_exo.pl_rade < max_rade)   # rocky cut (NaN radius -> dropped, cannot be confirmed rocky)
                  & (_exo.pl_name != "K2-141 b")].drop_duplicates("pl_name").copy()
 
     x = "a_over_r2"
@@ -179,8 +193,8 @@ def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10):
     top = m.nsmallest(n_highlight, x)
     bg = m.drop(top.index)
     ax.scatter(bg[x], bg[ykey], s=16, facecolor="#40c4d6", edgecolor="w", linewidths=.3,
-               alpha=.6, zorder=3, label=f"other known planets (N={len(bg)})")
+               alpha=.6, zorder=3, label=f"other known rocky planets ($R_p<{max_rade:g}\\,R_\\oplus$, N={len(bg)})")
     for color, (_, r) in zip(plt.cm.tab10(np.arange(n_highlight)), top.iterrows()):
         ax.scatter(r[x], r[ykey], s=60, color=color, edgecolor="w", linewidths=.7, zorder=5,
-                   label=f"{r.pl_name}  ($a/R_\\star$={r[x]:.2f})")
+                   label=f"{r.pl_name}  ($a/R_\\star$={r[x]:.2f}, ESM={_fmt_esm(r.get('ESM', np.nan))})")
     return m
