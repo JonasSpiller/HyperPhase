@@ -24,6 +24,7 @@ kB = const.k_B.value
 
 @dataclass(frozen=True)
 class PlanetParams:
+    name: str                # Exoplanet Name
     period: float       # orbital period [days]
     incl:   float       # inclination [deg]
     ecc:    float       # eccentricity

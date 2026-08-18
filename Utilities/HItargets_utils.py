@@ -35,7 +35,7 @@ AU_IN_R_SUN = float(const.au / const.R_sun)
 
 # entire planet with custom parameters
 CUSTOM = {
-    "K2-141 b": PlanetParams(period=0.2803244, incl=86.3, ecc=0.0, w=90.0, r1=0.02037, r2=1.0, R=2.292, T2_eff=4599.0, a_AU=0.00747), # Malavolta et al. 2018, Barragán et al. 2018
+    "K2-141 b": PlanetParams(name="K2-141 b", period=0.2803244, incl=86.3, ecc=0.0, w=90.0, r1=0.02037, r2=1.0, R=2.292, T2_eff=4599.0, a_AU=0.00747), # Malavolta et al. 2018, Barragán et al. 2018
 }
 
 
@@ -64,6 +64,7 @@ def _normalise(name):
 def _params_from_row(row):
     """One PlanetParams from an archive row, with r1, r2, R in stellar radii and OVERRIDES applied."""
     fields = dict(
+        name=row["pl_name"],
         period=row["pl_orbper"],                        # days
         incl=row["pl_orbincl"],                         # deg
         ecc=0.0 if pd.isna(row["pl_orbeccen"]) else row["pl_orbeccen"],
