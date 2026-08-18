@@ -168,7 +168,7 @@ def reflected_PhaseCurve(planet, t=None, t0=0., u=[0.1, 0.3], u_B=0., include_tr
     #  r1, r2, R: planetary radius, stellar radius, semi major axis in consistent units
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
-    if t is None: t = np.linspace(0., period, 1000)
+    if t is None: t = np.linspace(0., period, 1000, endpoint=False)
     t_corr = batman_utils.light_travel_time_correction(t, planet, t0=t0)
 
     orbital_ref_lightcurve = orbital_reflected_lightcurve(t, planet, t0=t0, A=A, u_B=u_B, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
@@ -283,7 +283,7 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0.
     spider_params.eclipse = include_occultation
 
     # PhaseCurve / Lightcurve
-    if t is None: t = np.linspace(0., period, 1000)
+    if t is None: t = np.linspace(0., period, 1000, endpoint=False)
     if spman=="fast": light_curve = fast_lightcurve(spider_params, stellar_grid, t)  # phase modulation + occultation, no transit - faster version with interpolation
     else: light_curve = spider_params.lightcurve(t, stellar_grid=stellar_grid)  # phase modulation + occultation, no transit
 
@@ -331,7 +331,7 @@ def Louden_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], stellar
     sp_louden.eclipse = include_occultation
 
     # PhaseCurve / Lightcurve
-    if t is None: t = np.linspace(0., period, 1000)
+    if t is None: t = np.linspace(0., period, 1000, endpoint=False)
     if spman=="fast": light_curve = fast_lightcurve(sp_louden, stellar_grid, t)  # phase modulation + occultation, no transit
     else: light_curve = sp_louden.lightcurve(t, stellar_grid=stellar_grid)  # phase modulation + occultation, no transit
 
@@ -421,7 +421,6 @@ class FittingConfig:
     filter_path: str        # SPIDERMAN throughput file
     l1: float               # filter blue edge [m]
     l2: float               # filter red edge [m]
-    A_B_true: float         # true Bond albedo used to generate the hyperillumination truth
     A_: Callable = None     # band integrated albedo as function of bond albedo (only needed when reflected=True)
     sigma_1min: float = 323.  # detection error [ppm per minute of integration]
     n_orbits: int = 3  # number of orbits observed and phase-folded
@@ -429,7 +428,11 @@ class FittingConfig:
     u_B: float = 0.         # hyperillumination-model limb-darkening coefficient (0 = uniform disk)
     reflected: bool = True  # True -> full (reflected + thermal); False -> thermal only
     T_floor: float = 200.   # min temperature for the direct_T grid [K]; blocks negative-T spline overshoot
-    bounds: tuple = (0.0, 0.6)  # albedo search bounds for the naive fit
+
+    @property
+    def sigma_bin(self):
+        minutes_binning = self.planet.period * 24 * 60 / self.n_bins
+        return self.sigma_1min / np.sqrt(minutes_binning * self.n_orbits)
 
 
 # Reflected phase-curve shape at unit albedo (A = 1)
@@ -448,13 +451,20 @@ def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_=None, n_t=Non
 
 
 # Fast, stripped-down phase curve [ppm] for the fitting loop
-def model_lc(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=None, n_layers=40, n_lo=300, n_la=150, refl_unit=None):
+def model_lc(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=None, n_layers=None, n_lo=300, n_la=150, refl_unit=None):
     pl = cfg.planet
     a_rs0 = pl.R / pl.r2 # default a/Rs (for a_AU scaling)
     a_rs = a_rs0 if a_rs is None else a_rs
     T_s = pl.T2_eff if T_s is None else T_s
     rp_ = pl.r1 / pl.r2 if rp_ is None else rp_
     n_t = 50 * cfg.n_bins if n_t is None else n_t
+
+    # n_layers = 30-40 usually sufficient for insolation_model="hyperillum", insolation_model="naive" needs n_layers = 60-80
+    if n_layers is None:
+        if insolation_model == "hyperillum":
+            n_layers = 40
+        else:
+            n_layers = 60
 
     t_ = np.linspace(0., pl.period, int(n_t), endpoint=False)
     # rebuild the planet at the swept geometry in pl's own units; a_AU scales with a/Rs (stellar size fixed)

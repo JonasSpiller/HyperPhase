@@ -5,6 +5,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
+# A_B bias converted to a bias in local surface temperature
+def temperature_bias(A_B_true, A_B_bias):
+    A_fit = A_B_true + A_B_bias
+    return ((1 - A_fit) / (1 - A_B_true))**0.25 - 1
+
 ###########################################################################################################################
 #####
 #####   Detectability
@@ -12,6 +17,7 @@ import matplotlib.pyplot as plt
 ###########################################################################################################################
 
 # Average y in fixed-width time bins. t in days, minutes_binning in minutes.
+# Simple binning, last bin gets remaining points (no need for specific t.size, y.size for equal bins). Only for plotting, use binned for fitting.
 def bin_curve(t, y, minutes_binning):
     dt = minutes_binning / 60 / 24
     edges = np.arange(t[0], t[-1] + dt, dt)  # bin edges
@@ -44,10 +50,9 @@ def binned(cfg, y):
 
 
 # Best-fit naive albedo A (= A_B) against a hyperillumination-generated truth, returning (A_fit, chi2).
-def fit_naive(cfg, truth, free_offset=True, bounds=None, xatol=1e-4, **kw):
-    sigma_bin = cfg.sigma_1min / np.sqrt(cfg.n_orbits * cfg.planet.period * 24 * 60 / cfg.n_bins)
+def fit_naive(cfg, truth, free_offset=True, bounds=(0.0, 0.6), xatol=1e-4, **kw):
+    sigma_bin = cfg.sigma_bin
 
-    bounds = cfg.bounds if bounds is None else bounds
     refl_unit = reflected_unit(cfg, "naive", **kw) if cfg.reflected else None
 
     yb_truth = binned(cfg, truth)
@@ -62,27 +67,29 @@ def fit_naive(cfg, truth, free_offset=True, bounds=None, xatol=1e-4, **kw):
     res = minimize_scalar(cost, bounds=bounds, method="bounded", options={"xatol": xatol})
     r = resid(res.x)
     resid_rms = np.sqrt(np.mean(r ** 2))
-    return res.x, res.fun, resid_rms # chi2 = cost(A_fit) = weighted sum of squared residuals
+    return res.x, res.fun, resid_rms # chi2 = cost(A_fit) = weighted sum of squared residuals (this χ² is not a goodness-of-fit to an observation — it's the squared distance between two noiseless models, expressed in units of the observational noise)
+
+
+###########################################################################################################################
+#####
+#####   Bias Map
+#####
+###########################################################################################################################
 
 
 # One grid cell of a bias map: generate the hyperillumination truth, fit the naive model, return the recovered-A_B bias.
 # NaN if the fit railed against a bound, i.e. the naive model cannot reproduce the truth at ANY albedo.
-def bias_cell(cfg, free_offset=True, rail_tol=1e-3, temp_bias=False, **kw):
+def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=1e-3, temp_bias=False, bounds=(0.0, 0.6), **kw):
     """Recovered-A_B bias for one map cell. NaN if the fit railed against a bound,
     i.e. the naive model cannot reproduce the truth at ANY albedo."""
-    _, truth = model_lc(cfg, "hyperillum", cfg.A_B_true, **kw)
-    A_B_fit, _, _ = fit_naive(cfg, truth, free_offset=free_offset, **kw)
-    lo, hi = cfg.bounds
+    _, truth = model_lc(cfg, "hyperillum", A_B_true, **kw) # noiseless data
+    A_B_fit, _, _ = fit_naive(cfg, truth, free_offset=free_offset, bounds=bounds, **kw)  # same bounds the rail check below uses
+    lo, hi = bounds
     if (A_B_fit - lo) < rail_tol or (hi - A_B_fit) < rail_tol:
         return np.nan
-    A_B_bias = A_B_fit - cfg.A_B_true
-    if temp_bias: return temperature_bias(cfg, A_B_bias)
+    A_B_bias = A_B_fit - A_B_true
+    if temp_bias: return temperature_bias(A_B_true, A_B_bias)
     else: return A_B_bias
-
-# A_B bias converted to a bias in local surface temperature
-def temperature_bias(cfg, A_B_bias):
-    A_fit = cfg.A_B_true + A_B_bias
-    return ((1 - A_fit) / (1 - cfg.A_B_true))**0.25 - 1
 
 
 # Emission Spectroscopy Metric (Kempton et al. 2018) formatted for a legend entry; the archive column is NaN for a few planets.

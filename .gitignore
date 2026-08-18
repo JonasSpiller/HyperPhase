@@ -60,6 +60,7 @@ ENV/
 /SPIDERMAN_fixes/local_spiderman_fixes.md
 /Filters/raw Pandeira/
 /Filters/raw SVO/
+*.throughput.dat
 /Hyperillumination/2026-07-26-Spiderman-Performance-Analysis.ipynb
 /SPIDERMAN_fixes/local_spiderman_speed_patches.md
 /Unused/

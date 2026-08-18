@@ -155,9 +155,10 @@ def band_avg_planck(T, lambda_range, filter_path=None, n=300):
     filter_path given -> real throughput on the file's own grid
     """
     lam, w = load_filter(lambda_range, filter_path=filter_path, n=n)
-    w =  w * lam / (H_PLANCK * C_LIGHT)  # convert energy integrating to photon integrating
-    # TODO: When thermal_depth is computed by SPIDERMAN, the hc/wvl issue in spiderman biases the results. To fix this, change the .dat filter files by multiplying by lambda^2. Then change the code here accordingly to * H_PLANCK * C_LIGHT / lam
 
-    B = planck_spectrum(lam, T)
+    # R [counts/photon] -> [counts/energy], so that weighting B_lambda (an energy spectral radiance) below yields a photon-integrated band average.
+    w =  w * lam / (H_PLANCK * C_LIGHT)
 
-    return np.trapezoid(B * w, lam) / np.trapezoid(w, lam)
+    B_lambda = planck_spectrum(lam, T)
+
+    return np.trapezoid(B_lambda * w, lam) / np.trapezoid(w, lam)
