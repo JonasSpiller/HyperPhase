@@ -58,7 +58,7 @@ def fit_naive(cfg, truth, free_offset=True, bounds=(0.0, 0.6), xatol=1e-4, **kw)
     yb_truth = binned(cfg, truth)
 
     def resid(A_B_):
-        r = yb_truth - binned(cfg, model_lc(cfg, "naive", A_B_, refl_unit=refl_unit, **kw)[1])
+        r = yb_truth - binned(cfg, model_pcurve(cfg, "naive", A_B_, refl_unit=refl_unit, **kw)[1])
         return r - r.mean() if free_offset else r
 
     def cost(A_B_):
@@ -82,7 +82,7 @@ def fit_naive(cfg, truth, free_offset=True, bounds=(0.0, 0.6), xatol=1e-4, **kw)
 def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=1e-3, temp_bias=False, bounds=(0.0, 0.6), **kw):
     """Recovered-A_B bias for one map cell. NaN if the fit railed against a bound,
     i.e. the naive model cannot reproduce the truth at ANY albedo."""
-    _, truth = model_lc(cfg, "hyperillum", A_B_true, **kw) # noiseless data
+    _, truth = model_pcurve(cfg, "hyperillum", A_B_true, **kw) # noiseless data
     A_B_fit, _, _ = fit_naive(cfg, truth, free_offset=free_offset, bounds=bounds, **kw)  # same bounds the rail check below uses
     lo, hi = bounds
     if (A_B_fit - lo) < rail_tol or (hi - A_B_fit) < rail_tol:

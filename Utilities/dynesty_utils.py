@@ -1,6 +1,6 @@
 import numpy as np
 from dataclasses import dataclass, field
-from hyperillumination_phasecurve_utils import model_lc  # forward model
+from hyperillumination_phasecurve_utils import model_pcurve  # forward model
 from simple_bias_analysis import binned # exact binning
 
 
@@ -20,8 +20,7 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
     """
 
     # high-resolution truth (thermal + reflected, since cfg.reflected=True)
-    t_hi, y_hi = model_lc(cfg, insolation_model, A_B_true, n_t=k_truth * cfg.n_bins,
-                          n_layers=n_layers, n_lo=n_lo, n_la=n_la, **model_kw)
+    t_hi, y_hi = model_pcurve(cfg, insolation_model, A_B_true, n_t=k_truth * cfg.n_bins, n_layers=n_layers, n_lo=n_lo, n_la=n_la, **model_kw)
 
     # reduce to the observed bins
     y_true = binned(cfg, y_hi) + offset

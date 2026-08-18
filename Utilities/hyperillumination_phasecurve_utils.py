@@ -10,6 +10,7 @@ import batman_utils
 import contextlib, io
 from astropy import constants as const
 from collections.abc import Callable
+from dataclasses import field   # dataclass/replace arrive via hyperillumination_utils; field does not
 
 sigma = const.sigma_sb.value
 
@@ -426,7 +427,9 @@ class FittingConfig:
     n_orbits: int = 3  # number of orbits observed and phase-folded
     n_bins: int = 27  # bins per period; the width is DERIVED so it tiles exactly
     u_B: float = 0.         # hyperillumination-model limb-darkening coefficient (0 = uniform disk)
+    u: tuple = (0.1, 0.3)   # quadratic stellar limb darkening [u1, u2] for the transit
     reflected: bool = True  # True -> full (reflected + thermal); False -> thermal only
+    transit: bool = True    # include the primary transit (batman)
     T_floor: float = 200.   # min temperature for the direct_T grid [K]; blocks negative-T spline overshoot
 
     @property
@@ -451,7 +454,7 @@ def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_=None, n_t=Non
 
 
 # Fast, stripped-down phase curve [ppm] for the fitting loop
-def model_lc(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=None, n_layers=None, n_lo=300, n_la=150, refl_unit=None):
+def model_pcurve(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=None, n_layers=None, n_lo=300, n_la=150, refl_unit=None):
     pl = cfg.planet
     a_rs0 = pl.R / pl.r2 # default a/Rs (for a_AU scaling)
     a_rs = a_rs0 if a_rs is None else a_rs
@@ -470,7 +473,7 @@ def model_lc(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=Non
     # rebuild the planet at the swept geometry in pl's own units; a_AU scales with a/Rs (stellar size fixed)
     planet = replace(pl, r1=rp_ * pl.r2, R=a_rs * pl.r2, T2_eff=T_s, a_AU=pl.a_AU * a_rs / a_rs0)
 
-    # Thermal Part
+    # Thermal Part # TODO: add temperature-map cache (T(A_B) = T(A_B=0)·(1-A_B)^¼ (only works if a/r2, r1/r2, T2_eff stay fixed)
     lo, la, Tg = custom_temperature_grid(planet, u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B=A_B_)
     LO, LA = np.meshgrid(lo, la, indexing="ij")
     p = sp.ModelParams(brightness_model="direct_T", stellar_model="blackbody")
@@ -484,12 +487,16 @@ def model_lc(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_=None, n_t=Non
     p.grid = sp.format_grid(LO, LA, np.maximum(Tg, cfg.T_floor).T)
     p.filter, p.eclipse = cfg.filter_path, True
     thermal = (fast_lightcurve(p, cfg.stellar_grid, t_, n_phase=24) - 1) * 1e6
+
+    # Transit. Pure geometry: independent of insolation_model and A_B, so it cancels exactly in a truth - model residual.
+    f_transit = (batman_utils.flux_transit(planet, t_, t0=0., u=cfg.u) - 1.) * 1e6 if cfg.transit else 0.
+
     if not cfg.reflected:
-        return t_, thermal
+        return t_, thermal + f_transit
 
     # Reflected Part (linear in A)
     A = cfg.A_(A_B_)
     if refl_unit is None:
         refl_unit = reflected_unit(cfg, insolation_model, a_rs=a_rs, T_s=T_s, rp_=rp_, n_t=n_t)
 
-    return t_, thermal + A * refl_unit
+    return t_, thermal + A * refl_unit + f_transit
