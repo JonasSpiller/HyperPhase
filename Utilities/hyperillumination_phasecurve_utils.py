@@ -426,6 +426,22 @@ def fast_lightcurve(spider_params, stellar_grid, t, n_phase=40):
 ###########################################################################################################################
 
 
+# Band-integrated albedo A in the observing band as a function of the Bond albedo A_B — i.e. the FittingConfig.A_ callable.
+# Classes rather than a `def` in a notebook cell because dynesty.pool.Pool spawns its workers and dynesty checkpoints with plain pickle which cannot handle notebook functions.
+@dataclass(frozen=True)
+class ConstantBandAlbedo:
+    """Fixed band-integrated albedo, independent of A_B."""
+    A: float = 0.1
+    def __call__(self, A_B): return self.A
+
+
+@dataclass(frozen=True)
+class ScaledBandAlbedo:
+    """A = scale * A_B; scale=1 sets the band-integrated albedo equal to the Bond albedo."""
+    scale: float = 1.0
+    def __call__(self, A_B): return self.scale * A_B
+
+
 @dataclass
 class FittingConfig:
     """Fixed physical + instrument context for the bias analysis."""
@@ -465,8 +481,8 @@ def swept_planet(cfg, a_rs=None, T_s=None, rp_rs=None):
 
 # Ready-made `insol` argument for model_pcurve, built at exactly the geometry model_pcurve would use.
 # ONLY valid while a/r2, r1/r2, T2_eff, cfg.u_B, n_lo and n_la are held fixed — see dynesty_utils.GaussianLogL, which builds this and invalidates it automatically when the corresponding parameter is sampled.
-def insolation_cache(cfg, insolation_model, a_rs=None, T_s=None, rp_rs=None, n_lo=300, n_la=150):
-    planet = swept_planet(cfg, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs)
+def insolation_cache(cfg, insolation_model, n_lo=300, n_la=150, **geom):
+    planet = swept_planet(cfg, **geom)   # **geom rather than named args, so adding a parameter to swept_planet is enough
     return insolation_grid(planet, u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model)
 
 
