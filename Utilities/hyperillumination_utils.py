@@ -48,10 +48,10 @@ class PlanetParams:
         gp = np.arccos((self.r1 - self.r2) / self.R)
         return np.degrees(gp) if unit == "deg" else gp
 
-    def fraction_illuminated(self, extra=None): # Carter 2019
+    def fraction_illuminated(self, extra=False): # Carter 2019
         fraction_fullyilluminated = (1. - (self.r1 + self.r2) / self.R) / 2.
         fraction_penumbra = self.r2 / self.R
-        if extra is not None:
+        if extra:
             return {"fully illuminated": fraction_fullyilluminated, "penumbra": fraction_penumbra}
         return fraction_fullyilluminated + fraction_penumbra
 

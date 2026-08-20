@@ -1,8 +1,17 @@
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import time
+import dynesty
+from dynesty.pool import Pool
+from joblib import Parallel, delayed
+import contextlib
 from hyperillumination_phasecurve_utils import model_pcurve, reflected_unit, insolation_cache  # forward model + its geometry-only caches
-from simple_bias_analysis import binned # exact binning
+from simple_bias_analysis import binned
+from scipy.stats import norm, truncnorm
+import warnings
+from dynesty.dynamicsampler import stopping_function   # re-evaluated post-run to tell convergence from budget truncation
+from dynesty.utils import get_neff_from_logwt
+import matplotlib.pyplot as plt
 
 
 ###########################################################################################################################
@@ -11,12 +20,49 @@ from simple_bias_analysis import binned # exact binning
 #####
 ###########################################################################################################################
 
+def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum"):
+    ph = data["t"] / cfg.planet.period  # orbital phase
+
+    # Full Phase Curve (for custom reproduction of simulate_data)
+    t_hi, y_hi = model_pcurve(cfg, insolation_model, A_B_true, n_t=200 * cfg.n_bins, n_layers=80, n_lo=600, n_la=300)
+    y_true = binned(cfg, y_hi)
+    ph_hi = t_hi / cfg.planet.period
+
+    # Plotting
+    fig, (ax, axr) = plt.subplots(2, 1, figsize=(8, 5.5), sharex=True,
+                                  gridspec_kw=dict(height_ratios=[3, 1], hspace=0.06))
+
+    ax.plot(ph_hi, y_hi, lw=1., color="0.5", label=f'truth ({insolation_model}, $A_B$={A_B_true:.2f})')
+    ax.step(ph, y_true, where="mid", color="C0", lw=1.4, label="binned truth")
+    ax.errorbar(ph, data["y_obs"], yerr=data["sigma"], fmt="o", ms=4, color="k", capsize=2,
+                elinewidth=1., label=f'simulated data ($\\sigma$={cfg.sigma_bin:.1f} ppm)')
+    ax.set_ylabel("$F_p/F_\\star$ [ppm]");
+    ax.legend(frameon=False, fontsize=8);
+    ax.margins(x=0.01)
+
+    r = (data["y_obs"] - y_true) / data["sigma"]
+    axr.axhline(0, color="0.7", lw=0.8);
+    axr.axhline(1, color="0.85", lw=0.6, ls=":")
+    axr.axhline(-1, color="0.85", lw=0.6, ls=":")
+    axr.plot(ph, r, "ko", ms=4)
+    axr.set_xlabel("orbital phase");
+    axr.set_ylabel("resid / $\\sigma$");
+    axr.set_ylim(-3.5, 3.5)
+    plt.show()
+
+    # Numerical Checks
+    chi2 = np.sum(r ** 2)
+    print(f"sigma_bin: {cfg.sigma_bin:.2f} ppm  (bin width {cfg.planet.period * 24 * 60 / cfg.n_bins:.2f} min)")
+    print(f"chi2 / n_bins (normalized average noise per bin ~1): {chi2 / cfg.n_bins:.2f}")
+    print(f"residual mean / sigma (~0): {r.mean():.2f}")
+
+
 def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=True, offset=0.,
-                  k_truth=200, n_layers=80, n_lo=600, n_la=300, **model_kw):
+                  k_truth=200, n_layers=80, n_lo=600, n_la=300, plotting=True, **model_kw):
     """Simulated phase-folded observation: binned(truth) + N(0, sigma_bin).
 
     cfg          : FittingConfig — the only mandatory input; supplies planet, filter, stellar_grid, A_(A_B), sigma_1min, n_orbits, n_bins, u_B, reflected.
-    A_B_true     : true Bond albedo; defaults to cfg.A_B_true.
+    A_B_true     : true Bond albedo.
     noise        : False -> the noiseless ("Asimov") dataset. Use it for bias maps; do NOT use it for lnZ / Bayes factors, where chi2 = 0 at the truth inflates Z.
     offset       : constant baseline injected into the data [ppm]; set non-zero to check that the fitted nuisance offset is actually recovered.
     k_truth      : sub-samples per bin for the truth (n_t = k_truth * n_bins, must tile).
@@ -36,7 +82,116 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
     t=(np.arange(cfg.n_bins) + 0.5) * cfg.planet.period / cfg.n_bins
     sigma = np.full(cfg.n_bins, s)
 
-    return {"t": t, "y_obs": y_obs, "sigma":sigma}
+    data = {"t": t, "y_obs": y_obs, "sigma":sigma}
+
+    if plotting: plot_simulated_data(cfg, A_B_true, data, insolation_model=insolation_model)
+
+    return data
+
+
+###########################################################################################################################
+#####
+#####   Priors
+#####
+###########################################################################################################################
+
+# -------------------------------------------------------------------------------------------
+#  Prior Transforms
+# -------------------------------------------------------------------------------------------
+
+# Prior transforms map the unit hypercube u ~ U(0,1) to a physical value.
+# They are classes because dynesty pickles the ptform to its workers, where a lambda/closure dies.
+
+@dataclass(frozen=True)
+class Uniform:
+    lo: float
+    hi: float
+    def __call__(self, u): return self.lo + u * (self.hi - self.lo)
+    @property
+    def bounds(self): return (self.lo, self.hi)
+
+
+@dataclass(frozen=True)
+class LogUniform:
+    lo: float                                    # must be > 0
+    hi: float
+    def __call__(self, u): return self.lo * (self.hi / self.lo) ** u
+    @property
+    def bounds(self): return (self.lo, self.hi)
+
+
+@dataclass(frozen=True)
+class Normal:
+    mu: float
+    sd: float
+    def __call__(self, u): return float(norm.ppf(u, self.mu, self.sd))
+    @property
+    def bounds(self): return (self.mu - 5. * self.sd, self.mu + 5. * self.sd)   # grid range, NOT the support
+
+
+@dataclass(frozen=True)
+class TruncNormal:
+    """Normal(mu, sd) restricted to [lo, hi]. Use eg for r1/r2: the literature value with its error bar, hard-clipped to a physically allowed range."""
+    mu: float
+    sd: float
+    lo: float
+    hi: float
+    def __call__(self, u):
+        a, b = (self.lo - self.mu) / self.sd, (self.hi - self.mu) / self.sd   # scipy wants the bounds in sigma units
+        return float(truncnorm.ppf(u, a, b, loc=self.mu, scale=self.sd))
+    @property
+    def bounds(self): return (self.lo, self.hi)
+
+
+# -------------------------------------------------------------------------------------------
+#  Prior Parameters
+# -------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Parameter:
+    name: str                # must be one of _KNOWN below
+    prior: object            # callable u -> value, e.g. Uniform(0., 0.8)
+    label: str = None        # LaTeX label for plots; defaults to the name
+
+
+@dataclass(frozen=True)
+class ParameterSet:
+    """This class defines the priors: the ordered free parameters of a fit.
+    Call by e.g.: pset = ParameterSet((Parameter("A_B", Uniform(0., 0.8), r"$A_B$"), Parameter("offset", Uniform(-50., 50.), "offset [ppm]")))
+    """
+    params: tuple
+
+    def __post_init__(self):
+        if not self.params: raise ValueError("a ParameterSet needs at least one free Parameter")
+        if len(set(self.names)) != len(self.names): raise ValueError(f"duplicate parameter names in {self.names}")
+        bad = [n for n in self.names if n not in _KNOWN]
+        if bad: raise ValueError(f"unsupported parameter(s) {bad}; supported: {_KNOWN}")
+
+    @property
+    def ndim(self): return len(self.params)
+    @property
+    def names(self): return tuple(p.name for p in self.params)
+    @property
+    def labels(self): return tuple(p.label or p.name for p in self.params)
+    @property
+    def bounds(self): return [p.prior.bounds for p in self.params]     # feeds evidence_bruteforce(bounds=...)
+
+    def prior_transform(self, u):
+        """The dynesty `ptform`: unit hypercube -> physical parameters, component-wise."""
+        return np.array([p.prior(ui) for p, ui in zip(self.params, u)], float)
+
+    def __call__(self, u): # so the ParameterSet itself can be passed as ptform
+        return self.prior_transform(u)
+
+    def sample(self, n, seed=0):
+        """n draws from the prior, shape (n, ndim). Feed straight to check_likelihood()."""
+        u = np.random.default_rng(seed).random((int(n), self.ndim))
+        return np.array([self.prior_transform(ui) for ui in u])
+
+    def grid(self, name, n=61):
+        """n evenly spaced values spanning one parameter's prior bounds — the x-axis for logl_slice / logl_grid."""
+        lo, hi = self.bounds[self.names.index(name)]
+        return np.linspace(lo, hi, int(n))
 
 
 ###########################################################################################################################
@@ -81,54 +236,41 @@ class GaussianLogL:
         self.fixed = dict(fixed or {})
         self.bad_logl = float(bad_logl)
         self.model_kw = dict(model_kw)
+        self.n_calls = 0  # accounting; compare against sum(res.ncall)
+        self._warned = False
 
         # Validate the parameter bookkeeping
         unknown = [n for n in self.names + tuple(self.fixed) if n not in _KNOWN]
-        if unknown:
-            raise ValueError(f"unsupported parameter(s) {unknown}; supported: {_KNOWN}")
-        if len(set(self.names)) != len(self.names):
-            raise ValueError(f"duplicate names in {self.names}")
+        if unknown: raise ValueError(f"unsupported parameter(s) {unknown}; supported: {_KNOWN}")
+        if len(set(self.names)) != len(self.names): raise ValueError(f"duplicate names in {self.names}")
         clash = [n for n in self.names if n in self.fixed]
-        if clash:
-            raise ValueError(f"parameter(s) {clash} are both sampled and fixed")
-        if "A_B" not in self.names and "A_B" not in self.fixed:
-            raise ValueError("A_B must be either sampled (in `names`) or supplied in `fixed`")
+        if clash: raise ValueError(f"parameter(s) {clash} are both sampled and fixed")
+        if "A_B" not in self.names and "A_B" not in self.fixed: raise ValueError("A_B must be either sampled (in `names`) or supplied in `fixed`")
         geom_in_kw = [k for k in self.model_kw if k in _GEOMETRY]
-        if geom_in_kw:
-            raise ValueError(f"pass geometry {geom_in_kw} via `fixed`, not as model_kw")
-        if insolation_model not in _CACHE_DEPS["insol"]:
-            raise ValueError(f"insolation_model must be one of {tuple(_CACHE_DEPS['insol'])}")
+        if geom_in_kw: raise ValueError(f"pass geometry {geom_in_kw} via `fixed`, not as model_kw")
+        if insolation_model not in _CACHE_DEPS["insol"]: raise ValueError(f"insolation_model must be one of {tuple(_CACHE_DEPS['insol'])}")
 
         # Data
         self.t = np.asarray(data["t"], float)
         self.y = np.asarray(data["y_obs"], float)
         self.sigma = np.broadcast_to(np.asarray(data["sigma"], float), self.y.shape).astype(float)
-        if self.y.size != cfg.n_bins:
-            raise ValueError(f"data has {self.y.size} points but cfg.n_bins={cfg.n_bins}")
-        if not np.all(self.sigma > 0):
-            raise ValueError("all sigma must be > 0")
+        if self.y.size != cfg.n_bins: raise ValueError(f"data has {self.y.size} points but cfg.n_bins={cfg.n_bins}")
+        if not np.all(self.sigma > 0): raise ValueError("all sigma must be > 0")
         self._inv_s = 1. / self.sigma
         self._const = float(np.sum(np.log(2. * np.pi * self.sigma ** 2)))  # theta-independent
 
         # Geometry-only caches for speedup
         # Each cache is dropped as soon as ANY parameter it depends on is sampled, so it can never be used at a geometry it was not built at. Both are pure speed-ups: bit-identical either way.
         geom = {k: v for k, v in self.fixed.items() if k in _GEOMETRY}
-        self._live = {k: bool(cache) and not any(n in self.names for n in deps[insolation_model])
-                      for k, deps in _CACHE_DEPS.items()}
+        self._live = {k: cache and not any(n in self.names for n in deps[insolation_model]) for k, deps in _CACHE_DEPS.items()}
+        self._live["refl"] &= cfg.reflected  # nothing to cache when the reflected part is switched off
+        self.refl_unit = reflected_unit(cfg, insolation_model, n_t=self.model_kw.get("n_t"), **geom) if self._live["refl"] else None
+        self.insol = insolation_cache(cfg, insolation_model, n_lo=self.model_kw.get("n_lo", 300), n_la=self.model_kw.get("n_la", 150), **geom) if self._live["insol"] else None
 
-        self.refl_unit = None
-        if self._live["refl"] and cfg.reflected:
-            self.refl_unit = reflected_unit(cfg, insolation_model, n_t=self.model_kw.get("n_t"), **geom)
-        else:
-            self._live["refl"] = False          # nothing to cache when cfg.reflected is off
-
-        self.insol = None
-        if self._live["insol"]:
-            self.insol = insolation_cache(cfg, insolation_model,
-                                          n_lo=self.model_kw.get("n_lo", 300),
-                                          n_la=self.model_kw.get("n_la", 150), **geom)
-
-        self.n_calls = 0   # cheap accounting; compare against sum(res.ncall)
+    # Build the likelihood from a ParameterSet, so the sampled names have a single source of truth. Fixed values are not the pset's business: pass them here, e.g. from_pset(..., pset, fixed=dict(a_rs=2.5))
+    @classmethod
+    def from_pset(cls, cfg, data, insolation_model, pset, **kw):
+        return cls(cfg, data, insolation_model, names=pset.names, **kw)
 
     # -------------------------------------------------------------------------------------------
     #  Utilities
@@ -140,17 +282,15 @@ class GaussianLogL:
     @property
     def cache_used(self):
         # Which geometry-only caches are live, e.g. ("refl", "insol"). A cache drops out when one of its dependencies is sampled — see _CACHE_DEPS for the measured dependency of each.
-        return tuple(k for k in ("refl", "insol") if self._live[k])
+        return tuple(k for k in _CACHE_DEPS if self._live[k])
 
     def __repr__(self):
-        return (f"GaussianLogL({self.insolation_model}, names={self.names}, "
-                f"fixed={self.fixed}, ndim={self.ndim}, caches={self.cache_used})")
+        return (f"GaussianLogL({self.insolation_model}, names={self.names}, fixed={self.fixed}, ndim={self.ndim}, caches={self.cache_used})")
 
     def unpack(self, theta):
         """theta -> {name: value}, merged with `fixed`. Inverse of theta_of()."""
         theta = np.atleast_1d(np.asarray(theta, float))
-        if theta.size != self.ndim:
-            raise ValueError(f"theta has {theta.size} entries, expected {self.ndim} for {self.names}")
+        if theta.size != self.ndim: raise ValueError(f"theta has {theta.size} entries, expected {self.ndim} for {self.names}")
         p = dict(self.fixed)
         p.update(zip(self.names, theta))
         return p
@@ -162,8 +302,7 @@ class GaussianLogL:
         """Binned model [ppm] for a parameter dict, WITHOUT the baseline offset. Split out from
         model() because the offset is purely additive: one curve serves every offset."""
         geom = {k: p[k] for k in _GEOMETRY if k in p}
-        _, y = model_pcurve(self.cfg, self.insolation_model, p["A_B"],
-                            refl_unit=self.refl_unit, insol=self.insol, **geom, **self.model_kw)
+        _, y = model_pcurve(self.cfg, self.insolation_model, p["A_B"], refl_unit=self.refl_unit, insol=self.insol, **geom, **self.model_kw)
         return binned(self.cfg, y)
 
     def model(self, theta):
@@ -188,8 +327,13 @@ class GaussianLogL:
     def __call__(self, theta):
         """The dynesty `loglike`."""
         self.n_calls += 1
-        try: m = self.model(theta)
-        except Exception: return self.bad_logl # to catch exit(0) spiderman error
+        try:
+            m = self.model(theta)
+        except ArithmeticError as e: # catch numerical failures
+            if not self._warned:
+                self._warned = True
+                warnings.warn(f"{type(e).__name__} at {dict(zip(self.names, np.atleast_1d(theta)))}: {e} -> bad_logl. Further occurrences silenced; if this covers a region of the prior, lnZ is biased.", RuntimeWarning)
+            return self.bad_logl
         return self._logl_from_model(m)
 
     def logl_offsets(self, theta, offsets):
@@ -206,8 +350,7 @@ class GaussianLogL:
 def theta_of(logl, values):
     """{name: value} dict -> theta array in logl.names order. Inverse of logl.unpack()."""
     missing = [n for n in logl.names if n not in values]
-    if missing:
-        raise ValueError(f"missing value(s) for sampled parameter(s) {missing}")
+    if missing: raise ValueError(f"missing value(s) for sampled parameter(s) {missing}")
     return np.array([values[n] for n in logl.names], float)
 
 
@@ -223,47 +366,8 @@ def _map(func, items, n_jobs=-1, min_parallel=4):
     Processes, never threads: the SPIDERMAN lightcurve() C extension holds the GIL, so threading
     measures ~1x. Each SPIDERMAN call is single-threaded, so one core per process is clean."""
     items = list(items)
-    if n_jobs in (1, None) or len(items) < min_parallel:
-        return [func(x) for x in items]
-    from joblib import Parallel, delayed
+    if n_jobs in (1, None) or len(items) < min_parallel: return [func(x) for x in items]
     return list(Parallel(n_jobs=n_jobs, backend="loky")(delayed(func)(x) for x in items))
-
-
-def check_likelihood(logl, thetas, verbose=True):
-    """SERIAL smoke test of the likelihood over a set of parameter vectors.
-
-    Run this before ever handing the likelihood to a pool. SPIDERMAN kills the process with exit(0)
-    rather than raising, so a bad point inside a worker silently takes the whole run with it — you
-    want to meet that failure here, in one process, where the death is attributable to a specific
-    theta and you can move the prior bound accordingly.
-
-    thetas : (n, ndim) array-like of parameter vectors.
-    Returns dict(lnl, n_bad, bad_thetas, t_call, lnl_best, theta_best).
-    """
-    thetas = np.atleast_2d(np.asarray(thetas, float))
-    lnl = np.empty(len(thetas))
-    t0 = time.perf_counter()
-    for i, th in enumerate(thetas):
-        if verbose and i and i % 25 == 0:
-            print(f"  {i}/{len(thetas)} ... {(time.perf_counter()-t0)/i*1e3:.0f} ms/call", flush=True)
-        lnl[i] = logl(th)
-    dt = (time.perf_counter() - t0) / len(thetas)
-
-    bad = ~np.isfinite(lnl) | (lnl <= logl.bad_logl)
-    i_best = int(np.argmax(np.where(bad, -np.inf, lnl)))
-    out = dict(lnl=lnl, n_bad=int(bad.sum()), bad_thetas=thetas[bad], t_call=dt,
-               lnl_best=float(lnl[i_best]), theta_best=thetas[i_best])
-    if verbose:
-        print(f"{len(thetas)} draws, {dt*1e3:.0f} ms per lnL call "
-              f"(-> {dt*1e4/60:.1f} min per 1e4 calls, serial)")
-        print(f"bad (non-finite model): {out['n_bad']}/{len(thetas)}")
-        print(f"best: lnL = {out['lnl_best']:.2f} at "
-              + ", ".join(f"{n}={v:.4g}" for n, v in zip(logl.names, out['theta_best'])))
-        if out["n_bad"]:
-            print("  -> tighten the prior bounds so these are never proposed:")
-            for th in out["bad_thetas"][:5]:
-                print("     " + ", ".join(f"{n}={v:.4g}" for n, v in zip(logl.names, th)))
-    return out
 
 
 def logl_slice(logl, name, values, base, n_jobs=-1):
@@ -277,10 +381,8 @@ def logl_slice(logl, name, values, base, n_jobs=-1):
     Scanning "offset" is free (one forward model, vectorised) because the offset is additive.
     """
     values = np.asarray(values, float)
-    if name not in logl.names:
-        raise ValueError(f"{name!r} is not sampled; logl.names = {logl.names}")
-    if name == "offset":
-        return logl.logl_offsets(theta_of(logl, base), values)
+    if name not in logl.names: raise ValueError(f"{name!r} is not sampled; logl.names = {logl.names}")
+    if name == "offset": return logl.logl_offsets(theta_of(logl, base), values)
 
     def _one(v):
         b = dict(base); b[name] = v
@@ -291,8 +393,8 @@ def logl_slice(logl, name, values, base, n_jobs=-1):
 def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1):
     """lnL on a 2-D grid over two sampled parameters.
 
-    Returns Z with shape (len(y_vals), len(x_vals)) — i.e. Z[j, i] = lnL(x_vals[i], y_vals[j]), the
-    layout expected by plt.pcolormesh(x_vals, y_vals, Z) and by plt.contour(X, Y, Z) with
+    Returns lnL with shape (len(y_vals), len(x_vals)) — i.e. lnL[j, i] = lnL(x_vals[i], y_vals[j]), the
+    layout expected by plt.pcolormesh(x_vals, y_vals, lnL) and by plt.contour(X, Y, lnL) with
     X, Y = np.meshgrid(x_vals, y_vals).
 
     With a uniform prior the exponential of this grid IS the un-normalised posterior, so the map is a
@@ -303,10 +405,8 @@ def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1):
     offset enters additively.
     """
     for n in (x_name, y_name):
-        if n not in logl.names:
-            raise ValueError(f"{n!r} is not sampled; logl.names = {logl.names}")
-    if x_name == y_name:
-        raise ValueError("x_name and y_name must differ")
+        if n not in logl.names: raise ValueError(f"{n!r} is not sampled; logl.names = {logl.names}")
+    if x_name == y_name: raise ValueError("x_name and y_name must differ")
     x_vals = np.asarray(x_vals, float)
     y_vals = np.asarray(y_vals, float)
 
@@ -319,8 +419,9 @@ def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1):
         def _col(v):
             b = dict(base); b[other_name] = v
             return logl.logl_offsets(theta_of(logl, b), off_vals)
-        Z = np.asarray(_map(_col, other_vals, n_jobs), float).T   # (n_off, n_other)
-        return Z if off_is_y else Z.T
+
+        lnL = np.asarray(_map(_col, other_vals, n_jobs), float).T   # (n_off, n_other)
+        return lnL if off_is_y else lnL.T
 
     def _one(ij):
         i, j = ij
@@ -330,12 +431,12 @@ def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1):
     return np.asarray(_map(_one, idx, n_jobs), float).reshape(len(y_vals), len(x_vals))
 
 
-def grid_max(Z, *axes_vals):
+def grid_max(lnL_max, *axes_vals):
     """Grid MAP: (lnL_max, (coord_along_axis0, coord_along_axis1, ...)).
     axes_vals are the 1-D coordinate arrays in the AXIS ORDER of Z — so for the output of
     logl_grid(..., x_vals, ..., y_vals) that is grid_max(Z, y_vals, x_vals)."""
-    k = np.unravel_index(np.argmax(Z), Z.shape)
-    return float(Z[k]), tuple(np.asarray(v, float)[i] for v, i in zip(axes_vals, k))
+    k = np.unravel_index(np.argmax(lnL_max), lnL_max.shape)
+    return float(lnL_max[k]), tuple(np.asarray(v, float)[i] for v, i in zip(axes_vals, k))
 
 
 def evidence_bruteforce(lnL, axes_vals, bounds=None):
@@ -373,4 +474,96 @@ def evidence_bruteforce(lnL, axes_vals, bounds=None):
     for k in range(lnL.ndim):
         for s in (0, -1):
             edge = max(edge, float(np.max(np.take(lnL, s, axis=k))))
-    return lnZ, float(np.exp(edge - m))
+
+    edge_ratio = float(np.exp(edge - m)) # L_best_on_boundry / L_best (if not <<1: L leaks out of priors, data to noisy)
+    return lnZ, edge_ratio
+
+
+###########################################################################################################################
+#####
+#####   Nested sampling driver
+#####
+###########################################################################################################################
+
+@dataclass
+class SamplerConfig:
+    """Everything tunable about the dynesty run."""
+    dynamic: bool = True
+    pfrac: float = 0.8       # Importance of evidence (pfrac=0) vs posterior (pfrac=1)
+    nlive: int = 500              # nlive (static) / nlive_init (dynamic)
+    nlive_batch: int = 250        # dynamic only
+    maxbatch: int = 15            # dynamic only
+    dlogz: float = 0.01      # dlogz (static) / dlogz_init (dynamic)
+    n_effective: int = None       # dynamic only; None -> target_n_effective = max(ndim², 10000) = 10000
+    bound: str = "multi"
+    sample: str = "auto"          # 'auto' -> 'unif' for ndim<10, 'rslice' for 10-20
+    nprocs: int = 1               # >1 -> dynesty.pool.Pool (spawned workers)
+    seed: int = 42
+    maxiter: int = None
+    maxcall: int = None
+    checkpoint_file: str = None   # resume with run_nested_fit(..., resume=True)
+    print_progress: bool = True
+
+
+@dataclass
+class NestedFit: # output of fitting
+    results: object  # the dynesty Results object
+    pset: ParameterSet
+    scfg: SamplerConfig
+    meta: dict  # insolation_model, caches, seed, runtime, ncall, lnZ - everything needed to reproduce
+
+
+def run_status(res, scfg, stop_kwargs=None):
+    """Did the run stop because dynesty's criterion was met, or because it ran out of budget? Re-evaluates the same stopping_function on the FINAL results - the check run_nested would have made before the next batch - free at the default n_mc=0 (no likelihood calls). Returns {'converged': bool, 'status': str}."""
+    caps = [n for n, cap, v in (("maxiter", scfg.maxiter, int(res.niter)), ("maxcall", scfg.maxcall, int(np.sum(res.ncall)))) if cap is not None and v >= cap]
+    if not scfg.dynamic: return dict(converged=not caps, status=f"static, {res.niter} it" + (f" | RAN OUT OF {'+'.join(caps)}" if caps else f" | dlogz {scfg.dlogz} reached"))
+    n_batches = len(res.batch_logl_bounds) - 1   # row 0 is the (-inf, inf) base run
+    if n_batches >= scfg.maxbatch: caps.append("maxbatch")
+    stop = stopping_function(res, dict(stop_kwargs or {"pfrac": scfg.pfrac}), return_vals=True)[1][2]   # pfrac*target_ESS/ESS + (1-pfrac)*lnZerr/evid_thresh; dynesty stops at <= 1
+    ok = bool(stop <= 1.)
+    return dict(converged=ok, status=("CONVERGED" if ok else f"NOT CONVERGED, ran out of {'+'.join(caps)}") + f" | stop {stop:.3f}, {n_batches}/{scfg.maxbatch} batches, ESS {get_neff_from_logwt(res.logwt):.0f}")
+
+
+def run_nested_fit(logl, pset, scfg=None, resume=False):
+    """One dataset + one insolation model + one ParameterSet -> one dynesty NestedFit.
+
+    logl : GaussianLogL (build it with GaussianLogL.from_pset so its names cannot drift from pset)
+    pset : ParameterSet supplying the prior transform; its names must match logl.names
+    scfg : SamplerConfig; defaults to SamplerConfig()
+    """
+    scfg = scfg or SamplerConfig()
+    if tuple(pset.names) != tuple(logl.names): raise ValueError(f"pset names {pset.names} != logl names {logl.names}; theta columns would be scrambled")
+    if not 0. <= scfg.pfrac <= 1.: raise ValueError(f"pfrac must be in [0, 1], got {scfg.pfrac}")
+    if resume and not scfg.checkpoint_file: raise ValueError("resume=True needs scfg.checkpoint_file")
+
+    stop_kwargs = {"pfrac": scfg.pfrac}   # run_nested resolves target_n_effective INTO this dict in place, so afterwards it is exactly the criterion that was applied
+    rstate = np.random.default_rng(scfg.seed)
+    use_pool = (scfg.nprocs or 1) > 1
+    t0 = time.perf_counter()
+
+    with (Pool(scfg.nprocs, logl, pset.prior_transform) if use_pool else contextlib.nullcontext()) as pool:
+        loglike, ptform = (pool.loglike, pool.prior_transform) if use_pool else (logl, pset.prior_transform)
+        kw = dict(bound=scfg.bound, sample=scfg.sample, rstate=rstate)
+        if use_pool: kw.update(pool=pool, queue_size=pool.size)
+
+        if scfg.dynamic:
+            sampler = (dynesty.DynamicNestedSampler.restore(scfg.checkpoint_file, pool=pool) if resume else dynesty.DynamicNestedSampler(loglike, ptform, pset.ndim, **kw))
+            # wt_kwargs={"pfrac": scfg.pfrac}: where the next batch is placed; stop_kwargs={"pfrac": scfg.pfrac}: when to stop
+            sampler.run_nested(nlive_init=scfg.nlive, dlogz_init=scfg.dlogz, nlive_batch=scfg.nlive_batch, maxbatch=scfg.maxbatch, n_effective=scfg.n_effective, maxiter=scfg.maxiter, maxcall=scfg.maxcall, wt_kwargs={"pfrac": scfg.pfrac}, stop_kwargs=stop_kwargs, print_progress=scfg.print_progress, checkpoint_file=scfg.checkpoint_file, resume=resume)
+        else:
+            sampler = (dynesty.NestedSampler.restore(scfg.checkpoint_file, pool=pool) if resume else dynesty.NestedSampler(loglike, ptform, pset.ndim, nlive=scfg.nlive, **kw))
+            # add_live=True must stay on, or the posterior peak is truncated
+            sampler.run_nested(dlogz=scfg.dlogz, maxiter=scfg.maxiter, maxcall=scfg.maxcall, add_live=True, print_progress=scfg.print_progress, checkpoint_file=scfg.checkpoint_file, resume=resume)
+        res = sampler.results
+    runtime = time.perf_counter() - t0
+
+    meta = dict(insolation_model=logl.insolation_model, caches=logl.cache_used, fixed=dict(logl.fixed), seed=scfg.seed, runtime_s=runtime,
+                ncall=int(np.sum(res.ncall)), niter=int(res.niter), lnZ=float(res.logz[-1]), lnZ_err=float(res.logzerr[-1]), information=float(res.information[-1]), n_bins=int(logl.y.size), sigma_bin=float(np.mean(logl.sigma)))
+
+    meta.update(run_status(res, scfg, stop_kwargs))
+    if scfg.print_progress:
+        print(f"\n{logl.insolation_model}: lnZ = {meta['lnZ']:.4f} +/- {meta['lnZ_err']:.4f},  {meta['ncall']} calls, {runtime / 60:.1f} min ({runtime / max(meta['ncall'], 1) * 1e3:.0f} ms/call)")
+        print(f"   {meta['status']}")
+    if not meta["converged"]: warnings.warn(f"{logl.insolation_model}: dynesty stopped WITHOUT meeting its stopping criterion -- {meta['status']}. Raise scfg.maxbatch, or relax the target with scfg.n_effective. lnZ and the posterior are still valid, just noisier than requested.", RuntimeWarning, stacklevel=2)
+
+    return NestedFit(results=res, pset=pset, scfg=scfg, meta=meta)
