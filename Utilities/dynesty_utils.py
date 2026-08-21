@@ -236,7 +236,7 @@ class GaussianLogL:
         self.fixed = dict(fixed or {})
         self.bad_logl = float(bad_logl)
         self.model_kw = dict(model_kw)
-        self.n_calls = 0  # accounting; compare against sum(res.ncall)
+        self.n_calls = 0  # accounting; compare against sum(res.ncall). Won't be used if Pool is on
         self._warned = False
 
         # Validate the parameter bookkeeping

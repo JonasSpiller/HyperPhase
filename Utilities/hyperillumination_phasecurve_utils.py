@@ -451,7 +451,7 @@ class FittingConfig:
     filter_path: str        # SPIDERMAN throughput file
     l1: float               # filter blue edge [m]
     l2: float               # filter red edge [m]
-    A_: Callable = None     # band integrated albedo as function of bond albedo (only needed when reflected=True)
+    A_: object     # band integrated albedo as function of bond albedo (only needed when reflected=True)
     sigma_1min: float = 323.  # detection error [ppm per minute of integration]
     n_orbits: int = 3  # number of orbits observed and phase-folded
     n_bins: int = 27  # bins per period; the width is DERIVED so it tiles exactly
