@@ -433,6 +433,8 @@ class ConstantBandAlbedo:
     """Fixed band-integrated albedo, independent of A_B."""
     A: float = 0.1
     def __call__(self, A_B): return self.A
+    @property
+    def label(self): return f"fixedA{self.A:g}"      # short tag for filenames and plot legends, e.g. 'fixedA0.1'
 
 
 @dataclass(frozen=True)
@@ -440,6 +442,8 @@ class ScaledBandAlbedo:
     """A = scale * A_B; scale=1 sets the band-integrated albedo equal to the Bond albedo."""
     scale: float = 1.0
     def __call__(self, A_B): return self.scale * A_B
+    @property
+    def label(self): return f"scaledA{self.scale:g}"   # short tag for filenames and plot legends, e.g. 'scaledA1'
 
 
 @dataclass

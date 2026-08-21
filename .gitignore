@@ -58,7 +58,7 @@ ENV/
 /Literature/
 /Hyperillumination/Plots/
 /SPIDERMAN_fixes/local_spiderman_fixes.md
-/Filters/raw Pandeira/
+/Filters/raw Pandeia/
 /Filters/raw SVO/
 *.throughput.dat
 /Hyperillumination/2026-07-26-Spiderman-Performance-Analysis.ipynb
@@ -68,3 +68,4 @@ ENV/
 /NASAExoplanetArchive/NASAExoArchive_*_aggregate.csv
 /NASAExoplanetArchive/pscomppars_*
 /Hyperillumination/Supplements/
+/HI PhaseCurve Fitting/dynesty_results/

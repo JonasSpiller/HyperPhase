@@ -1,6 +1,9 @@
 import numpy as np
 from dataclasses import dataclass
 import time
+import os
+import pickle
+from datetime import datetime
 import dynesty
 from dynesty.pool import Pool
 from joblib import Parallel, delayed
@@ -503,6 +506,7 @@ class SamplerConfig:
     maxcall: int = None
     checkpoint_file: str = None   # resume with run_nested_fit(..., resume=True)
     print_progress: bool = True
+    outfile: str = None           # pickle the finished NestedFit here; None -> not saved. {insolation_model}, {date} and {seed} are filled in, so ONE scfg can serve several models without them overwriting each other
 
 
 @dataclass
@@ -521,7 +525,7 @@ def run_status(res, scfg, stop_kwargs=None):
     if n_batches >= scfg.maxbatch: caps.append("maxbatch")
     stop = stopping_function(res, dict(stop_kwargs or {"pfrac": scfg.pfrac}), return_vals=True)[1][2]   # pfrac*target_ESS/ESS + (1-pfrac)*lnZerr/evid_thresh; dynesty stops at <= 1
     ok = bool(stop <= 1.)
-    return dict(converged=ok, status=("CONVERGED" if ok else f"NOT CONVERGED, ran out of {'+'.join(caps)}") + f" | stop {stop:.3f}, {n_batches}/{scfg.maxbatch} batches, ESS {get_neff_from_logwt(res.logwt):.0f}")
+    return dict(converged=ok, status=("CONVERGED" if ok else f"NOT CONVERGED, ran out of {'+'.join(caps)}") + f" | stop {stop:.3f}, {n_batches}/{scfg.maxbatch} batches, ESS {get_neff_from_logwt(res.logwt):.0f}") # ESS: Kish effective sample size of the importance-weighted samples
 
 
 def run_nested_fit(logl, pset, scfg=None, resume=False):
@@ -535,6 +539,12 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
     if tuple(pset.names) != tuple(logl.names): raise ValueError(f"pset names {pset.names} != logl names {logl.names}; theta columns would be scrambled")
     if not 0. <= scfg.pfrac <= 1.: raise ValueError(f"pfrac must be in [0, 1], got {scfg.pfrac}")
     if resume and not scfg.checkpoint_file: raise ValueError("resume=True needs scfg.checkpoint_file")
+
+    # Resolve the save path BEFORE sampling, so a bad directory fails in a second rather than after an hour of CPU
+    path = None
+    if scfg.outfile:
+        path = os.path.abspath(os.path.expanduser(scfg.outfile.format(insolation_model=logl.insolation_model, date=datetime.now().strftime("%Y-%m-%d"), seed=scfg.seed)))
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     stop_kwargs = {"pfrac": scfg.pfrac}   # run_nested resolves target_n_effective INTO this dict in place, so afterwards it is exactly the criterion that was applied
     rstate = np.random.default_rng(scfg.seed)
@@ -558,7 +568,12 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
     runtime = time.perf_counter() - t0
 
     meta = dict(insolation_model=logl.insolation_model, caches=logl.cache_used, fixed=dict(logl.fixed), seed=scfg.seed, runtime_s=runtime,
-                ncall=int(np.sum(res.ncall)), niter=int(res.niter), lnZ=float(res.logz[-1]), lnZ_err=float(res.logzerr[-1]), information=float(res.information[-1]), n_bins=int(logl.y.size), sigma_bin=float(np.mean(logl.sigma)))
+                ncall=int(np.sum(res.ncall)), niter=int(res.niter), lnZ=float(res.logz[-1]), lnZ_err=float(res.logzerr[-1]), information=float(res.information[-1]), n_bins=int(logl.y.size), sigma_bin=float(np.mean(logl.sigma)),
+                data=dict(t=logl.t.copy(), y_obs=logl.y.copy(), sigma=logl.sigma.copy()))   # the fit travels with its data, so a reloaded NestedFit can be re-plotted without re-running the notebook
+
+    # The geometry actually used: sampled, held fixed, or (the usual case) inherited from cfg.planet - an empty `fixed` on its own would not record which.
+    pl = logl.cfg.planet
+    meta["geometry"] = {k: ("sampled" if k in logl.names else float(logl.fixed.get(k, d))) for k, d in (("a_rs", pl.R / pl.r2), ("T_s", pl.T2_eff), ("rp_rs", pl.r1 / pl.r2))}
 
     meta.update(run_status(res, scfg, stop_kwargs))
     if scfg.print_progress:
@@ -566,4 +581,17 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
         print(f"   {meta['status']}")
     if not meta["converged"]: warnings.warn(f"{logl.insolation_model}: dynesty stopped WITHOUT meeting its stopping criterion -- {meta['status']}. Raise scfg.maxbatch, or relax the target with scfg.n_effective. lnZ and the posterior are still valid, just noisier than requested.", RuntimeWarning, stacklevel=2)
 
-    return NestedFit(results=res, pset=pset, scfg=scfg, meta=meta)
+    fit = NestedFit(results=res, pset=pset, scfg=scfg, meta=meta)
+    if path:
+        try:
+            with open(path, "wb") as f: pickle.dump(fit, f)
+            meta["file"] = path
+            if scfg.print_progress: print(f"   saved -> {path}")
+        except Exception as e:   # a failed save must never destroy an hour-long run
+            warnings.warn(f"could not save to {path}: {type(e).__name__}: {e}; the NestedFit is still returned", RuntimeWarning, stacklevel=2)
+    return fit
+
+
+def load_fit(path):
+    """Read back a NestedFit written by run_nested_fit (scfg.outfile). Unpickling needs this module importable, since pset/scfg/NestedFit are defined here."""
+    with open(os.path.expanduser(path), "rb") as f: return pickle.load(f)
