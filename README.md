@@ -20,8 +20,9 @@ depth of 142 ppm.
 - **Forward model** (`Utilities/`): a hyper-illumination reflected + thermal phase-curve
   model built on SPIDERMAN, with a custom insolation → temperature-map → `direct_T`
   pipeline (`hyperillumination_phasecurve_utils.py`), orbital helpers (`kepler_utils.py`),
-  and a fast split-evaluation `fast_lightcurve` (exact occultation + interpolated phase
-  modulation, ~5× faster at unchanged accuracy).
+  and a fast split-evaluation `fast_lightcurve` (interpolated phase modulation, exact
+  ingress/egress, totality skipped analytically — up to ~20× faster at bit-identical
+  accuracy).
 - **Bias analysis** (`simple_bias_analysis.py`, notebooks in `Hyperillumination/`): fit a *naive*
   point-source model to a hyper-illumination "truth" curve and measure the resulting bias
   in the recovered Bond albedo, mapped over `(a/R★, T_eff)` and `(a/R★, R_p/R★)`.

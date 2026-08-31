@@ -232,7 +232,7 @@ class GaussianLogL:
     names   : ordered tuple of SAMPLED parameter names.
     fixed   : {name: value} for supported parameters held fixed (e.g. dict(A_B=0.1)).
     bad_logl: returned for a non-finite model.
-    model_kw: forwarded to model_pcurve (n_t, n_layers, n_lo, n_la).
+    model_kw: forwarded to model_pcurve (n_t, n_layers, n_lo, n_la, spman_kw).
     """
 
     def __init__(self, cfg, data, insolation_model, names=("A_B", "offset"), fixed=None, bad_logl=-1e100, cache=True, **model_kw):
