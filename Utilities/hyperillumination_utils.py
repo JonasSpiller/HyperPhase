@@ -34,6 +34,7 @@ class PlanetParams:
     R:      float       # semi-major axis [consistent units]
     T2_eff: float       # stellar Teff [K]
     a_AU: float         # semi-major axis [AU] (for light travel time correction)
+    T14: float          # Transit Duration [h]
 
     @property
     def args(self):

@@ -505,12 +505,8 @@ def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_rs=None, n_t=N
     return refl * 1e6
 
 
-# Fast, stripped-down phase curve [ppm] for the fitting loop
-# refl_unit, insol: precomputed geometry-only pieces (reflected_unit / insolation_cache). Both are optional and purely a speed-up: passing them is bit-identical to letting them be rebuilt here.
-def model_pcurve(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_rs=None, n_t=None, n_layers=None, n_lo=300, n_la=150, refl_unit=None, insol=None):
-    pl = cfg.planet
-    n_t = 50 * cfg.n_bins if n_t is None else n_t
-
+# The sp.ModelParams that model_pcurve feeds to SPIDERMAN, factored out exactly like swept_planet so the OCCULTATION DEPTH can be taken at the fitted geometry with the existing occultation_depth(p, stellar_grid=cfg.stellar_grid) instead of duplicating this setup.
+def pcurve_params(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_rs=None, n_layers=None, n_lo=300, n_la=150, insol=None):
     # n_layers = 30-40 usually sufficient for insolation_model="hyperillum", insolation_model="naive" needs n_layers = 60-80
     if n_layers is None:
         if insolation_model == "hyperillum":
@@ -518,10 +514,9 @@ def model_pcurve(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_rs=None, n
         else:
             n_layers = 60
 
-    t_ = np.linspace(0., pl.period, int(n_t), endpoint=False)
     planet = swept_planet(cfg, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs)
 
-    # Thermal Part. insol=... reuses the A_B-independent insolation map, leaving only the exact T(A_B) = T(A_B=0)*(1-A_B)^(1/4) rescale (valid because insol depends on geometry alone).
+    # insol=... reuses the A_B-independent insolation map, leaving only the exact T(A_B) = T(A_B=0)*(1-A_B)^(1/4) rescale (valid because insol depends on geometry alone).
     lo, la, Tg = custom_temperature_grid(planet, u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B=A_B_, insol=insol)
     LO, LA = np.meshgrid(lo, la, indexing="ij")
     p = sp.ModelParams(brightness_model="direct_T", stellar_model="blackbody")
@@ -534,6 +529,20 @@ def model_pcurve(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_rs=None, n
     p.T_s, p.l1, p.l2 = planet.T2_eff, cfg.l1, cfg.l2
     p.grid = sp.format_grid(LO, LA, np.maximum(Tg, cfg.T_floor).T)
     p.filter, p.eclipse = cfg.filter_path, True
+    return p
+
+
+# Fast, stripped-down phase curve [ppm] for the fitting loop
+# refl_unit, insol: precomputed geometry-only pieces (reflected_unit / insolation_cache). Both are optional and purely a speed-up: passing them is bit-identical to letting them be rebuilt here.
+def model_pcurve(cfg, insolation_model, A_B_, a_rs=None, T_s=None, rp_rs=None, n_t=None, n_layers=None, n_lo=300, n_la=150, refl_unit=None, insol=None):
+    pl = cfg.planet
+    n_t = 50 * cfg.n_bins if n_t is None else n_t
+
+    t_ = np.linspace(0., pl.period, int(n_t), endpoint=False)
+    planet = swept_planet(cfg, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs)
+
+    # Thermal Part
+    p = pcurve_params(cfg, insolation_model, A_B_, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs, n_layers=n_layers, n_lo=n_lo, n_la=n_la, insol=insol)
     thermal = (fast_lightcurve(p, cfg.stellar_grid, t_, n_phase=24) - 1) * 1e6
 
     # Transit. Pure geometry: independent of insolation_model and A_B, so it cancels exactly in a truth - model residual.

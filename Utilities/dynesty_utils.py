@@ -8,7 +8,10 @@ import dynesty
 from dynesty.pool import Pool
 from joblib import Parallel, delayed
 import contextlib
-from hyperillumination_phasecurve_utils import model_pcurve, reflected_unit, insolation_cache  # forward model + its geometry-only caches
+from hyperillumination_phasecurve_utils import model_pcurve, reflected_unit, insolation_cache, pcurve_params, occultation_depth, custom_temperature_grid, swept_planet  # forward model, its geometry-only caches, and the pieces the derived quantities need
+import astro_utils   # T_bright
+from dynesty import utils as dyfunc
+from scipy.ndimage import gaussian_filter
 from simple_bias_analysis import binned
 from scipy.stats import norm, truncnorm
 import warnings
@@ -595,3 +598,288 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
 def load_fit(path):
     """Read back a NestedFit written by run_nested_fit (scfg.outfile). Unpickling needs this module importable, since pset/scfg/NestedFit are defined here."""
     with open(os.path.expanduser(path), "rb") as f: return pickle.load(f)
+
+
+###########################################################################################################################
+#####
+#####   Posterior post-processing
+#####
+###########################################################################################################################
+
+def equal_samples(fit, n=None, seed=0):
+    """Equal-weight posterior draws, shape (n, ndim), columns in fit.pset.names order. n=None -> all of them.
+    res.samples is NOT posterior-distributed (it is ~uniform in ln X); this is the weighted cloud turned into plain draws, so every downstream mean/quantile/histogram can ignore weights."""
+    rng = np.random.default_rng(seed)
+    s = fit.results.samples_equal(rstate=rng)
+    if n is None or n >= len(s): return s
+    return s[rng.choice(len(s), int(n), replace=False)]
+
+
+def posterior_summary(fit, truth=None, quantiles=(0.16, 0.5, 0.84), verbose=True):
+    """Weighted posterior summary of one fit: per-parameter median +/- 68%, mean +/- sd, and - with `truth` - the BIAS in units of sigma.
+
+    truth : {name: value}; sigma is the half-width of the 68% interval, so bias_sigma is directly "how many sigma off the injected value is the fit".
+    Returns dict(params={name: {...}}, corr=(ndim, ndim) correlation matrix, ess=effective sample size).
+    The correlation matrix is what tells you whether a nuisance parameter (the baseline offset) is absorbing the bias instead of A_B."""
+    res, names = fit.results, fit.pset.names
+    w = res.importance_weights()
+    mean, cov = dyfunc.mean_and_cov(res.samples, w)
+    sd = np.sqrt(np.diag(cov))
+
+    params = {}
+    for i, nm in enumerate(names):
+        lo, med, hi = dyfunc.quantile(res.samples[:, i], list(quantiles), weights=w)
+        d = dict(med=float(med), lo=float(lo), hi=float(hi), minus=float(med - lo), plus=float(hi - med), mean=float(mean[i]), sd=float(sd[i]))
+        if truth is not None and nm in truth:
+            d["truth"] = float(truth[nm])
+            d["bias"] = d["med"] - d["truth"]
+            d["bias_sigma"] = d["bias"] / (0.5 * (d["hi"] - d["lo"]))
+        params[nm] = d
+
+    out = dict(params=params, corr=cov / np.outer(sd, sd), ess=float(get_neff_from_logwt(res.logwt)))
+    if verbose:
+        print(f"{fit.meta['insolation_model']}   ESS {out['ess']:.0f}, information {fit.meta['information']:.2f} nats")
+        for nm, d in params.items():
+            b = f"   truth {d['truth']:g}, bias {d['bias']:+.4f} = {d['bias_sigma']:+.2f} sigma" if "truth" in d else ""
+            print(f"   {nm:8s} = {d['med']:9.4f} +{d['plus']:.4f} -{d['minus']:.4f}{b}")
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                print(f"   corr({names[i]}, {names[j]}) = {out['corr'][i, j]:+.3f}")
+    return out
+
+
+def evidence_jitter(fit, K=200, seed=0):
+    """K realisations of lnZ from dynesty's own statistical uncertainty: jitter_run resamples the prior-volume shrinkage t_i ~ Beta(N, 1) that nested sampling only knows statistically.
+    std of the output should reproduce res.logzerr[-1]; the point of having the full sample is that a DIFFERENCE of two lnZ can then be quoted without assuming either is Gaussian."""
+    rng = np.random.default_rng(seed)
+    return np.array([float(dyfunc.jitter_run(fit.results, rstate=rng).logz[-1]) for _ in range(int(K))])
+
+
+def bayes_factor(fits, num="hyperillum", den="naive", K=200, seed=0, verbose=True):
+    """ln B = lnZ[num] - lnZ[den] with both error estimates: dynesty's analytic logzerr added in quadrature, and the spread of K jittered realisations.
+    The two runs are independent, so the jittered differences are simply paired draw by draw. Returns dict(lnB, err_analytic, err_jitter, samples)."""
+    if num not in fits or den not in fits: raise ValueError(f"fits has {tuple(fits)}, need {num!r} and {den!r}")
+    lnB = fits[num].meta["lnZ"] - fits[den].meta["lnZ"]
+    err_a = float(np.hypot(fits[num].meta["lnZ_err"], fits[den].meta["lnZ_err"]))
+    s = evidence_jitter(fits[num], K, seed) - evidence_jitter(fits[den], K, seed + 1)
+    out = dict(lnB=float(lnB), err_analytic=err_a, err_jitter=float(np.std(s, ddof=1)), samples=s)
+    if verbose:
+        print(f"ln B ({num} vs {den}) = {lnB:+.3f} +/- {err_a:.3f} (analytic) +/- {out['err_jitter']:.3f} (jitter, K={K})  ->  B = {np.exp(lnB):.3g}")
+        print(f"P(ln B > 0) = {np.mean(s > 0.):.3f}   Jeffreys: |lnB| < 1 inconclusive, 1-2.5 substantial, 2.5-5 strong, > 5 decisive")
+    return out
+
+
+def model_samples(logl, thetas, n_jobs=-1):
+    """Binned model curves [ppm] for a stack of thetas -> (n_draws, n_bins). One forward model per row, process-parallel via _map."""
+    thetas = np.atleast_2d(np.asarray(thetas, float))
+    return np.asarray(_map(logl.model, list(thetas), n_jobs), float)
+
+
+def derived_samples(logl, thetas, n_jobs=-1):
+    """Posterior draws pushed through to physical quantities -> {key: array of length n_draws}.
+
+    T_sub / T_term / T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point. Under "naive" the last two are the T=0 nightside (only the T_floor of the SPIDERMAN grid keeps it finite); under "hyperillum" the extended star pushes real flux past 90 deg, which is exactly the physical difference the Bayes factor is measuring.
+    depth_th / depth_refl / depth : occultation depth [ppm], thermal / reflected / total. Feed depth_th to brightness_temperature().
+
+    Temperatures are free (the cached insolation map plus the exact (1-A_B)^(1/4) rescale); the depth costs two SPIDERMAN lightcurve() calls per draw, i.e. about one forward model."""
+    cfg, m = logl.cfg, logl.insolation_model
+    n_lo, n_la = logl.model_kw.get("n_lo", 300), logl.model_kw.get("n_la", 150)
+
+    def _one(theta):
+        p_ = logl.unpack(theta)
+        geom = {k: p_[k] for k in _GEOMETRY if k in p_}
+        A_B_ = p_["A_B"]
+
+        lo, la, Tg = custom_temperature_grid(swept_planet(cfg, **geom), u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=m, A_B=A_B_, insol=logl.insol)
+        eq = int(np.argmin(np.abs(la)))   # equator row; Tg has shape (n_la, n_lo)
+        T = list(np.interp([0., 90., 180.], lo, Tg[eq]))   # interpolated, not nearest-cell: T falls steeply through the terminator, so the nearest grid longitude is off by hundreds of K there
+
+        pp = pcurve_params(cfg, m, A_B_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=logl.insol)
+        d_th = float(occultation_depth(pp, stellar_grid=cfg.stellar_grid))
+
+        # Reflected part: linear in A, and its maximum over the orbit is the last point before ingress - within ~1% of the full-phase value, since reflected_unit itself carries the occultation.
+        ru = logl.refl_unit if logl.refl_unit is not None else (reflected_unit(cfg, m, n_t=logl.model_kw.get("n_t"), **geom) if cfg.reflected else None)
+        d_re = float(cfg.A_(A_B_) * np.max(ru)) if ru is not None else 0.
+        return T + [d_th, d_re]
+
+    thetas = np.atleast_2d(np.asarray(thetas, float))
+    a = np.asarray(_map(_one, list(thetas), n_jobs), float)
+    out = {k: a[:, i] for i, k in enumerate(("T_sub", "T_term", "T_anti", "depth_th", "depth_refl"))}
+    out["depth"] = out["depth_th"] + out["depth_refl"]
+    out["A_B"] = thetas[:, logl.names.index("A_B")] if "A_B" in logl.names else np.full(len(thetas), logl.fixed["A_B"])
+    return out
+
+
+def brightness_temperature(depth_th, cfg, quantiles=(0.16, 0.5, 0.84)):
+    """Dayside brightness temperature [K] at the given quantiles of the THERMAL occultation depth.
+    T_bright is monotone in the depth, so transforming the quantiles is exact - and it keeps the brentq/band_avg_planck cost at three calls instead of one per draw."""
+    q = np.quantile(np.asarray(depth_th, float), list(quantiles))
+    return np.array([astro_utils.T_bright(d, cfg.planet, (cfg.l1, cfg.l2), cfg.filter_path) for d in q])
+
+
+###########################################################################################################################
+#####
+#####   Posterior visualization
+#####
+###########################################################################################################################
+
+_COLOR = {"naive": "C0", "hyperillum": "C3"}
+
+
+def _density_levels(x, y, rng=None, bins=60, smooth=1.0, levels=(0.68, 0.95)):
+    """2-D density of equal-weight draws plus the contour VALUES that enclose the requested posterior mass.
+    Levels are found by sorting the histogram cells by height and walking down until the cumulative mass is reached - the usual credible-region construction, not a Gaussian sigma."""
+    H, xe, ye = np.histogram2d(x, y, bins=bins, range=rng)
+    if smooth: H = gaussian_filter(H, smooth)
+    H /= H.sum()
+    flat = np.sort(H.ravel())[::-1]
+    cum = np.cumsum(flat)
+    v = sorted(float(flat[min(int(np.searchsorted(cum, l)), len(flat) - 1)]) for l in levels)
+    v = sorted(set(v))   # coarse bins can make two mass levels land in the same cell; contour() needs strictly increasing levels
+    return 0.5 * (xe[1:] + xe[:-1]), 0.5 * (ye[1:] + ye[:-1]), H.T, v
+
+
+def plot_posterior_overlay(fits, x, y, truth=None, profile=None, n=None, bins=60, smooth=1.0, colors=None, figsize=(6.4, 6.4), seed=0):
+    """Both insolation models' 2-D posterior on ONE pair of axes, with the 1-D marginals on the sides. This is the figure that shows the bias instead of tabulating it.
+
+    fits    : {name: NestedFit}, same parameters and same data
+    x, y    : parameter names (must be sampled in every fit)
+    truth   : {name: value} - the injected values
+    profile : optional {name: (x_vals, y_vals, lnL)} from logl_grid, drawn as DASHED contours at the 2-parameter 1/2/3 sigma levels. Where these differ from the filled posterior contours you are seeing the prior volume (Occam) at work, since the likelihood map carries no prior weighting.
+    n       : equal-weight draws per model (None -> all)"""
+    colors = colors or _COLOR
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(2, 2, width_ratios=(4, 1), height_ratios=(1, 4), wspace=0.05, hspace=0.05)
+    ax = fig.add_subplot(gs[1, 0]); axx = fig.add_subplot(gs[0, 0], sharex=ax); axy = fig.add_subplot(gs[1, 1], sharey=ax)
+    axx.tick_params(labelbottom=False); axy.tick_params(labelleft=False)
+
+    S = {name: equal_samples(f, n, seed) for name, f in fits.items()}
+    ix = {name: f.pset.names.index(x) for name, f in fits.items()}
+    iy = {name: f.pset.names.index(y) for name, f in fits.items()}
+    xs = np.concatenate([S[k][:, ix[k]] for k in S]); ys = np.concatenate([S[k][:, iy[k]] for k in S])
+    rng = [[xs.min(), xs.max()], [ys.min(), ys.max()]]   # shared range, so the two densities are directly comparable
+
+    for name, s in S.items():
+        c = colors.get(name, "k")
+        xc, yc, H, lv = _density_levels(s[:, ix[name]], s[:, iy[name]], rng=rng, bins=bins, smooth=smooth)
+        ax.contourf(xc, yc, H, levels=lv + [max(H.max(), lv[-1] * 1.001)], colors=c, alpha=0.25)
+        ax.contour(xc, yc, H, levels=lv, colors=c, linewidths=1.2)
+        ax.plot([], [], color=c, lw=1.2, label=name)
+        axx.hist(s[:, ix[name]], bins=bins, range=rng[0], density=True, histtype="step", color=c, lw=1.3)
+        axy.hist(s[:, iy[name]], bins=bins, range=rng[1], density=True, histtype="step", color=c, lw=1.3, orientation="horizontal")
+
+    if profile is not None:
+        for name, (xv, yv, lnL) in profile.items():
+            ax.contour(xv, yv, lnL - lnL.max(), levels=[-5.91, -3.09, -1.15], colors=colors.get(name, "k"), linewidths=0.8, linestyles=":")
+
+    if truth is not None:
+        if x in truth: ax.axvline(truth[x], color="0.4", lw=1.0, ls="--"); axx.axvline(truth[x], color="0.4", lw=1.0, ls="--")
+        if y in truth: ax.axhline(truth[y], color="0.4", lw=1.0, ls="--"); axy.axhline(truth[y], color="0.4", lw=1.0, ls="--")
+        if x in truth and y in truth: ax.plot(truth[x], truth[y], "*", ms=13, mfc="#0cff0c", mec="k", mew=0.8, label="injected")
+
+    lab = next(iter(fits.values())).pset
+    ax.set_xlabel(dict(zip(lab.names, lab.labels))[x]); ax.set_ylabel(dict(zip(lab.names, lab.labels))[y])
+    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    axx.set_yticks([]); axy.set_xticks([])
+    return fig, ax
+
+
+def plot_bias(fits, truth, colors=None, figsize=None):
+    """Median +/- 68% per model against the injected value, one panel per parameter, annotated with the bias in sigma. The compact version of posterior_summary()."""
+    colors = colors or _COLOR
+    names = next(iter(fits.values())).pset.names
+    labels = dict(zip(names, next(iter(fits.values())).pset.labels))
+    fig, axes = plt.subplots(1, len(names), figsize=figsize or (4.2 * len(names), 2.4))
+    axes = np.atleast_1d(axes)
+
+    for ax, nm in zip(axes, names):
+        for k, (name, f) in enumerate(fits.items()):
+            d = posterior_summary(f, truth, verbose=False)["params"][nm]
+            ax.errorbar(d["med"], k, xerr=[[d["minus"]], [d["plus"]]], fmt="o", ms=6, color=colors.get(name, "k"), capsize=3, elinewidth=1.4)
+            if "bias_sigma" in d: ax.annotate(f"{d['bias_sigma']:+.2f}$\\sigma$", (d["med"], k), textcoords="offset points", xytext=(0, 9), ha="center", fontsize=8)
+        if nm in truth: ax.axvline(truth[nm], color="0.4", lw=1.0, ls="--")
+        ax.set_yticks(range(len(fits))); ax.set_yticklabels(list(fits)); ax.set_ylim(-0.6, len(fits) - 0.2)
+        ax.set_xlabel(labels[nm])
+    fig.tight_layout()
+    return fig, axes
+
+
+def plot_evidence_jitter(bf, figsize=(5.2, 3.0), bins=40):
+    """Distribution of ln B over dynesty's jittered realisations (output of bayes_factor). The width is the sampling uncertainty on the Bayes factor without assuming either lnZ is Gaussian."""
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.hist(bf["samples"], bins=bins, density=True, histtype="stepfilled", color="0.75", edgecolor="0.35")
+    ax.axvline(bf["lnB"], color="k", lw=1.4, label=f"$\\ln B$ = {bf['lnB']:+.2f}")
+    ax.axvline(0., color="C3", lw=1.0, ls="--")
+    for d in (1., 2.5, 5.): ax.axvline(d, color="0.85", lw=0.7, ls=":")   # Jeffreys thresholds
+    ax.set_xlabel(r"$\ln B$ (jittered)"); ax.set_ylabel("density"); ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    return fig, ax
+
+
+def plot_posterior_predictive(logls, fits, n=200, colors=None, seed=0, n_jobs=-1, figsize=(8.5, 8.0), levels=(68., 95.)):
+    """Posterior predictive check + where in orbital phase the two models actually differ.
+
+    Panel 1: data with each model's median curve and its 68/95% posterior band.
+    Panel 2: (data - median model) / sigma per model.
+    Panel 3: the difference of the two median curves [ppm] against +/- sigma_bin, and the per-bin delta chi2 between the two BEST-FIT (max-lnL) models as bars. Those bars sum to 2 * delta lnL_max, so they attribute the evidence to specific orbital phases.
+
+    n : posterior draws per model (n forward models per model)."""
+    colors = colors or _COLOR
+    names = list(fits)
+    f0 = fits[names[0]]
+    t = f0.meta["data"]["t"]; y = f0.meta["data"]["y_obs"]; s = f0.meta["data"]["sigma"]
+    ph = t / logls[names[0]].cfg.planet.period
+
+    fig, (ax, axr, axd) = plt.subplots(3, 1, figsize=figsize, sharex=True, gridspec_kw=dict(height_ratios=[3, 1.3, 1.6], hspace=0.07))
+    ax.errorbar(ph, y, yerr=s, fmt="o", ms=4, color="k", capsize=2, elinewidth=1., zorder=5, label="data")
+
+    med, best = {}, {}
+    mk = ("o", "s", "^", "v")   # the two residual sets sit on top of each other when the models fit almost equally well
+    for k, name in enumerate(names):
+        L, f = logls[name], fits[name]
+        curves = model_samples(L, equal_samples(f, n, seed), n_jobs=n_jobs)
+        lo1, m, hi1 = np.percentile(curves, [50 - levels[0] / 2, 50, 50 + levels[0] / 2], axis=0)
+        lo2, hi2 = np.percentile(curves, [50 - levels[1] / 2, 50 + levels[1] / 2], axis=0)
+        med[name] = m
+        best[name] = L.model(f.results.samples[int(np.argmax(f.results.logl))])
+        c = colors.get(name, "k")
+        ax.fill_between(ph, lo2, hi2, color=c, alpha=0.15, lw=0)
+        ax.fill_between(ph, lo1, hi1, color=c, alpha=0.30, lw=0)
+        ax.plot(ph, m, color=c, lw=1.5, label=f"{name} (median of {n} draws)")
+        axr.plot(ph, (y - m) / s, mk[k % len(mk)], ms=4, mfc="none" if k else c, color=c)
+
+    ax.set_ylabel("$F_p/F_\\star$ [ppm]"); ax.legend(frameon=False, fontsize=8); ax.margins(x=0.01)
+    for d in (-1., 1.): axr.axhline(d, color="0.85", lw=0.6, ls=":")
+    axr.axhline(0., color="0.7", lw=0.8); axr.set_ylabel("resid / $\\sigma$"); axr.set_ylim(-3.5, 3.5)
+
+    if len(names) == 2:
+        a, b = names[0], names[1]
+        axd.axhspan(-s.mean(), s.mean(), color="0.9", lw=0, label="$\\pm\\sigma_{bin}$")
+        axd.axhline(0., color="0.7", lw=0.8)
+        axd.plot(ph, med[b] - med[a], color="0.2", lw=1.5, label=f"median {b} - {a} [ppm]")
+        dchi2 = ((y - best[a]) ** 2 - (y - best[b]) ** 2) / s ** 2   # > 0 where b fits better; sums to 2*dlnL_max
+        ax2 = axd.twinx()
+        ax2.bar(ph, dchi2, width=0.7 / len(ph), color="C2", alpha=0.45, zorder=0)
+        ax2.set_ylabel(f"$\\Delta\\chi^2$ per bin (sum {dchi2.sum():+.2f})", fontsize=8, color="C2")
+        ax2.tick_params(axis="y", labelcolor="C2", labelsize=8)
+        axd.legend(frameon=False, fontsize=8, loc="upper left")
+    axd.set_xlabel("orbital phase"); axd.set_ylabel("[ppm]")
+    return fig, (ax, axr, axd)
+
+
+def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=None, bins=50, figsize=None):
+    """Overlaid posteriors of the derived physical quantities from derived_samples().
+    derived : {model_name: dict from derived_samples}
+    truth   : optional {model_name: dict} (e.g. the same call evaluated at the injected theta) - drawn as vertical lines."""
+    colors = colors or _COLOR
+    unit = dict(T_sub="[K]", T_term="[K]", T_anti="[K]", depth="[ppm]", depth_th="[ppm]", depth_refl="[ppm]", A_B="")
+    fig, axes = plt.subplots(1, len(keys), figsize=figsize or (3.6 * len(keys), 2.7))
+    axes = np.atleast_1d(axes)
+    for ax, k in zip(axes, keys):
+        for name, d in derived.items():
+            ax.hist(d[k], bins=bins, density=True, histtype="step", lw=1.4, color=colors.get(name, "k"), label=name)
+            if truth and name in truth: ax.axvline(np.median(truth[name][k]), color=colors.get(name, "k"), lw=1.0, ls="--")
+        ax.set_xlabel(f"{k} {unit.get(k, '')}"); ax.set_yticks([])
+    axes[0].legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    return fig, axes

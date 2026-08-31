@@ -68,4 +68,5 @@ ENV/
 /NASAExoplanetArchive/NASAExoArchive_*_aggregate.csv
 /NASAExoplanetArchive/pscomppars_*
 /Hyperillumination/Supplements/
+/Pandexo/*
 /HI PhaseCurve Fitting/dynesty_results/

@@ -84,6 +84,8 @@ SHORT_COLUMNS = [
     "e_fitted",                 # True only if the eccentricity was actually fit
     "st_teff",                  # stellar effective temperature [K]
     "st_rad",                   # stellar radius [R_sun]
+    "st_met",                   # metallicity [dex]
+    "st_logg",                  # surface gravity
     "sy_jmag",                  # J magnitude, drives TSM and the WFC3 noise model
     "sy_kmag",                  # K magnitude, drives ESM
     "sy_vmag",                  # V magnitude, optical noise estimate
