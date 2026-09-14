@@ -96,27 +96,70 @@ def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=1e-3, temp_bias=False, b
 def _fmt_esm(esm):
     return f"{esm:.1f}" if np.isfinite(esm) else "n/a"
 
-# ESM of a single archive planet by name, for targets drawn outside overlay_planets (e.g. the K2-141b reference marker).
+
+# Loose name matching ("K2-141b" == "K2-141 b" == "k2_141_b"), the same normalisation HItargets_utils uses to look a planet up,
+# so a PlanetParams.name can be matched against the archive's pl_name whichever spelling it carries.
+def _norm_name(name):
+    return str(name).lower().replace(" ", "").replace("-", "").replace("_", "")
+
+
+# ESM of a single archive planet by name, for a target drawn outside overlay_planets (the notebook's own planet).
 def planet_esm(AGG, pl_name):
-    row = pd.read_csv(AGG).drop_duplicates("pl_name").pipe(lambda d: d[d.pl_name == pl_name])
+    d = pd.read_csv(AGG).drop_duplicates("pl_name")
+    row = d[d.pl_name.map(_norm_name) == _norm_name(pl_name)]
     return float(row.ESM.iloc[0]) if len(row) else np.nan
 
 
-def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10, max_rade=1.6, exclude="K2-141 b"):
+# Where the notebook's own planet sits on a bias map: x is always a/Rs, the key names the archive column on the y axis.
+# Everything is read off PlanetParams (a/Rs = R/r2, Rp/Rs = r1/r2, Teff = T2_eff), so swapping `planet` at the top of the
+# notebook moves the marker - no target is hard-coded anywhere.
+_TARGET_Y = {"a_over_r2": lambda p: p.R / p.r2,
+             "pl_ratror": lambda p: p.r1 / p.r2,
+             "st_teff":   lambda p: p.T2_eff}
+
+
+def target_marker(ax, planet, ykey, AGG=None, color="#0cff0c", ms=18, **kw):
+    """The notebook's planet drawn on a bias map as the green star, labelled with its own name, a/Rs and (with AGG) ESM."""
+    if ykey not in _TARGET_Y: raise ValueError(f"no target coordinate for ykey={ykey!r}; known: {tuple(_TARGET_Y)}")
+    x, y = planet.R / planet.r2, _TARGET_Y[ykey](planet)
+    esm = f", ESM={_fmt_esm(planet_esm(AGG, planet.name))}" if AGG is not None else ""
+    return ax.plot(x, y, "*", color=color, ms=ms, mec="k", zorder=6,
+                   label=f"{planet.name}  ($a/R_\\star$={x:.2f}{esm})", **kw)
+
+
+def map_grid(lo, hi, n, include=None, pad=0.1):
+    """Linear grid over [lo, hi], widened (by `pad` of the original span) so that `include` - typically the target's own
+    a/Rs or Rp/Rs - falls inside it. A planet outside the default box would otherwise simply be missing from its own map."""
+    if include is not None and np.isfinite(include):
+        span = hi - lo
+        lo, hi = min(lo, include - pad * span), max(hi, include + pad * span)
+    return np.linspace(lo, hi, n)
+
+
+def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10, max_rade=1.7, target=None, exclude=None, mark_target=True):
     """Overplot archive planets that fall inside the current bias map (x = a/Rs = `a_over_r2`, y = `ykey`).
-    Restricted to rocky planets, Rp < `max_rade` Earth radii (default 1.6, Rogers 2015: above this most planets are not rocky).
+    Restricted to rocky planets, Rp < `max_rade` Earth radii (default 1.7: above this most planets are not rocky).
     The cut must be on the ABSOLUTE radius `pl_rade`, not on Rp/Rs: a giant around an evolved star has a small ratio
     (e.g. Kepler-91 b, Rp/Rs = 0.022 but 15.3 R_Earth) and would otherwise sneak into the map.
     The `n_highlight` planets with the smallest a/Rs get individual colours + legend labels (name, a/Rs, ESM); the rest are faint background dots.
+
+    target      : the notebook's PlanetParams. It is dropped from the archive scatter (matched on its name) and, unless
+                  `mark_target=False`, drawn as the green star by target_marker - so the highlighted planet follows
+                  whatever `planet` the notebook defines instead of being fixed to one target.
+    exclude     : extra name(s) to drop from the scatter; loose spellings are fine. Defaults to the target's own name.
     """
 
     _exo = pd.read_csv(AGG)
+    # names drawn separately (the target) or deliberately suppressed, matched loosely so 'K2-141b' also hits 'K2-141 b'
+    drop = [exclude] if isinstance(exclude, str) else list(exclude or [])
+    if target is not None: drop.append(target.name)
+    keep = ~_exo.pl_name.map(_norm_name).isin({_norm_name(n) for n in drop})
+
     # physical ROCKY planets only: finite a/Rs, T_eff, Rp/Rs and Rp/Rs < 1, plus a known radius below the rocky threshold.
-    # K2-141b is drawn separately.
     _phys = _exo[np.isfinite(_exo.a_over_r2) & np.isfinite(_exo.st_teff) & np.isfinite(_exo.pl_ratror)
                  & (_exo.pl_ratror > 0) & (_exo.pl_ratror < 1)
                  & np.isfinite(_exo.pl_rade) & (_exo.pl_rade < max_rade)   # rocky cut (NaN radius -> dropped, cannot be confirmed rocky)
-                 & (_exo.pl_name != exclude)].drop_duplicates("pl_name").copy()
+                 & keep].drop_duplicates("pl_name").copy()
 
     x = "a_over_r2"
     m = _phys[(_phys[x] >= a_rs_lim[0]) & (_phys[x] <= a_rs_lim[1])
@@ -128,4 +171,5 @@ def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10, ma
     for color, (_, r) in zip(plt.cm.tab10(np.arange(n_highlight)), top.iterrows()):
         ax.scatter(r[x], r[ykey], s=60, color=color, edgecolor="w", linewidths=.7, zorder=5,
                    label=f"{r.pl_name}  ($a/R_\\star$={r[x]:.2f}, ESM={_fmt_esm(r.get('ESM', np.nan))})")
+    if target is not None and mark_target: target_marker(ax, target, ykey, AGG)
     return m
