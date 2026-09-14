@@ -12,7 +12,7 @@ from hyperillumination_phasecurve_utils import model_pcurve, reflected_unit, ins
 import astro_utils   # T_bright
 from dynesty import utils as dyfunc
 from scipy.ndimage import gaussian_filter
-from simple_bias_analysis import binned
+from simple_bias_analysis import binned, fit_naive, temperature_bias
 from scipy.stats import norm, truncnorm
 import warnings
 from dynesty.dynamicsampler import stopping_function   # re-evaluated post-run to tell convergence from budget truncation
@@ -302,7 +302,7 @@ class GaussianLogL:
         return p
 
     # -------------------------------------------------------------------------------------------
-    #  forward model
+    #  forward illumination model
     # -------------------------------------------------------------------------------------------
     def curve(self, p):
         """Binned model [ppm] for a parameter dict, WITHOUT the baseline offset. Split out from
@@ -312,7 +312,7 @@ class GaussianLogL:
         return binned(self.cfg, y)
 
     def model(self, theta):
-        """Binned model [ppm] on the data bins, offset applied. Use this for overlay plots."""
+        """Binned model [ppm] on the data bins, offset applied. Used for overlay plots."""
         p = self.unpack(theta)
         return self.curve(p) + p.get("offset", 0.)
 
@@ -499,7 +499,7 @@ class SamplerConfig:
     nlive: int = 500              # nlive (static) / nlive_init (dynamic)
     nlive_batch: int = 250        # dynamic only
     maxbatch: int = 15            # dynamic only
-    dlogz: float = 0.01      # dlogz (static) / dlogz_init (dynamic)
+    dlogz: float = 0.05      # dlogz (static) / dlogz_init (dynamic)
     n_effective: int = None       # dynamic only; None -> target_n_effective = max(ndim², 10000) = 10000
     bound: str = "multi"
     sample: str = "auto"          # 'auto' -> 'unif' for ndim<10, 'rslice' for 10-20
@@ -515,8 +515,8 @@ class SamplerConfig:
 @dataclass
 class NestedFit: # output of fitting
     results: object  # the dynesty Results object
-    pset: ParameterSet
-    scfg: SamplerConfig
+    pset: ParameterSet # the priors
+    scfg: SamplerConfig # dynesty params
     meta: dict  # insolation_model, caches, seed, runtime, ncall, lnZ - everything needed to reproduce
 
 
@@ -617,25 +617,25 @@ def equal_samples(fit, n=None, seed=0):
 
 def posterior_summary(fit, truth=None, quantiles=(0.16, 0.5, 0.84), verbose=True):
     """Weighted posterior summary of one fit: per-parameter median +/- 68%, mean +/- sd, and - with `truth` - the BIAS in units of sigma.
-
-    truth : {name: value}; sigma is the half-width of the 68% interval, so bias_sigma is directly "how many sigma off the injected value is the fit".
     Returns dict(params={name: {...}}, corr=(ndim, ndim) correlation matrix, ess=effective sample size).
-    The correlation matrix is what tells you whether a nuisance parameter (the baseline offset) is absorbing the bias instead of A_B."""
+    """
     res, names = fit.results, fit.pset.names
-    w = res.importance_weights()
+    w = res.importance_weights() # res.samples is not a set of posterior samples, they need to be weighted
     mean, cov = dyfunc.mean_and_cov(res.samples, w)
     sd = np.sqrt(np.diag(cov))
 
     params = {}
     for i, nm in enumerate(names):
-        lo, med, hi = dyfunc.quantile(res.samples[:, i], list(quantiles), weights=w)
+        lo, med, hi = dyfunc.quantile(res.samples[:, i], list(quantiles), weights=w) # get 1-sigma bounds for two one-sided error bars
         d = dict(med=float(med), lo=float(lo), hi=float(hi), minus=float(med - lo), plus=float(hi - med), mean=float(mean[i]), sd=float(sd[i]))
         if truth is not None and nm in truth:
             d["truth"] = float(truth[nm])
-            d["bias"] = d["med"] - d["truth"]
-            d["bias_sigma"] = d["bias"] / (0.5 * (d["hi"] - d["lo"]))
+            d["bias"] = d["med"] - d["truth"] # deviation of true parameter value to retrieved parameter value (mean of posterior)
+            d["bias_sigma"] = d["bias"] / (0.5 * (d["hi"] - d["lo"])) # bias in units of bias error/ sigmas
         params[nm] = d
 
+    # corr: correlation matrix of parameter posteriors (corr_ij = cov_ij / sigma_i*sigma_j)
+    # ess: Kish effective sample size (how many independent draws the weighted cloud is worth) -> sets the MC noise
     out = dict(params=params, corr=cov / np.outer(sd, sd), ess=float(get_neff_from_logwt(res.logwt)))
     if verbose:
         print(f"{fit.meta['insolation_model']}   ESS {out['ess']:.0f}, information {fit.meta['information']:.2f} nats")
@@ -654,25 +654,18 @@ def evidence_jitter(fit, K=200, seed=0):
     rng = np.random.default_rng(seed)
     return np.array([float(dyfunc.jitter_run(fit.results, rstate=rng).logz[-1]) for _ in range(int(K))])
 
-
 def bayes_factor(fits, num="hyperillum", den="naive", K=200, seed=0, verbose=True):
     """ln B = lnZ[num] - lnZ[den] with both error estimates: dynesty's analytic logzerr added in quadrature, and the spread of K jittered realisations.
     The two runs are independent, so the jittered differences are simply paired draw by draw. Returns dict(lnB, err_analytic, err_jitter, samples)."""
     if num not in fits or den not in fits: raise ValueError(f"fits has {tuple(fits)}, need {num!r} and {den!r}")
     lnB = fits[num].meta["lnZ"] - fits[den].meta["lnZ"]
     err_a = float(np.hypot(fits[num].meta["lnZ_err"], fits[den].meta["lnZ_err"]))
-    s = evidence_jitter(fits[num], K, seed) - evidence_jitter(fits[den], K, seed + 1)
+    s = evidence_jitter(fits[num], K, seed) - evidence_jitter(fits[den], K, seed + 1) # get draws of actual random realisation of dX_i (dynesty error in lnZ)
     out = dict(lnB=float(lnB), err_analytic=err_a, err_jitter=float(np.std(s, ddof=1)), samples=s)
     if verbose:
         print(f"ln B ({num} vs {den}) = {lnB:+.3f} +/- {err_a:.3f} (analytic) +/- {out['err_jitter']:.3f} (jitter, K={K})  ->  B = {np.exp(lnB):.3g}")
-        print(f"P(ln B > 0) = {np.mean(s > 0.):.3f}   Jeffreys: |lnB| < 1 inconclusive, 1-2.5 substantial, 2.5-5 strong, > 5 decisive")
+        print(f"P(sign of ln B secure) = {np.mean(s > 0.):.3f}  [sampler noise only, NOT a model probability]")
     return out
-
-
-def model_samples(logl, thetas, n_jobs=-1):
-    """Binned model curves [ppm] for a stack of thetas -> (n_draws, n_bins). One forward model per row, process-parallel via _map."""
-    thetas = np.atleast_2d(np.asarray(thetas, float))
-    return np.asarray(_map(logl.model, list(thetas), n_jobs), float)
 
 
 def derived_samples(logl, thetas, n_jobs=-1):
@@ -680,8 +673,7 @@ def derived_samples(logl, thetas, n_jobs=-1):
 
     T_sub / T_term / T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point. Under "naive" the last two are the T=0 nightside (only the T_floor of the SPIDERMAN grid keeps it finite); under "hyperillum" the extended star pushes real flux past 90 deg, which is exactly the physical difference the Bayes factor is measuring.
     depth_th / depth_refl / depth : occultation depth [ppm], thermal / reflected / total. Feed depth_th to brightness_temperature().
-
-    Temperatures are free (the cached insolation map plus the exact (1-A_B)^(1/4) rescale); the depth costs two SPIDERMAN lightcurve() calls per draw, i.e. about one forward model."""
+    """
     cfg, m = logl.cfg, logl.insolation_model
     n_lo, n_la = logl.model_kw.get("n_lo", 300), logl.model_kw.get("n_la", 150)
 
@@ -816,18 +808,25 @@ def plot_evidence_jitter(bf, figsize=(5.2, 3.0), bins=40):
     return fig, ax
 
 
-def plot_posterior_predictive(logls, fits, n=200, colors=None, seed=0, n_jobs=-1, figsize=(8.5, 8.0), levels=(68., 95.)):
+def model_samples(logl, thetas, n_jobs=-1):
+    """Binned model curves [ppm] for a stack of thetas -> (n_draws, n_bins). One forward model per row, process-parallel via _map."""
+    thetas = np.atleast_2d(np.asarray(thetas, float))
+    return np.asarray(_map(logl.model, list(thetas), n_jobs), float)
+
+def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200, colors=None, seed=0, n_jobs=-1, figsize=(8.5, 8.0), levels=(68., 95.)):
     """Posterior predictive check + where in orbital phase the two models actually differ.
 
     Panel 1: data with each model's median curve and its 68/95% posterior band.
     Panel 2: (data - median model) / sigma per model.
     Panel 3: the difference of the two median curves [ppm] against +/- sigma_bin, and the per-bin delta chi2 between the two BEST-FIT (max-lnL) models as bars. Those bars sum to 2 * delta lnL_max, so they attribute the evidence to specific orbital phases.
 
-    n : posterior draws per model (n forward models per model)."""
+    num / den : which model is which in panel 3 - both the curve and the bars are num - den, same convention as bayes_factor(). Panel 3 previously took them from the order of `fits`, which is silent and easy to get backwards.
+    n         : posterior draws per model (n forward models per model)."""
     colors = colors or _COLOR
     names = list(fits)
     f0 = fits[names[0]]
-    t = f0.meta["data"]["t"]; y = f0.meta["data"]["y_obs"]; s = f0.meta["data"]["sigma"]
+    t = f0.meta["data"]["t"]; y = f0.meta["data"]["y_obs"]
+    s = f0.meta["data"]["sigma"]
     ph = t / logls[names[0]].cfg.planet.period
 
     fig, (ax, axr, axd) = plt.subplots(3, 1, figsize=figsize, sharex=True, gridspec_kw=dict(height_ratios=[3, 1.3, 1.6], hspace=0.07))
@@ -840,26 +839,36 @@ def plot_posterior_predictive(logls, fits, n=200, colors=None, seed=0, n_jobs=-1
         curves = model_samples(L, equal_samples(f, n, seed), n_jobs=n_jobs)
         lo1, m, hi1 = np.percentile(curves, [50 - levels[0] / 2, 50, 50 + levels[0] / 2], axis=0)
         lo2, hi2 = np.percentile(curves, [50 - levels[1] / 2, 50 + levels[1] / 2], axis=0)
-        med[name] = m
+        med[name] = m # pointwise median model curve
         best[name] = L.model(f.results.samples[int(np.argmax(f.results.logl))])
         c = colors.get(name, "k")
+
+        # Panel 1
         ax.fill_between(ph, lo2, hi2, color=c, alpha=0.15, lw=0)
         ax.fill_between(ph, lo1, hi1, color=c, alpha=0.30, lw=0)
-        ax.plot(ph, m, color=c, lw=1.5, label=f"{name} (median of {n} draws)")
+        ax.plot(ph, m, color=c, lw=1.5, label=f"{name} (pointwise median of {n} draws)")
+
+        # Panel 2
         axr.plot(ph, (y - m) / s, mk[k % len(mk)], ms=4, mfc="none" if k else c, color=c)
 
     ax.set_ylabel("$F_p/F_\\star$ [ppm]"); ax.legend(frameon=False, fontsize=8); ax.margins(x=0.01)
     for d in (-1., 1.): axr.axhline(d, color="0.85", lw=0.6, ls=":")
     axr.axhline(0., color="0.7", lw=0.8); axr.set_ylabel("resid / $\\sigma$"); axr.set_ylim(-3.5, 3.5)
 
+    # Panel 3
     if len(names) == 2:
-        a, b = names[0], names[1]
-        axd.axhspan(-s.mean(), s.mean(), color="0.9", lw=0, label="$\\pm\\sigma_{bin}$")
+        if num not in fits or den not in fits: raise ValueError(f"fits has {tuple(fits)}, need num={num!r} and den={den!r}")
+        a, b = den, num
+        axd.axhspan(-s.mean(), s.mean(), fc="0.9", ec="0.6", lw=0.8, label=r"$\pm\sigma_{bin}$")
         axd.axhline(0., color="0.7", lw=0.8)
-        axd.plot(ph, med[b] - med[a], color="0.2", lw=1.5, label=f"median {b} - {a} [ppm]")
+        dmed = med[b] - med[a]
+        axd.plot(ph, dmed, color="0.2", lw=1.5, label=f"median {b} - {a} [ppm]")
         dchi2 = ((y - best[a]) ** 2 - (y - best[b]) ** 2) / s ** 2   # > 0 where b fits better; sums to 2*dlnL_max
         ax2 = axd.twinx()
         ax2.bar(ph, dchi2, width=0.7 / len(ph), color="C2", alpha=0.45, zorder=0)
+        # Both axes forced symmetric about zero. twinx() autoscales independently, so a one-signed dchi2 makes matplotlib clamp ax2 to [0, max] and the bars then grow from the panel floor while axd's zero line sits mid-panel - the reader reads the bars against a baseline that is not theirs.
+        w = 1.05 * max(float(np.abs(dmed).max()), float(s.mean())); axd.set_ylim(-w, w)
+        v = 1.05 * float(np.abs(dchi2).max()) or 1.; ax2.set_ylim(-v, v)
         ax2.set_ylabel(f"$\\Delta\\chi^2$ per bin (sum {dchi2.sum():+.2f})", fontsize=8, color="C2")
         ax2.tick_params(axis="y", labelcolor="C2", labelsize=8)
         axd.legend(frameon=False, fontsize=8, loc="upper left")
@@ -883,3 +892,94 @@ def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=
     axes[0].legend(frameon=False, fontsize=8)
     fig.tight_layout()
     return fig, axes
+
+
+def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth="hyperillum",
+                        A_B_bounds=(0.0, 0.8), xatol=1e-3, truth_kw=None, colors=None, figsize=(8.5, 6.2), verbose=True):
+    """The one-seed fits against the noiseless truth: what you would report vs. what the bias actually is.
+
+    Top panel   : the high-resolution truth and its binned version (= the noiseless data), the simulated data, each model's posterior MEDIAN curve, and the naive model fitted to the NOISELESS truth (simple_bias_analysis.fit_naive, offset free) - that last one is deterministic (no seed, no noise) and IS the bias.
+    Lower panel : everything minus the binned truth against +/- sigma_bin. The black points are the noise realisation the medians are chasing; the dotted grey line is the numerical floor, i.e. the truth model re-evaluated at the injected theta on the likelihood's own coarser grid, so anything at that level is grid resolution and not model bias.
+
+    cfg / data       : the FittingConfig and the simulate_data() output the fits were run on.
+    logls / fits     : {model_name: GaussianLogL} and {model_name: NestedFit}, same keys.
+    base             : {param: injected value} (the dict handed to theta_of / posterior_summary).
+    insolation_truth : which insolation model the data were drawn from; must be a key of logls for the numerical floor to be drawn.
+    truth_kw         : forward-model resolution of the truth; defaults to simulate_data's own settings.
+
+    Returns fig, (ax, axr), out - where out carries the numbers printed under `verbose` (naive-to-truth fit, per-model median/max-lnL chi2, the floor).
+    """
+    colors = colors or _COLOR
+    truth_kw = dict(n_t=200 * cfg.n_bins, n_layers=80, n_lo=600, n_la=300) if truth_kw is None else dict(truth_kw)
+
+    # --- the noiseless reference: exactly the curve simulate_data drew the data from ---------------
+    t_hi, y_hi = model_pcurve(cfg, insolation_truth, A_B_true, **truth_kw)
+    y_true = binned(cfg, y_hi)                                    # the noiseless data
+    ph, ph_hi, s_bin = data["t"] / cfg.planet.period, t_hi / cfg.planet.period, cfg.sigma_bin
+
+    # --- naive fitted to the NOISELESS truth: the deterministic bias, no seed involved -------------
+    insol0 = insolation_cache(cfg, "naive", n_lo=truth_kw["n_lo"], n_la=truth_kw["n_la"])   # A_B only rescales the map, so one cache serves the whole scan
+    A_naive0, chi2_naive0, rms_naive0 = fit_naive(cfg, y_hi, free_offset=True, bounds=A_B_bounds, xatol=xatol, insol=insol0, **truth_kw)
+    y_naive0 = binned(cfg, model_pcurve(cfg, "naive", A_naive0, insol=insol0, **truth_kw)[1])
+    off_naive0 = float(np.mean(y_true - y_naive0))                # what free_offset absorbed
+    y_naive0 = y_naive0 + off_naive0
+
+    # --- the two noisy fits: posterior median (what you would report) and max-lnL (= MAP, uniform priors)
+    summ   = {m: posterior_summary(f, base, verbose=False)["params"] for m, f in fits.items()}
+    th_med = {m: np.array([summ[m][n]["med"] for n in f.pset.names], float) for m, f in fits.items()}
+    th_map = {m: f.results.samples[int(np.argmax(f.results.logl))] for m, f in fits.items()}
+    y_med  = {m: logls[m].model(th_med[m]) for m in fits}
+    y_map  = {m: logls[m].model(th_map[m]) for m in fits}
+    y_floor = logls[insolation_truth].model(theta_of(logls[insolation_truth], base)) if insolation_truth in logls else None   # same model, same parameters, coarser grid: the numerical floor of this figure
+
+    fig, (ax, axr) = plt.subplots(2, 1, figsize=figsize, sharex=True, gridspec_kw=dict(height_ratios=[3, 1.7], hspace=0.06))
+
+    ax.plot(ph_hi, y_hi, lw=1.0, color="0.55", zorder=1, label=f"truth ({insolation_truth}, $A_B$={A_B_true:.3f})")
+    ax.step(ph, y_true, where="mid", color="0.25", lw=1.2, zorder=2, label="binned truth = noiseless data")
+    ax.errorbar(ph, data["y_obs"], yerr=data["sigma"], fmt="o", ms=4, color="k", capsize=2, elinewidth=1., zorder=6, label=f"simulated data ($\\sigma$={s_bin:.1f} ppm)")
+    for m in fits:
+        ax.step(ph, y_med[m], where="mid", color=colors.get(m, "k"), lw=1.6, zorder=4, label=f"{m} posterior median (one seed)")
+    ax.step(ph, y_naive0, where="mid", color=colors.get("naive", "k"), lw=1.6, ls="--", zorder=5, label=f"naive fitted to the noiseless truth ($A_B$={A_naive0:.4f})")
+    ax.set_ylabel("$F_p/F_\\star$ [ppm]"); ax.legend(frameon=False, fontsize=8); ax.margins(x=0.01)
+
+    axr.axhspan(-s_bin, s_bin, fc="0.9", ec="0.6", lw=0.8, zorder=0, label=r"$\pm\sigma_{bin}$")
+    axr.axhline(0., color="0.7", lw=0.8)
+    axr.plot(ph, data["y_obs"] - y_true, "o", ms=4, color="k", zorder=6, label="data - truth (the noise realisation)")
+    for m in fits:
+        axr.step(ph, y_med[m] - y_true, where="mid", color=colors.get(m, "k"), lw=1.6, zorder=4)
+    axr.step(ph, y_naive0 - y_true, where="mid", color=colors.get("naive", "k"), lw=1.6, ls="--", zorder=5)
+    if y_floor is not None:
+        axr.step(ph, y_floor - y_true, where="mid", color="0.45", lw=1.0, ls=":", zorder=3, label="numerical floor (truth model at the injected $\\theta$)")
+    axr.set_xlabel("orbital phase"); axr.set_ylabel("model - truth [ppm]"); axr.margins(x=0.01)
+    axr.secondary_yaxis("right", functions=(lambda v: v / s_bin, lambda v: v * s_bin)).set_ylabel(r"/ $\sigma_{bin}$", fontsize=8)
+    axr.legend(frameon=False, fontsize=7, ncol=3, loc="upper left")
+
+    # --- numbers -----------------------------------------------------------------------------------
+    chi2_tr = lambda y: float(np.sum(((y - y_true) / s_bin) ** 2))
+    sig_AB  = 0.5 * (summ["naive"]["A_B"]["hi"] - summ["naive"]["A_B"]["lo"])
+    out = dict(t_hi=t_hi, y_hi=y_hi, y_true=y_true, y_med=y_med, y_map=y_map, y_naive0=y_naive0, y_floor=y_floor,
+               summary=summ, A_naive0=float(A_naive0), chi2_naive0=float(chi2_naive0), rms_naive0=float(rms_naive0),
+               offset_naive0=off_naive0, bias_naive0=float(A_naive0 - A_B_true), sigma_A_B=float(sig_AB),
+               dT_over_T=float(temperature_bias(A_B_true, A_naive0 - A_B_true)),
+               chi2_truth={m: chi2_tr(y_med[m]) for m in fits},
+               chi2_floor=chi2_tr(y_floor) if y_floor is not None else None)
+    out["bias_over_floor"] = (out["chi2_naive0"] / out["chi2_floor"]) if out["chi2_floor"] else None   # the gate on this whole figure: how far the naive-vs-truth distance stands above the forward model's own discretisation error
+    if verbose:
+        for m in fits:
+            a, o, pm = summ[m]["A_B"], summ[m]["offset"], logls[m].unpack(th_map[m])
+            print(f"{m:11s} median   A_B {a['med']:.4f} ({a['bias']:+.4f} = {a['bias_sigma']:+.2f} sigma)   offset {o['med']:+7.2f} ppm ({o['bias']:+.2f} = {o['bias_sigma']:+.2f} sigma)"
+                  f"   chi2 vs truth {chi2_tr(y_med[m]):6.2f}   vs data {logls[m].chi2(th_med[m]):6.2f}")
+            print(f"{'':11s} max-lnL  A_B {pm['A_B']:.4f} ({pm['A_B'] - A_B_true:+.4f})              offset {pm['offset']:+7.2f} ppm ({pm['offset']:+.2f})"
+                  f"           chi2 vs truth {chi2_tr(y_map[m]):6.2f}   vs data {logls[m].chi2(th_map[m]):6.2f}")
+
+        print(f"\nNOISELESS naive vs the NOISELESS truth  (offset free, no noise, no seed - this is THE bias):")
+        print(f"   A_B      {A_naive0:.4f}   bias {A_naive0 - A_B_true:+.4f} = {(A_naive0 - A_B_true) / sig_AB:+.2f} sigma_post   ->   dT/T = {100 * out['dT_over_T']:+.2f} %")
+        print(f"   offset absorbed {off_naive0:+.2f} ppm    chi2 {chi2_naive0:.3f}  (squared truth-to-manifold distance in units of sigma_bin)    resid rms {rms_naive0:.2f} ppm = {rms_naive0 / s_bin:.2f} sigma_bin")
+        print(f"   the noisy naive median instead says {summ['naive']['A_B']['bias']:+.4f}; the gap to {A_naive0 - A_B_true:+.4f} is this one seed's noise (sigma_A_B = {sig_AB:.4f})")
+
+        if y_floor is not None:
+            print(f"\nnumerical floor: {insolation_truth} at the injected theta vs its own truth curve, chi2 = {chi2_tr(y_floor):.3f}   max |diff| = {np.abs(y_floor - y_true).max():.2f} ppm = {np.abs(y_floor - y_true).max() / s_bin:.2f} sigma_bin")
+            print(f"   the likelihood runs model_pcurve at its DEFAULTS (n_t=50*n_bins, n_lo=300, n_la=150), the truth at {truth_kw} - anything here is grid resolution, not model bias")
+            r = out["bias_over_floor"]
+            print(f"   bias / floor = {chi2_naive0:.3f} / {out['chi2_floor']:.3f} = {r:.1f}x   ->   " + ("bias resolved" if r >= 10. else "NOT RESOLVED - refine model_kw (n_lo, n_la, n_layers, n_t) before quoting any bias from this run"))
+    return fig, (ax, axr), out
