@@ -245,9 +245,9 @@ REF_WAVE_UM = {"sy_kmag": 2.22, "sy_jmag": 1.25}
 PANDEXO_PARAM_KEYS = (*PANDEXO_COLUMNS, "mag", "ref_wave")
 
 # Noise Level for MIRI/Imaging of TOI-2431b (not included in Pandexo)
-# F12800W: 3.59 sec/int: rms_int = 1/989.38*1e6 ppm
-# F15000W: 5.39 sec/int: rms_int = 1/1135.44*1e6 ppm
-# F18000W: 13.48 sec/int: rms_int = 1/1196.43*1e6 ppm
+# F12800W: 3.59 sec/int: rms_int = 1/989.38*1e6 ppm -> rms_1min = 247.2 ppm
+# F15000W: 5.39 sec/int: rms_int = 1/1135.44*1e6 ppm -> rms_1min = 264.0 ppm
+# F18000W: 13.48 sec/int: rms_int = 1/1196.43*1e6 ppm -> rms_1min = 396.2 ppm
 
 # Calculate the rms noise per minute of observation
 def rms_1min(result, T14, lambda_range, visualize=False, extra=False):
