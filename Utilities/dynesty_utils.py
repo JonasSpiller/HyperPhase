@@ -2,6 +2,7 @@ import numpy as np
 from dataclasses import dataclass
 import time
 import os
+import glob
 import pickle
 from datetime import datetime
 import dynesty
@@ -88,7 +89,9 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
     t=(np.arange(cfg.n_bins) + 0.5) * cfg.planet.period / cfg.n_bins
     sigma = np.full(cfg.n_bins, s)
 
-    data = {"t": t, "y_obs": y_obs, "sigma":sigma}
+    # the injected truth travels with the data (and from there into NestedFit.meta), so a saved fit knows what it was fitted to
+    truth = dict(A_B=float(A_B_true), insolation_model=insolation_model, offset=float(offset), seed=int(seed), noise=bool(noise))
+    data = {"t": t, "y_obs": y_obs, "sigma":sigma, "truth": truth}
 
     if plotting: plot_simulated_data(cfg, A_B_true, data, insolation_model=insolation_model)
 
@@ -257,6 +260,7 @@ class GaussianLogL:
         if insolation_model not in _CACHE_DEPS["insol"]: raise ValueError(f"insolation_model must be one of {tuple(_CACHE_DEPS['insol'])}")
 
         # Data
+        self.truth = dict(data.get("truth") or {})   # what simulate_data injected, if the data came from there; empty for real observations
         self.t = np.asarray(data["t"], float)
         self.y = np.asarray(data["y_obs"], float)
         self.sigma = np.broadcast_to(np.asarray(data["sigma"], float), self.y.shape).astype(float)
@@ -572,7 +576,8 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
 
     meta = dict(insolation_model=logl.insolation_model, caches=logl.cache_used, fixed=dict(logl.fixed), seed=scfg.seed, runtime_s=runtime,
                 ncall=int(np.sum(res.ncall)), niter=int(res.niter), lnZ=float(res.logz[-1]), lnZ_err=float(res.logzerr[-1]), information=float(res.information[-1]), n_bins=int(logl.y.size), sigma_bin=float(np.mean(logl.sigma)),
-                data=dict(t=logl.t.copy(), y_obs=logl.y.copy(), sigma=logl.sigma.copy()))   # the fit travels with its data, so a reloaded NestedFit can be re-plotted without re-running the notebook
+                data=dict(t=logl.t.copy(), y_obs=logl.y.copy(), sigma=logl.sigma.copy(), truth=dict(logl.truth)),   # the fit travels with its data (and the injected truth), so a reloaded NestedFit can be re-plotted without re-running the notebook
+                cfg=logl.cfg, model_kw=dict(logl.model_kw))   # everything logl_from_fit needs to rebuild the likelihood from the pickle alone
 
     # The geometry actually used: sampled, held fixed, or (the usual case) inherited from cfg.planet - an empty `fixed` on its own would not record which.
     pl = logl.cfg.planet
@@ -597,7 +602,36 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
 
 def load_fit(path):
     """Read back a NestedFit written by run_nested_fit (scfg.outfile). Unpickling needs this module importable, since pset/scfg/NestedFit are defined here."""
-    with open(os.path.expanduser(path), "rb") as f: return pickle.load(f)
+    path = os.path.abspath(os.path.expanduser(path))
+    with open(path, "rb") as f: fit = pickle.load(f)
+    fit.meta["file"] = path   # run_nested_fit records the path only AFTER pickling, so the file on disk never carries its own name
+    return fit
+
+
+def load_fits(paths):
+    """Several saved fits as {insolation_model: NestedFit} - the `fits` dict every plotting helper takes.
+    `paths` is a glob pattern or an iterable of paths; a repeated insolation model is an error rather than a silent overwrite."""
+    paths = sorted(glob.glob(os.path.expanduser(paths))) if isinstance(paths, str) else list(paths)
+    if not paths: raise FileNotFoundError("no fit files matched")
+    out = {}
+    for p in paths:
+        f = load_fit(p)
+        m = f.meta["insolation_model"]
+        if m in out: raise ValueError(f"two files for insolation_model={m!r}: {out[m].meta.get('file')} and {p}")
+        out[m] = f
+    return out
+
+
+def logl_from_fit(fit, cfg=None, **model_kw):
+    """The GaussianLogL a saved fit was run with, rebuilt from the pickle alone - what the plotting helpers that still
+    evaluate the forward model (logl_slice/logl_grid, plot_posterior_predictive, derived_samples, plot_noisy_vs_truth) need.
+
+    Uses the FittingConfig stored in meta by run_nested_fit; pass `cfg` explicitly for fits saved before that was added.
+    The geometry-only caches are rebuilt here, so the first call costs a second or two."""
+    cfg = cfg if cfg is not None else fit.meta.get("cfg")
+    if cfg is None: raise ValueError("this fit predates cfg being stored in meta - pass cfg=... (or re-run the fit)")
+    kw = {**fit.meta.get("model_kw", {}), **model_kw}
+    return GaussianLogL.from_pset(cfg, fit.meta["data"], fit.meta["insolation_model"], fit.pset, fixed=fit.meta.get("fixed"), **kw)
 
 
 ###########################################################################################################################
