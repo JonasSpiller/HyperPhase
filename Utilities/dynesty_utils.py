@@ -929,7 +929,7 @@ def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=
 
 
 def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth="hyperillum",
-                        A_B_bounds=(0.0, 0.8), xatol=1e-3, truth_kw=None, colors=None, figsize=(8.5, 6.2), verbose=True):
+                        A_B_bounds=(0.0, 0.8), xatol=1e-3, truth_kw=None, colors=None, figsize=(8.5, 6.2), verbose=False):
     """The one-seed fits against the noiseless truth: what you would report vs. what the bias actually is.
 
     Top panel   : the high-resolution truth and its binned version (= the noiseless data), the simulated data, each model's posterior MEDIAN curve, and the naive model fitted to the NOISELESS truth (simple_bias_analysis.fit_naive, offset free) - that last one is deterministic (no seed, no noise) and IS the bias.
@@ -940,8 +940,9 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     base             : {param: injected value} (the dict handed to theta_of / posterior_summary).
     insolation_truth : which insolation model the data were drawn from; must be a key of logls for the numerical floor to be drawn.
     truth_kw         : forward-model resolution of the truth; defaults to simulate_data's own settings.
+    verbose          : False prints only the noiseless bias, |dA_B|/sigma_A_B with the critical sigma_1min, and the bias/floor gate; True adds the per-model median and max-lnL rows, the absorbed offset and the floor detail.
 
-    Returns fig, (ax, axr), out - where out carries the numbers printed under `verbose` (naive-to-truth fit, per-model median/max-lnL chi2, the floor).
+    Returns fig, (ax, axr), out - where out carries every number printed at either verbosity (naive-to-truth fit, bias_sigma0, sigma_1min_crit, per-model median/max-lnL chi2, the floor).
     """
     colors = colors or _COLOR
     truth_kw = dict(n_t=200 * cfg.n_bins, n_layers=80, n_lo=600, n_la=300) if truth_kw is None else dict(truth_kw)
@@ -998,6 +999,8 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
                chi2_truth={m: chi2_tr(y_med[m]) for m in fits},
                chi2_floor=chi2_tr(y_floor) if y_floor is not None else None)
     out["bias_over_floor"] = (out["chi2_naive0"] / out["chi2_floor"]) if out["chi2_floor"] else None   # the gate on this whole figure: how far the naive-vs-truth distance stands above the forward model's own discretisation error
+    out["bias_sigma0"] = abs(out["bias_naive0"]) / sig_AB                    # the NOISELESS bias in units of the posterior width - the seed-free counterpart of summ["naive"]["A_B"]["bias_sigma"], whose numerator is one realisation's median
+    out["sigma_1min_crit"] = cfg.sigma_1min * out["bias_sigma0"]             # sigma_A_B scales linearly with sigma_1min (at fixed n_orbits/n_bins) while the bias does not, so |dA_B| = sigma_A_B exactly at this per-minute precision; sigma_A_B is read off THIS seed's posterior, so it carries one realisation's scatter, and the linear scaling assumes the posterior is not truncated by the prior box
     if verbose:
         for m in fits:
             a, o, pm = summ[m]["A_B"], summ[m]["offset"], logls[m].unpack(th_map[m])
@@ -1005,15 +1008,20 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
                   f"   chi2 vs truth {chi2_tr(y_med[m]):6.2f}   vs data {logls[m].chi2(th_med[m]):6.2f}")
             print(f"{'':11s} max-lnL  A_B {pm['A_B']:.4f} ({pm['A_B'] - A_B_true:+.4f})              offset {pm['offset']:+7.2f} ppm ({pm['offset']:+.2f})"
                   f"           chi2 vs truth {chi2_tr(y_map[m]):6.2f}   vs data {logls[m].chi2(th_map[m]):6.2f}")
+        print()
 
-        print(f"\nNOISELESS naive vs the NOISELESS truth  (offset free, no noise, no seed - this is THE bias):")
-        print(f"   A_B      {A_naive0:.4f}   bias {A_naive0 - A_B_true:+.4f} = {(A_naive0 - A_B_true) / sig_AB:+.2f} sigma_post   ->   dT/T = {100 * out['dT_over_T']:+.2f} %")
+    fac = (1. / out["bias_sigma0"]) if out["bias_sigma0"] > 0 else np.inf      # how much finer sigma_1min must get before the bias is a 1-sigma effect
+    print(f"NOISELESS naive vs the NOISELESS truth  (offset free, no noise, no seed - this is THE bias):")
+    print(f"   A_B      {A_naive0:.4f}   bias {out['bias_naive0']:+.4f} = {out['bias_naive0'] / sig_AB:+.2f} sigma_A_B   ->   dT/T = {100 * out['dT_over_T']:+.2f} %")
+    print(f"   |dA_B|/sigma_A_B = {out['bias_sigma0']:.2f}   ->   sigma_1min,crit = {out['sigma_1min_crit']:.1f} ppm/min   (now {cfg.sigma_1min:.1f}, so {fac:.1f}x finer photometry - or {fac ** 2:.0f}x the orbits - before the bias reaches 1 sigma)")
+    if verbose:
         print(f"   offset absorbed {off_naive0:+.2f} ppm    chi2 {chi2_naive0:.3f}  (squared truth-to-manifold distance in units of sigma_bin)    resid rms {rms_naive0:.2f} ppm = {rms_naive0 / s_bin:.2f} sigma_bin")
-        print(f"   the noisy naive median instead says {summ['naive']['A_B']['bias']:+.4f}; the gap to {A_naive0 - A_B_true:+.4f} is this one seed's noise (sigma_A_B = {sig_AB:.4f})")
+        print(f"   the noisy naive median instead says {summ['naive']['A_B']['bias']:+.4f}; the gap to {out['bias_naive0']:+.4f} is this one seed's noise (sigma_A_B = {sig_AB:.4f})")
 
-        if y_floor is not None:
+    if y_floor is not None:
+        if verbose:
             print(f"\nnumerical floor: {insolation_truth} at the injected theta vs its own truth curve, chi2 = {chi2_tr(y_floor):.3f}   max |diff| = {np.abs(y_floor - y_true).max():.2f} ppm = {np.abs(y_floor - y_true).max() / s_bin:.2f} sigma_bin")
             print(f"   the likelihood runs model_pcurve at its DEFAULTS (n_t=50*n_bins, n_lo=300, n_la=150), the truth at {truth_kw} - anything here is grid resolution, not model bias")
-            r = out["bias_over_floor"]
-            print(f"   bias / floor = {chi2_naive0:.3f} / {out['chi2_floor']:.3f} = {r:.1f}x   ->   " + ("bias resolved" if r >= 10. else "NOT RESOLVED - refine model_kw (n_lo, n_la, n_layers, n_t) before quoting any bias from this run"))
+        r = out["bias_over_floor"]
+        print(f"   bias / floor = {chi2_naive0:.3f} / {out['chi2_floor']:.3f} = {r:.1f}x   ->   " + ("bias resolved" if r >= 10. else "NOT RESOLVED - refine model_kw (n_lo, n_la, n_layers, n_t) before quoting any bias from this run"))
     return fig, (ax, axr), out

@@ -84,7 +84,7 @@ if __name__ == "__main__":
     # Dynesty. run_nested_fit fills {insolation_model} in, so one SamplerConfig serves both models without them overwriting each other
     tag = (f"{planet.name}_{instrument}_{A_model.label}_AB{A_B_true:g}"
            f"_priors-{'+'.join(pset.names)}"   # which parameters were sampled, so runs with different free parameters cannot overwrite each other
-           f"_nbins{n_bins}_sigmascale{sigma_1min_scaling:g}_seed{seed}").replace("/", "-").replace(" ", "")
+           f"_nbins{n_bins}_norbits{n_orbits}_rms1min{sigma_1min}_sigmascale{sigma_1min_scaling:g}_seed{seed}").replace("/", "-").replace(" ", "")
     scfg = SamplerConfig(seed=seed, outfile=os.path.join(OUTDIR, tag + "_{insolation_model}.pkl"), **sampler)
 
     t0 = time.perf_counter()
