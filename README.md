@@ -22,7 +22,9 @@ depth of 142 ppm.
   pipeline (`hyperillumination_phasecurve_utils.py`), orbital helpers (`kepler_utils.py`),
   and a fast split-evaluation `fast_lightcurve` (interpolated phase modulation, exact
   ingress/egress, totality skipped analytically — up to ~20× faster at bit-identical
-  accuracy).
+  accuracy). Three insolation models: `hyperillum` (extended star), `naive` (point source) and
+  `naive_redist` (point source plus Kreidberg & Loeb 2016 heat redistribution `F`, evaluated with
+  SPIDERMAN's analytic Louden map; see `Hyperillumination/test_thermal_redist.ipynb`).
 - **Bias analysis** (`simple_bias_analysis.py`, notebooks in `Hyperillumination/`): fit a *naive*
   point-source model to a hyper-illumination "truth" curve and measure the resulting bias
   in the recovered Bond albedo, mapped over `(a/R★, T_eff)` and `(a/R★, R_p/R★)`.

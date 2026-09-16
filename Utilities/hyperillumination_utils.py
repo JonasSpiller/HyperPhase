@@ -113,11 +113,11 @@ def _tabulate_insolation(planet, u_B, insolation_model, n_tab=3000):
         F_pen = insolation_penumbra_hyperillum(gp_pen, planet, u_B=u_B)
         gp_grid = np.concatenate([gp_fi, gp_pen, [np.pi]])
         F_grid = np.concatenate([F_fi, F_pen, [0.]])
-    elif insolation_model == "naive":
+    elif insolation_model in ("naive", "naive_redist"):  # naive_redist redistributes the heat, not the incident flux
         gp_grid = np.linspace(0., np.pi, n_tab)
         F_grid = naive_insolation(gp_grid, planet)
     else:
-        raise ValueError("insolation_model must be either 'hyperillum' or 'naive'")
+        raise ValueError(f"insolation_model must be one of {INSOLATION_MODELS}")
     return gp_grid, F_grid
 
 
@@ -128,10 +128,13 @@ def _tabulate_insolation(planet, u_B, insolation_model, n_tab=3000):
 #####
 ###########################################################################################################################
 
+# "hyperillum": extended stellar disk, "naive": point source, "naive_redist": point source + Kreidberg & Loeb 2016 heat redistribution F (see Heat Redistribution below)
+INSOLATION_MODELS = ("hyperillum", "naive", "naive_redist")
+
 def insolation(gamma1, planet, insolation_model, u_B=0.):
     if insolation_model == "hyperillum": return insolation_hyperillum(gamma1, planet, u_B=u_B)
-    elif insolation_model == "naive": return naive_insolation(gamma1, planet)
-    else: raise ValueError("insolation_model must be either 'hyperillum' or 'naive'")
+    elif insolation_model in ("naive", "naive_redist"): return naive_insolation(gamma1, planet)  # naive_redist redistributes the heat, not the incident flux
+    else: raise ValueError(f"insolation_model must be one of {INSOLATION_MODELS}")
 
 # Insolation Model without Hyperillumination
 # point source at the planet centre with a hard terminator at 90°. Equivalent to SPIDERMAN Louden model
@@ -239,6 +242,44 @@ def _theta_kernels_vec(theta, alpha, rho, r2):
 
 ###########################################################################################################################
 #####
+#####   Heat Redistribution (Kreidberg & Loeb 2016)
+#####
+###########################################################################################################################
+
+# Kreidberg & Loeb 2016 eq. 1: sigma*T^4 = (1-A_B)*S*[F/2 + (1-2F)*cos(z)] on the dayside and (1-A_B)*S*F/2 on the nightside (z: zenith angle = gamma1, S: substellar insolation).
+# In terms of the naive insolation I (= S*cos(z) on the dayside, 0 on the nightside) both read sigma*T^4 = (1-A_B)*[(1-2F)*I + F*S/2]: the nightside re-radiates the fraction F of the absorbed power.
+# F=0: no redistribution (identical to "naive"), F=0.5: isothermal planet. SPIDERMAN's Louden model evaluates the same map (with T_int=0), which is what the "naive_redist" thermal phase curve uses.
+
+# F is required by insolation_model="naive_redist" and ignored by the other models (like u_B is by "naive").
+def check_redistribution(insolation_model, F):
+    if insolation_model == "naive_redist" and F is None:
+        raise ValueError('insolation_model="naive_redist" requires the heat redistribution parameter F in [0, 0.5]')
+    if F is not None and not 0. <= F <= 0.5:
+        raise ValueError(f"heat redistribution parameter F must be in [0, 0.5], got F={F}")
+
+
+# Flux per unit (1-A_B) a surface element re-radiates: the insolation itself under instant re-radiation ("hyperillum", "naive"), the redistributed flux under "naive_redist".
+def effective_insolation(insol, planet, insolation_model, F=None):
+    check_redistribution(insolation_model, F)
+    if insolation_model != "naive_redist": return insol
+    S = float(naive_insolation(0., planet))  # substellar insolation
+    return (1. - 2. * F) * insol + F * S / 2.
+
+
+# Surface temperature from an insolation map of the given insolation_model (local radiative equilibrium, redistributed for "naive_redist")
+def temperature_from_insolation(insol, planet, insolation_model, A_B = 0.1, emissivity=1., F=None):
+    if insolation_model == "naive_redist": emissivity = 1.  # fixed to 1 for now: the Louden model behind its phase curve has no emissivity (see TODO in Louden_PhaseCurve)
+    return BBtemp_from_insolation(effective_insolation(insol, planet, insolation_model, F=F), A_B = A_B, emissivity=emissivity)
+
+
+# T(gamma1): surface temperature at an angular distance gamma1 from the substellar point (the T(z) profile of Kreidberg & Loeb 2016 for "naive_redist")
+def surface_temperature(gamma1, planet, insolation_model, u_B=0., A_B = 0.1, emissivity=1., F=None):
+    return temperature_from_insolation(insolation(gamma1, planet, insolation_model, u_B=u_B), planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
+
+
+
+###########################################################################################################################
+#####
 #####   Plotting
 #####
 ###########################################################################################################################
@@ -258,10 +299,12 @@ def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=
             color=color, linewidth=linewidth, zorder=zorder)
 
 
-def plot_insolmap(phase, planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", unit="flux", n_tab=3000, gp_table=None):
+# unit="flux": re-radiated (bolometric) flux normalized to the substellar point - the insolation itself, except for "naive_redist" (needs F for both units)
+def plot_insolmap(phase, planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_tab=3000, gp_table=None):
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
+    check_redistribution(insolation_model, F)
 
     mycmap = plt.cm.inferno   # same colormap spiderman's plot_planet defaults to
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
@@ -287,13 +330,13 @@ def plot_insolmap(phase, planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None
     F_interp = np.interp(gamma1[disk], gp_grid, F_grid)
     mapval = np.full_like(X, np.nan)
     if unit == "temperature":
-        mapval[disk] = BBtemp_from_insolation(F_interp, A_B = A_B, emissivity=emissivity)
+        mapval[disk] = temperature_from_insolation(F_interp, planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
     else:   # flux, normalized to 1 at the substellar point (gp_grid[0] == 0)
-        mapval[disk] = F_interp / F_grid[0]
+        mapval[disk] = effective_insolation(F_interp, planet, insolation_model, F=F) / effective_insolation(F_grid[0], planet, insolation_model, F=F)
 
     if min_temp is None or max_temp is None:
         if unit == "temperature":
-            t_hot = BBtemp_from_insolation(F_grid[0], A_B = A_B, emissivity=emissivity)
+            t_hot = temperature_from_insolation(F_grid[0], planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
             if min_temp is None: min_temp = -t_hot*0.1
             if max_temp is None: max_temp = 1.1 * t_hot
         else:   # flux, normalized to 1 at the substellar point
@@ -336,10 +379,11 @@ def plot_insolmap(phase, planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None
 
 def plot_quad_insolmap(planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=500,
                        theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None,
-                       insolation_model="hyperillum", unit="flux", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000):
+                       insolation_model="hyperillum", F=None, unit="flux", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000):
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
+    check_redistribution(insolation_model, F)
 
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
 
@@ -347,7 +391,7 @@ def plot_quad_insolmap(planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, 
 
     if min_temp is None or max_temp is None:
         if unit == "temperature":
-            t_hot = BBtemp_from_insolation(gp_table[1][0], A_B = A_B, emissivity=emissivity)
+            t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
             if min_temp is None: min_temp = -t_hot*0.1
             if max_temp is None: max_temp = 1.1 * t_hot
         else:   # flux, normalized to 1 at the substellar point
@@ -359,7 +403,7 @@ def plot_quad_insolmap(planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, 
     for ax, phase in zip(axs.ravel(), [phase1, phase2, phase3, phase4]):
         plot_insolmap(phase, planet, u_B=u_B, A_B = A_B, emissivity=emissivity, min_temp=min_temp, max_temp=max_temp,
                       n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, unit=unit, gp_table=gp_table)
+                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table)
 
     if show_cax:
         im = axs[0, 0].images[0]
@@ -376,10 +420,11 @@ def plot_quad_insolmap(planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, 
 
 
 def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", u_B=0., min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
-                       show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", unit="flux", n_frames=1000, fps=50, phase_start=0., phase_end=1., n_tab=3000):
+                       show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_frames=1000, fps=50, phase_start=0., phase_end=1., n_tab=3000):
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
+    check_redistribution(insolation_model, F)
 
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
     bg_rgb = (0, 0, 0) if theme == "black" else (255, 255, 255)
@@ -388,7 +433,7 @@ def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", 
     gp_table = _tabulate_insolation(planet, u_B, insolation_model, n_tab=n_tab)
 
     if unit == "temperature":
-        t_hot = BBtemp_from_insolation(gp_table[1][0], A_B = A_B, emissivity=emissivity)
+        t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
         if min_temp is None: min_temp = -t_hot*0.1
         if max_temp is None: max_temp = 1.1 * t_hot
     else:   # flux, normalized to 1 at the substellar point
@@ -407,7 +452,7 @@ def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", 
 
     plot_insolmap(phases[0], planet, u_B=u_B, A_B = A_B, emissivity=emissivity, min_temp=min_temp, max_temp=max_temp,
                   n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                  terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, unit=unit, gp_table=gp_table)
+                  terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table)
     if show_cax:
         cbar = fig.colorbar(ax.images[0], ax=ax)
         cbar.ax.tick_params(colors=tc)
@@ -434,7 +479,7 @@ def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", 
         ax.clear()
         plot_insolmap(phase, planet, u_B=u_B, A_B = A_B, emissivity=emissivity, min_temp=min_temp, max_temp=max_temp,
                       n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, unit=unit, gp_table=gp_table)
+                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table)
         capture_frame()
 
     plt.close(fig)
