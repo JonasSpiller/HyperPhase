@@ -178,6 +178,12 @@ def bias_verdict(bias_sigma, sigma, sigma_prior):
     return np.where(~np.isfinite(sigma) | (sigma >= sigma_prior), VERDICT_UNCONSTRAINED, np.where(bias_sigma >= 1., VERDICT_NEEDS_HI, VERDICT_NAIVE_OK))
 
 
+# Observing time [h] at which the bias becomes a 1 sigma effect: the Fisher sigma scales as 1/sqrt(t), so t_crit = t_obs / (bias/sigma)^2. Independent of the n_orbits choice, unlike sigma_1min_crit.
+# NaN where the quantity is unconstrained - there bias/sigma is a ratio to a meaningless number (the figure prints "-").
+def critical_time(t_obs, bias_sigma, verdict):
+    return np.where(np.asarray(verdict) == VERDICT_UNCONSTRAINED, np.nan, np.asarray(t_obs, dtype=float) / np.asarray(bias_sigma, dtype=float) ** 2)
+
+
 def _fit_truth_at(cfg, A_B_true, models, bounds, kw):
     return fit_truth(cfg, A_B_true, models=models, free_offset=True, bounds=bounds, fisher=True, **kw)
 
@@ -256,10 +262,14 @@ def _norm_name(name):
 
 
 # ESM of a single archive planet by name, for a target drawn outside overlay_planets (the notebook's own planet).
-def planet_esm(AGG, pl_name):
+# One archive value for a planet by name, NaN where the archive has none or the value is missing: "ESM" for the tick labels / rows, "pl_rade" for the Rp row.
+def planet_archive_value(AGG, pl_name, column):
     d = pd.read_csv(AGG).drop_duplicates("pl_name")
     row = d[d.pl_name.map(_norm_name) == _norm_name(pl_name)]
-    return float(row.ESM.iloc[0]) if len(row) else np.nan
+    return float(row[column].iloc[0]) if len(row) and pd.notna(row[column].iloc[0]) else np.nan
+
+def planet_esm(AGG, pl_name):
+    return planet_archive_value(AGG, pl_name, "ESM")
 
 
 # Where the notebook's own planet sits on a bias map: x is always a/Rs, the key names the archive column on the y axis.
@@ -488,7 +498,7 @@ def _planet_bias_row(cfg, A_B_true, pl, s1, redist, bounds, F_bounds, kw):
     c = replace(cfg, planet=pl, sigma_1min=float(s1))   # stellar_grid / filter / A_ / n_bins / n_orbits are instrument-level, not per planet
     model = "naive_redist" if redist else "naive"
     fit = fit_truth(c, A_B_true, models=(model,), free_offset=True, bounds=bounds, F_bounds=F_bounds, fisher=True, **kw)[model]
-    return dict(name=pl.name, a_rs=pl.R / pl.r2, bias_A_B=fit["bias_A_B"], sigma_A_B=fit["sigma_A_B"],
+    return dict(name=pl.name, a_rs=pl.R / pl.r2, period=pl.period, T_eff=pl.T2_eff, bias_A_B=fit["bias_A_B"], sigma_A_B=fit["sigma_A_B"],
                 F_fit=fit.get("F_fit", np.nan), sigma_F=fit.get("sigma_F", np.nan), sigma_1min=float(s1))
 
 
@@ -508,11 +518,14 @@ def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity
     rows = pmap(_planet_bias_row, [(cfg, A_B_true, pl, sigma_1min.get(pl.name, np.nan), redist, bounds, F_bounds, kw) for pl in pls], n_jobs)   # a planet PandExo could not do keeps its bias but gets no sigma_1min_crit
     tab = pd.DataFrame(rows).sort_values("a_rs").reset_index(drop=True)
     tab["esm"] = [planet_esm(AGG, nm) for nm in tab["name"]] if AGG is not None else np.nan
+    tab["rp_rearth"] = [planet_archive_value(AGG, nm, "pl_rade") for nm in tab["name"]] if AGG is not None else np.nan   # [R_Earth], for the figure's rows only
+    tab["t_obs"] = cfg.n_orbits * tab["period"] * 24.   # [h] total observation: n_orbits full orbits, so it differs per planet at fixed n_orbits
 
     tab.attrs["quantity"], tab.attrs["sigma_prior"] = quantity, {"A_B": flat_prior_sigma(bounds), "F": flat_prior_sigma(F_bounds)}   # per quantity, so the figure can re-derive the verdict for either
     tab["bias"], tab["sigma"] = tab[f"bias_{quantity}" if quantity == "A_B" else "F_fit"], tab[f"sigma_{quantity}"]
     tab["bias_sigma"], tab["sigma_1min_crit"] = measurability(tab["bias"], tab["sigma"], tab["sigma_1min"])   # at each planet's own sigma_1min
     tab["verdict"] = bias_verdict(tab["bias_sigma"], tab["sigma"], tab.attrs["sigma_prior"][quantity])
+    tab["t_crit"] = critical_time(tab["t_obs"], tab["bias_sigma"], tab["verdict"])   # [h] at which the bias is a 1 sigma effect; NaN where unconstrained
     return tab
 
 
@@ -538,14 +551,28 @@ _VERDICT_STYLE = {VERDICT_NEEDS_HI: dict(color=C_HI, weight="bold"), VERDICT_NAI
 _HATCH = "///"   # bars of unconstrained planets
 
 
+# Parameter rows under the bottom panel of plot_planet_bias_bars: one text cell per planet per row, aligned with the bar groups (x in data units, y in axes units below the tick labels).
+# rows: [(label, values, fmt)], top row first; a non-finite value prints "-". Returns the axes-fraction the rows extend below the axes, so the caller can reserve the space.
+def _param_rows(ax, x, rows, y0=-0.10, dy=0.075, fontsize=8):
+    for k, (label, vals, fmt) in enumerate(rows):
+        y = y0 - k * dy
+        ax.text(x[0] - 0.55, y, label, transform=ax.get_xaxis_transform(), ha="right", va="top", fontsize=fontsize, color=MUTED)
+        for xi, v in zip(x, vals):
+            ax.text(xi, y, fmt.format(v) if np.isfinite(v) else "-", transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=fontsize)
+    return -y0 + len(rows) * dy
+
+
 def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.4f}", fmt_sigma="{:.4f}", fmt_noise="{:.0f}",
-                          figsize=None, log_noise=True, log_bias=False, colors=(None, None), title=None, quantities=None, grid=True):
+                          figsize=None, log_noise=True, log_bias=False, colors=(None, None), title=None, quantities=None, grid=True, param_rows=True):
     quantities = tuple(quantities or (tab.attrs.get("quantity", "A_B"),))
     c_bias, c_sig = (colors[0] or C_REDIST), (colors[1] or C_NAIVE)
 
     x, w = np.arange(len(tab)), 0.38
     n = 2 * len(quantities)
-    fig, ax = plt.subplots(n, 1, figsize=figsize or (13, 3.7 * n + 0.8), sharex=True)
+    # param_rows: a/Rs, ESM, Rp, P, t_obs, Teff and one t_crit per quantity under the bottom panel (0.26 in each), and the tick label is then the bare name
+    rows = [(r"$a/R_\star$", tab["a_rs"], "{:.2f}"), ("ESM", tab["esm"], "{:.1f}"), (r"$R_p$ [$R_\oplus$]", tab["rp_rearth"], "{:.2f}"),
+            ("$P$ [h]", tab["period"] * 24., "{:.2f}"), (r"$t_{\rm obs}$ [h]", tab["t_obs"], "{:.1f}"), (r"$T_{\rm eff}$ [K]", tab["T_eff"], "{:.0f}")] if param_rows else []
+    fig, ax = plt.subplots(n, 1, figsize=figsize or (13, 3.7 * n + 0.8 + 0.26 * (len(rows) + len(quantities) * param_rows)), sharex=True)
 
     for k, q in enumerate(quantities):
         bcol, scol, blab, slab, ylab, name = _BAR_Q[q]
@@ -554,6 +581,7 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
         bias_sigma, crit = measurability(bias, sigma, tab["sigma_1min"])   # at each planet's own sigma_1min
         sigma_prior = tab.attrs["sigma_prior"][q]
         verdict = bias_verdict(bias_sigma, sigma, sigma_prior)
+        if param_rows: rows.append((rf"$t_{{\rm crit}}$({name}) [h]", critical_time(tab["t_obs"], bias_sigma, verdict), "{:.1f}"))   # "-" where the quantity is unconstrained
         hatch = [_HATCH if v == VERDICT_UNCONSTRAINED else None for v in verdict]
         a0, a1 = ax[2 * k], ax[2 * k + 1]
         pre = f"{name}: " if len(quantities) > 1 else ""   # the panel pairs need telling apart only when there are several
@@ -578,8 +606,13 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
     for a_ in ax:
         a_.margins(y=.18)   # headroom for the value annotations
         if not grid: a_.grid(False)
-    esm = tab["esm"] if "esm" in tab else np.full(len(tab), np.nan)
-    ax[-1].set_xticks(x); ax[-1].set_xticklabels([f"{nm} \n(ars {a:.2f}, ESM {_fmt_esm(e)})" for nm, a, e in zip(tab["name"], tab["a_rs"], esm)], rotation=30, ha="right")
+    ax[-1].set_xticks(x)
+    if param_rows:
+        ax[-1].set_xticklabels(tab["name"], fontsize=9)
+        _param_rows(ax[-1], x, rows)
+    else:
+        esm = tab["esm"] if "esm" in tab else np.full(len(tab), np.nan)
+        ax[-1].set_xticklabels([f"{nm} \n(ars {a:.2f}, ESM {_fmt_esm(e)})" for nm, a, e in zip(tab["name"], tab["a_rs"], esm)], rotation=30, ha="right")
     if title: fig.suptitle(title)
-    fig.tight_layout()
+    fig.tight_layout()   # includes the row texts (they are axes artists), so the bottom margin grows with the row count
     return fig, ax
