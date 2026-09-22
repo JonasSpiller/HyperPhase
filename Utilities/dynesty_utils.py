@@ -1006,7 +1006,7 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     if y_floor is not None:
         axr.step(ph, y_floor - y_true, where="mid", color="0.45", lw=1.0, ls=":", zorder=3, label="numerical floor (truth model at the injected $\\theta$)")
     axr.set_xlabel("orbital phase"); axr.set_ylabel("model - truth [ppm]"); axr.margins(x=0.01)
-    axr.secondary_yaxis("right", functions=(lambda v: v / s_bin, lambda v: v * s_bin)).set_ylabel(r"/ $\sigma_{bin}$", fontsize=8)
+    axr.secondary_yaxis("right", functions=(lambda v: v / s_bin, lambda v: v * s_bin)).set_ylabel(r"$\sigma_{bin}$", fontsize=8)
     axr.legend(frameon=False, fontsize=7, ncol=3, loc="upper left")
 
     # --- numbers -----------------------------------------------------------------------------------

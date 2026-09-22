@@ -528,6 +528,16 @@ def insolation_cache(cfg, insolation_model, n_lo=300, n_la=150, **geom):
     return insolation_grid(planet, u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model)
 
 
+# Uniform time grid for a model that is going to be BIN-AVERAGED: the midpoints of the n_t sub-intervals, not their left edges.
+# binned() averages these samples per bin, so left edges would make that a left Riemann sum - first order, with error
+# ~ (step/2) x slope, i.e. ~ transit_depth / (2 * n_t/n_bins) in the bins the transit ingress/egress falls into. At the usual
+# n_t = 50 per bin that is several ppm (measured 4.62 ppm for a 454 ppm transit), orders of magnitude above every other
+# discretisation in the forward model (n_layers 40 vs 80: 0.05 ppm; n_lo/n_la 300/150 vs 600/300: 0.001 ppm). The midpoint
+# rule removes it for free: same number of evaluations, ~70x smaller error, and it keeps converging with n_t.
+def model_times(period, n_t):
+    return np.linspace(0., period, int(n_t), endpoint=False) + 0.5 * period / int(n_t)
+
+
 # Reflected phase-curve shape at unit albedo (A = 1)
 def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_rs=None, n_t=None, **_):
     pl = cfg.planet
@@ -536,7 +546,7 @@ def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_rs=None, n_t=N
     rp_rs = pl.r1 / pl.r2  if rp_rs is None else rp_rs      # default Rp/Rs from PlanetParams
     n_t = 50 * cfg.n_bins if n_t is None else n_t
 
-    t_ = np.linspace(0., pl.period, int(n_t), endpoint=False)
+    t_ = model_times(pl.period, n_t)
     # set the ratios in the planet's own units (reflected is geometric -> a_AU unused, left as-is)
     planet = replace(pl, r1=rp_rs * pl.r2, R=a_rs * pl.r2, T2_eff=T_s)
     _, refl, _ = reflected_PhaseCurve(planet, t=t_, include_transit=False, A=1., u_B=cfg.u_B, insolation_model=insolation_model)
@@ -548,6 +558,11 @@ def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_rs=None, n_t=N
 def pcurve_params(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_rs=None, n_layers=None, n_lo=300, n_la=150, insol=None):
     check_redistribution(insolation_model, F)
     # n_layers = 30-40 usually sufficient for insolation_model="hyperillum", insolation_model="naive" (and "naive_redist") needs n_layers = 60-80
+    # Measured (TOI-2431 b/NIRSpec and K2-141 b/MIRI-LRS, vs n_layers=400): on the light CURVE the two models converge alike
+    # (max |d| at n_layers=40: naive 0.09-0.17 ppm, hyperillum 0.08-0.14 ppm; <0.02 sigma_bin once binned), and the naive-vs-truth
+    # A_B bias is stable to ~1e-4 from n_layers=20 up. The 60-80 matters for the OCCULTATION DEPTH, where naive converges only
+    # ~N^-1 against hyperillum's ~N^-2 (K2-141 b: 0.33 / 0.20 / 0.08 ppm at n_layers 40 / 60 / 120, vs 0.13 / 0.07 / 0.02).
+    # Since the hyperillum-naive depth difference is itself only ~1 ppm, use n_layers >= 120 when COMPARING depths between models.
     if n_layers is None:
         if insolation_model == "hyperillum":
             n_layers = 40
@@ -586,7 +601,7 @@ def model_pcurve(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_rs
     pl = cfg.planet
     n_t = 50 * cfg.n_bins if n_t is None else n_t
 
-    t_ = np.linspace(0., pl.period, int(n_t), endpoint=False)
+    t_ = model_times(pl.period, n_t)
     planet = swept_planet(cfg, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs)
 
     # Thermal Part

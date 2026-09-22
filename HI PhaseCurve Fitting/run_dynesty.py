@@ -60,7 +60,8 @@ sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10,
 # Everything below spawns the dynesty pool. multiprocessing uses SPAWN here, so each worker re-imports this file - without the guard it would re-run the whole script (PandExo, the fit, ...) in every worker.
 if __name__ == "__main__":
 
-    OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dynesty_results")
+    OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "more runs/OLD_before_midpoint_binning/dynesty_results")
 
     lrs_range = filter_lambda(instrument)
     l1, l2 = lrs_range
@@ -91,7 +92,7 @@ if __name__ == "__main__":
     # The free parameters differ per model, so "priors-..." goes LAST, after {insolation_model} (which run_nested_fit fills in):
     # one glob on tag then picks up every model of this dataset whatever it was sampled with, while runs with different free
     # parameters still cannot overwrite each other.
-    tag = (f"TEST_{planet.name}_{instrument}_{A_model.label}_AB{A_B_true:g}"
+    tag = (f"{planet.name}_{instrument}_{A_model.label}_AB{A_B_true:g}"
            f"_nbins{n_bins}_norbits{n_orbits}_rms1min{sigma_1min:.1f}_sigmascale{sigma_1min_scaling:g}_seed{seed}").replace("/", "-").replace(" ", "")
 
     def outfile_of(pset):
