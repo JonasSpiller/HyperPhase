@@ -16,7 +16,7 @@ from dynesty_utils import *
 ####################################################################################################
 
 # Planet data
-planet = hi_planets_by_name("K2-141 b") # "TOI-2431 b"
+planet = hi_planets_by_name("TOI-2431 b") # "TOI-2431 b", "K2-141 b", "TOI-2260 b", "K2-157 b", KOI-1843.03
 
 u = [0.15, 0.08]  # Band-integrated (MIR) quadratic stellar limb darkening coefficients [u1, u2] (placeholders from grey Eddington atmosphere, not from K2-141 data, will be set by theoretical stellar atmosphere models)
 u_B = 0.6  # Bolometric linear stellar limb darkening coefficient (placeholder, from Sadh_Gavassino_2026)
@@ -28,10 +28,10 @@ A_model = ConstantBandAlbedo(.1) # Band-integrated albedo of rocky surface fixed
 # A_model = ScaledBandAlbedo(1.)
 
 # Filter to be used
-instrument, instrument_pandexo = "MIRI/LRS", "MIRI LRS"
+instrument, instrument_pandexo = "JWST_NIRSpec.G395H_NRS1", "NIRSpec G395H" # "MIRI/LRS", "MIRI LRS" #  "MIRI/F1280W", "MIRI F1280W" (overwrite: sigma_1min = 247.2)
 
-INSOL_TRUTH = "hyperillum"   # insolation model the simulated data are drawn from
-MODELS = ("naive", "hyperillum")   # insolation models fitted to those data
+INSOL_TRUTH = "hyperillum"   # insolation model the simulated data are drawn from (F = 0 in the truth: any fitted F is bias)
+MODELS = ("hyperillum", "naive", "naive_redist") # ("hyperillum", "naive", "naive_redist")   # insolation models fitted to those data; each one is sampled with its OWN pset (see PSETS)
 
 seed = 42
 
@@ -40,9 +40,13 @@ n_orbits = 3 # number of orbits observed (3 orbits has been done)
 
 sigma_1min_scaling = 1. # scale the noise level
 
-# Priors (uniform); ParameterSet fixes the column order of theta and of res.samples
-pset = ParameterSet((Parameter("A_B",    Uniform(0.0, 0.8), r"$A_B$"),
-                     Parameter("offset", Uniform(-50., 50.), "offset [ppm]")))
+# Priors (uniform); ParameterSet fixes the column order of theta and of res.samples.
+_A_B    = Parameter("A_B",    Uniform(0.0, 0.8), r"$A_B$")
+_OFFSET = Parameter("offset", Uniform(-50., 50.), "offset [ppm]")
+_F      = Parameter("F",      Uniform(0.0, 0.5), r"$F$")
+PSETS = {"hyperillum":   ParameterSet((_A_B, _OFFSET)),
+         "naive":        ParameterSet((_A_B, _OFFSET)),
+         "naive_redist": ParameterSet((_A_B, _OFFSET, _F))}
 
 # Sampler. pfrac=0.8 -> effort on the posterior; pfrac=0 -> all effort on lnZ (for the Bayes factor)
 sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10, dlogz=0.01, nprocs=8)
@@ -75,31 +79,44 @@ if __name__ == "__main__":
     print(f"period = {planet.period*24*60:.1f} min -> {n_bins} bins of {planet.period*24*60/n_bins:.1f} min")
     print(f"1-sigma per bin (over all orbits) = {cfg.sigma_bin:.1f} ppm")
 
-    # SIMULATED OBSERVATION
+    # SIMULATED OBSERVATION. Identical to run_dynesty.py's for the same inputs and seed.
     data = simulate_data(cfg, A_B_true, insolation_model=INSOL_TRUTH, seed=seed, plotting=False)
 
-    # LogLikelihoods. Same data, same priors -> the two lnZ are comparable
-    logls = {m: GaussianLogL.from_pset(cfg, data, m, pset) for m in MODELS}
+    # LogLikelihoods. Same data for every model, each with its own pset
+    missing = [m for m in MODELS if m not in PSETS]
+    if missing: raise ValueError(f"no pset for model(s) {missing}; PSETS has {tuple(PSETS)}")
+    logls = {m: GaussianLogL.from_pset(cfg, data, m, PSETS[m]) for m in MODELS}
 
-    # Dynesty. run_nested_fit fills {insolation_model} in, so one SamplerConfig serves both models without them overwriting each other
-    tag = (f"{planet.name}_{instrument}_{A_model.label}_AB{A_B_true:g}"
-           f"_priors-{'+'.join(pset.names)}"   # which parameters were sampled, so runs with different free parameters cannot overwrite each other
-           f"_nbins{n_bins}_norbits{n_orbits}_rms1min{sigma_1min}_sigmascale{sigma_1min_scaling:g}_seed{seed}").replace("/", "-").replace(" ", "")
-    scfg = SamplerConfig(seed=seed, outfile=os.path.join(OUTDIR, tag + "_{insolation_model}.pkl"), **sampler)
+    # Dynesty. `tag` is everything the models share - it is the DATASET, and it is what plot_dynesty.ipynb is pasted with.
+    # The free parameters differ per model, so "priors-..." goes LAST, after {insolation_model} (which run_nested_fit fills in):
+    # one glob on tag then picks up every model of this dataset whatever it was sampled with, while runs with different free
+    # parameters still cannot overwrite each other.
+    tag = (f"TEST_{planet.name}_{instrument}_{A_model.label}_AB{A_B_true:g}"
+           f"_nbins{n_bins}_norbits{n_orbits}_rms1min{sigma_1min:.1f}_sigmascale{sigma_1min_scaling:g}_seed{seed}").replace("/", "-").replace(" ", "")
+
+    def outfile_of(pset):
+        return os.path.join(OUTDIR, tag + "_{insolation_model}" + f"_priors-{'+'.join(pset.names)}.pkl")   # {insolation_model} stays a placeholder for run_nested_fit
 
     t0 = time.perf_counter()
     fits = {}
+    print(f"\ndataset tag: {tag}")
     for m, L in logls.items():
         print(f"\n=== {m} " + "=" * 70)
-        fits[m] = run_nested_fit(L, pset, scfg)
+        scfg = SamplerConfig(seed=seed, outfile=outfile_of(PSETS[m]), **sampler)
+        fits[m] = run_nested_fit(L, PSETS[m], scfg)
 
-    # Summary
-    base = dict(A_B=A_B_true, offset=0.)   # the injected truth
+    # Summary. The truth has no redistribution, so the injected F is 0 and the posterior's distance from it IS the bias
+    # (posterior_summary only quotes a bias for parameters a model actually samples, so one base serves all three).
+    base = dict(A_B=A_B_true, offset=0., F=0.)
     print("\n" + "=" * 78)
     for f in fits.values():
         posterior_summary(f, base)
-    if all(m in fits for m in ("naive", "hyperillum")):
-        bayes_factor(fits, "hyperillum", "naive", K=200)
+
+    # Bayes factors, all against the truth's own model: "can these data tell hyperillumination from the naive alternative,
+    # and from the naive alternative that is allowed to hide the difference in a redistribution F?"
+    for den in ("naive", "naive_redist"):
+        if all(m in fits for m in ("hyperillum", den)):
+            bayes_factor(fits, "hyperillum", den, K=200)
 
     print(f"\ntotal {(time.perf_counter() - t0)/60:.1f} min")
     for m, f in fits.items():

@@ -406,7 +406,7 @@ def logl_slice(logl, name, values, base, n_jobs=-1):
     return np.asarray(_map(_one, values, n_jobs), float)
 
 
-def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1):
+def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1, profile_offset=None):
     """lnL on a 2-D grid over two sampled parameters.
 
     Returns lnL with shape (len(y_vals), len(x_vals)) — i.e. lnL[j, i] = lnL(x_vals[i], y_vals[j]), the
@@ -419,6 +419,12 @@ def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1):
 
     If one axis is "offset" the grid costs only len(other axis) forward-model evaluations, since the
     offset enters additively.
+
+    profile_offset : array of offsets. Instead of holding the offset at base["offset"], each cell is
+    MAXIMISED over them - the profile likelihood in the two plotted parameters, with the additive
+    baseline treated as the nuisance it is. Free: the offset reuses the cell's one forward model.
+    Use it when the plotted parameters are correlated with the offset (e.g. F), where a slice at a
+    fixed offset is narrower than the posterior actually is. Only for axes that are not "offset".
     """
     for n in (x_name, y_name):
         if n not in logl.names: raise ValueError(f"{n!r} is not sampled; logl.names = {logl.names}")
@@ -439,10 +445,15 @@ def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1):
         lnL = np.asarray(_map(_col, other_vals, n_jobs), float).T   # (n_off, n_other)
         return lnL if off_is_y else lnL.T
 
+    if profile_offset is not None:
+        if "offset" not in logl.names: raise ValueError("profile_offset needs the offset to be sampled")
+        profile_offset = np.asarray(profile_offset, float)
+
     def _one(ij):
         i, j = ij
         b = dict(base); b[x_name] = x_vals[i]; b[y_name] = y_vals[j]
-        return logl(theta_of(logl, b))
+        th = theta_of(logl, b)
+        return float(np.max(logl.logl_offsets(th, profile_offset))) if profile_offset is not None else logl(th)
     idx = [(i, j) for j in range(len(y_vals)) for i in range(len(x_vals))]
     return np.asarray(_map(_one, idx, n_jobs), float).reshape(len(y_vals), len(x_vals))
 
