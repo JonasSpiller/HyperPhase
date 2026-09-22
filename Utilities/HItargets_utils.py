@@ -388,3 +388,17 @@ def binning(lam_start, lam_end, result, visualize=True):
     rms_transit = np.sqrt(np.sum(errs_masked ** 2)) / len(errs_masked) * 1e6
     # print(rms_transit)
     return rms_transit
+
+
+# sigma_1min [ppm] for a whole sample of archive planets on ONE instrument: run_pandexo + rms_1min per target, keyed by PlanetParams.name.
+# PandExo is NOT cached and takes seconds per planet, so call this once and keep the dict. A target the archive cannot supply (no T14, no magnitude) or that PandExo fails on yields NaN with the reason printed, rather than aborting the sample.
+def rms_1min_sample(names, instrument, instrument_pandexo, verbose=False, **overrides):
+    out = {}
+    for nm in names:
+        try:
+            pl = hi_planets_by_name(nm)
+            out[pl.name] = rms_1min(run_pandexo(nm, instrument_pandexo, verbose=verbose, t14_h=pl.T14, **overrides), pl.T14, filter_lambda(instrument))
+        except Exception as e:
+            out[str(nm)] = np.nan
+            print(f"{nm}: sigma_1min unavailable ({type(e).__name__}: {e})")
+    return out

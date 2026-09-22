@@ -27,11 +27,11 @@ import matplotlib.pyplot as plt
 #####
 ###########################################################################################################################
 
-def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum"):
+def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", **model_kw):
     ph = data["t"] / cfg.planet.period  # orbital phase
 
     # Full Phase Curve (for custom reproduction of simulate_data)
-    t_hi, y_hi = model_pcurve(cfg, insolation_model, A_B_true, n_t=200 * cfg.n_bins, n_layers=80, n_lo=600, n_la=300)
+    t_hi, y_hi = model_pcurve(cfg, insolation_model, A_B_true, n_t=200 * cfg.n_bins, n_layers=80, n_lo=600, n_la=300, **model_kw)
     y_true = binned(cfg, y_hi)
     ph_hi = t_hi / cfg.planet.period
 
@@ -93,7 +93,7 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
     truth = dict(A_B=float(A_B_true), insolation_model=insolation_model, offset=float(offset), seed=int(seed), noise=bool(noise))
     data = {"t": t, "y_obs": y_obs, "sigma":sigma, "truth": truth}
 
-    if plotting: plot_simulated_data(cfg, A_B_true, data, insolation_model=insolation_model)
+    if plotting: plot_simulated_data(cfg, A_B_true, data, insolation_model=insolation_model, **{k: v for k, v in model_kw.items() if k == "F"})
 
     return data
 
@@ -211,12 +211,14 @@ class ParameterSet:
 
 # Geometry parameters model_pcurve accepts by name (its own kwarg spelling: a_rs = R/r2, rp_rs = r1/r2).
 _GEOMETRY = ("a_rs", "T_s", "rp_rs")
-_KNOWN = ("A_B", "offset") + _GEOMETRY
+# F (heat redistribution) belongs to insolation_model="naive_redist" alone: required there, rejected for the other models.
+_KNOWN = ("A_B", "offset", "F") + _GEOMETRY
 
-# Which sampled parameter invalidates which geometry-only cache.
+# Which sampled parameter invalidates which geometry-only cache. "naive_redist" reflects exactly like "naive" (F-independent),
+# and its thermal part is the analytic Louden model, so it has no insolation map to cache at all (the entry only lists the models).
 _CACHE_DEPS = {
-    "refl":  {"naive": ("a_rs", "rp_rs"),        "hyperillum": ("a_rs", "rp_rs")},
-    "insol": {"naive": ("a_rs", "T_s"),        "hyperillum": ("a_rs", "T_s", "rp_rs")},
+    "refl":  {"naive": ("a_rs", "rp_rs"),        "hyperillum": ("a_rs", "rp_rs"),        "naive_redist": ("a_rs", "rp_rs")},
+    "insol": {"naive": ("a_rs", "T_s"),        "hyperillum": ("a_rs", "T_s", "rp_rs"),   "naive_redist": ()},
 }
 
 
@@ -255,6 +257,9 @@ class GaussianLogL:
         clash = [n for n in self.names if n in self.fixed]
         if clash: raise ValueError(f"parameter(s) {clash} are both sampled and fixed")
         if "A_B" not in self.names and "A_B" not in self.fixed: raise ValueError("A_B must be either sampled (in `names`) or supplied in `fixed`")
+        has_F = "F" in self.names or "F" in self.fixed
+        if insolation_model == "naive_redist" and not has_F: raise ValueError('insolation_model="naive_redist" needs F either sampled (in `names`) or supplied in `fixed`')
+        if has_F and insolation_model != "naive_redist": raise ValueError(f'F is only defined for insolation_model="naive_redist", not {insolation_model!r}')
         geom_in_kw = [k for k in self.model_kw if k in _GEOMETRY]
         if geom_in_kw: raise ValueError(f"pass geometry {geom_in_kw} via `fixed`, not as model_kw")
         if insolation_model not in _CACHE_DEPS["insol"]: raise ValueError(f"insolation_model must be one of {tuple(_CACHE_DEPS['insol'])}")
@@ -274,6 +279,7 @@ class GaussianLogL:
         geom = {k: v for k, v in self.fixed.items() if k in _GEOMETRY}
         self._live = {k: cache and not any(n in self.names for n in deps[insolation_model]) for k, deps in _CACHE_DEPS.items()}
         self._live["refl"] &= cfg.reflected  # nothing to cache when the reflected part is switched off
+        self._live["insol"] &= insolation_model != "naive_redist"   # the Louden model never touches an insolation map
         self.refl_unit = reflected_unit(cfg, insolation_model, n_t=self.model_kw.get("n_t"), **geom) if self._live["refl"] else None
         self.insol = insolation_cache(cfg, insolation_model, n_lo=self.model_kw.get("n_lo", 300), n_la=self.model_kw.get("n_la", 150), **geom) if self._live["insol"] else None
 
@@ -312,7 +318,7 @@ class GaussianLogL:
         """Binned model [ppm] for a parameter dict, WITHOUT the baseline offset. Split out from
         model() because the offset is purely additive: one curve serves every offset."""
         geom = {k: p[k] for k in _GEOMETRY if k in p}
-        _, y = model_pcurve(self.cfg, self.insolation_model, p["A_B"], refl_unit=self.refl_unit, insol=self.insol, **geom, **self.model_kw)
+        _, y = model_pcurve(self.cfg, self.insolation_model, p["A_B"], F=p.get("F"), refl_unit=self.refl_unit, insol=self.insol, **geom, **self.model_kw)
         return binned(self.cfg, y)
 
     def model(self, theta):
@@ -714,13 +720,13 @@ def derived_samples(logl, thetas, n_jobs=-1):
     def _one(theta):
         p_ = logl.unpack(theta)
         geom = {k: p_[k] for k in _GEOMETRY if k in p_}
-        A_B_ = p_["A_B"]
+        A_B_, F_ = p_["A_B"], p_.get("F")
 
-        lo, la, Tg = custom_temperature_grid(swept_planet(cfg, **geom), u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=m, A_B=A_B_, insol=logl.insol)
+        lo, la, Tg = custom_temperature_grid(swept_planet(cfg, **geom), u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=m, F=F_, A_B=A_B_, insol=logl.insol)
         eq = int(np.argmin(np.abs(la)))   # equator row; Tg has shape (n_la, n_lo)
         T = list(np.interp([0., 90., 180.], lo, Tg[eq]))   # interpolated, not nearest-cell: T falls steeply through the terminator, so the nearest grid longitude is off by hundreds of K there
 
-        pp = pcurve_params(cfg, m, A_B_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=logl.insol)
+        pp = pcurve_params(cfg, m, A_B_, F=F_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=logl.insol)
         d_th = float(occultation_depth(pp, stellar_grid=cfg.stellar_grid))
 
         # Reflected part: linear in A, and its maximum over the orbit is the last point before ingress - within ~1% of the full-phase value, since reflected_unit itself carries the occultation.
@@ -749,7 +755,7 @@ def brightness_temperature(depth_th, cfg, quantiles=(0.16, 0.5, 0.84)):
 #####
 ###########################################################################################################################
 
-_COLOR = {"naive": "C0", "hyperillum": "C3"}
+_COLOR = {"naive": "C0", "hyperillum": "C3", "naive_redist": "C2"}
 
 
 def _density_levels(x, y, rng=None, bins=60, smooth=1.0, levels=(0.68, 0.95)):
@@ -811,15 +817,19 @@ def plot_posterior_overlay(fits, x, y, truth=None, profile=None, n=None, bins=60
 
 
 def plot_bias(fits, truth, colors=None, figsize=None):
-    """Median +/- 68% per model against the injected value, one panel per parameter, annotated with the bias in sigma. The compact version of posterior_summary()."""
+    """Median +/- 68% per model against the injected value, one panel per parameter, annotated with the bias in sigma. The compact version of posterior_summary().
+    The fits need not share a ParameterSet: the panels are the UNION of their parameters (first-seen order), and a model that does not sample one simply has no marker in that panel."""
     colors = colors or _COLOR
-    names = next(iter(fits.values())).pset.names
-    labels = dict(zip(names, next(iter(fits.values())).pset.labels))
+    names, labels = [], {}
+    for f in fits.values():   # union, not the first fit's names: e.g. only "naive_redist" samples F
+        for nm, lb in zip(f.pset.names, f.pset.labels):
+            if nm not in labels: names.append(nm); labels[nm] = lb
     fig, axes = plt.subplots(1, len(names), figsize=figsize or (4.2 * len(names), 2.4))
     axes = np.atleast_1d(axes)
 
     for ax, nm in zip(axes, names):
         for k, (name, f) in enumerate(fits.items()):
+            if nm not in f.pset.names: continue   # this model does not sample it
             d = posterior_summary(f, truth, verbose=False)["params"][nm]
             ax.errorbar(d["med"], k, xerr=[[d["minus"]], [d["plus"]]], fmt="o", ms=6, color=colors.get(name, "k"), capsize=3, elinewidth=1.4)
             if "bias_sigma" in d: ax.annotate(f"{d['bias_sigma']:+.2f}$\\sigma$", (d["med"], k), textcoords="offset points", xytext=(0, 9), ha="center", fontsize=8)
@@ -889,9 +899,8 @@ def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200,
     for d in (-1., 1.): axr.axhline(d, color="0.85", lw=0.6, ls=":")
     axr.axhline(0., color="0.7", lw=0.8); axr.set_ylabel("resid / $\\sigma$"); axr.set_ylim(-3.5, 3.5)
 
-    # Panel 3
-    if len(names) == 2:
-        if num not in fits or den not in fits: raise ValueError(f"fits has {tuple(fits)}, need num={num!r} and den={den!r}")
+    # Panel 3: the num/den pair only - with more than two models every other one is still in panels 1-2, but a single difference curve can only be a pair
+    if num in fits and den in fits:
         a, b = den, num
         axd.axhspan(-s.mean(), s.mean(), fc="0.9", ec="0.6", lw=0.8, label=r"$\pm\sigma_{bin}$")
         axd.axhline(0., color="0.7", lw=0.8)
