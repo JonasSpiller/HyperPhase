@@ -9,6 +9,7 @@ from scipy.integrate import quad
 from PIL import Image
 from dataclasses import dataclass, replace
 from astropy import constants as const
+from dataclasses import fields
 
 sigma = const.sigma_sb.value  # 5.670374e-8 W ⋅ m⁻² ⋅ K⁻⁴
 h = const.h.value
@@ -76,6 +77,22 @@ class PlanetParams:
 
         contrast = np.trapezoid(wl * B(T1_day), wl) / np.trapezoid(wl * B(planet.T2_eff), wl)
         return 1e6 * ((planet.r1 / planet.r2) ** 2 * contrast + A_g * (planet.r1 / planet.R) ** 2)
+
+    def summary(self, print_params=False, eff_wavelength_range=None):
+        print(f"=== {self.name} ===")
+        if print_params:
+            for f in fields(self):
+                print(f"{f.name:>8} = {getattr(self, f.name)}")
+            print("--- derived ---")
+        print(f"rp = r1/r2           = {self.r1 / self.r2:.4f}")
+        print(f"a  = R/r2            = {self.R / self.r2:.3f}")
+        print(f"terminator_penumbra  = {self.terminator_penumbra('deg'):.1f} deg")
+        print(f"terminator_nightside = {self.terminator_nightside('deg'):.1f} deg")
+        illuminated = self.fraction_illuminated(extra=True)
+        print(f"fraction_illuminated = {100*self.fraction_illuminated():.1f} %  (fully illuminated: {100*illuminated['fully illuminated']:.1f} %, penumbra: {100*illuminated['penumbra']:.1f} %)")
+        print(f"substellar_boost     = {100*self.substellar_boost():.5f} % (insolation), {100*self.substellar_boost(insolation=False):.5f} % (temperature)")
+        if eff_wavelength_range is not None:
+            print(f"approx_occ_depth     = {self.approx_occ_depth(eff_wavelength_range):.1f} ppm")
 
 
 ###########################################################################################################################

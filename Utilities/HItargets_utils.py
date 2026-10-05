@@ -101,16 +101,20 @@ def best_hi_planets(n_planets):
     selected = df[df["hyperillum_valid"]].nsmallest(n_planets, "hyperillum_metric")
     return {row["pl_name"]: CUSTOM.get(row["pl_name"], _params_from_row(row)) for _, row in selected.iterrows()}
 
+def _archive_row(name):
+    """The archive row of one planet by loose name; KeyError (not pandas' IndexError) when the archive does not have it."""
+    rows = _archive().pipe(lambda d: d[d["_key"] == _normalise(name)])
+    if rows.empty: raise KeyError(f"{name!r} not found in {INPUT_GLOB} (nor in CUSTOM)")
+    return rows.iloc[0]
+
 def hi_planets_by_name(names):
-    """One planet or a list of them as {name: PlanetParams}. Accepts loose spellings ('TOI-2431b'). CUSTOM entries are returned whether or not they exist in the archive."""
-    df = _archive()
+    """One planet or a list of them as {name: PlanetParams}. Accepts loose spellings ('TOI-2431b'). CUSTOM entries are returned whether or not they exist in the archive. An unknown name raises KeyError."""
     if isinstance(names, str):
         custom = CUSTOM_N.get(_normalise(names))
         if custom is not None:
             out = custom
         else:
-            row = df[df["_key"] == _normalise(names)].iloc[0]
-            out = _params_from_row(row)
+            out = _params_from_row(_archive_row(names))
     else:
         out = {}
         for name in names:
@@ -118,7 +122,7 @@ def hi_planets_by_name(names):
             if custom is not None:
                 out[custom.name] = custom
                 continue
-            row = df[df["_key"] == _normalise(name)].iloc[0]
+            row = _archive_row(name)
             out[row["pl_name"]] = _params_from_row(row)
     return out
 
@@ -169,8 +173,8 @@ FILTER_LAMBDA_UM = {
     "MIRI/F1800W":   [16.5, 19.5],   # MIRI imaging TSO. MIRI's thermal background climbs steeply past ~15 um
     "MIRI/LRS":      [5.0, 10.5],    # suggested by Sebastian. LRS runs to ~12 um but the red end is trimmed where throughput drops
     "Spitzer/IRAC2": [4.0, 5.0],     # Spitzer IRAC channel 2 (4.5 um), to compare with the measured occultation depth fp = 142 ppm (Zieba 2022)
-    "JWST_NIRSpec.G395H_NRS1": [2.8530, 3.7363], # two arrays of NIRSpec/G395H
-    "JWST_NIRSpec.G395H_NRS2": [3.7959, 5.2040] # two arrays of NIRSpec/G395H
+    "JWST_NIRSpec.G395H_NRS1": [2.9, 3.7], # two arrays of NIRSpec/G395H
+    "JWST_NIRSpec.G395H_NRS2": [3.8, 5.2] # two arrays of NIRSpec/G395H
 }
 
 # Full filter ranges [um] -- the extent of the throughput files
@@ -391,14 +395,11 @@ def binning(lam_start, lam_end, result, visualize=True):
 
 
 # sigma_1min [ppm] for a whole sample of archive planets on ONE instrument: run_pandexo + rms_1min per target, keyed by PlanetParams.name.
-# PandExo is NOT cached and takes seconds per planet, so call this once and keep the dict. A target the archive cannot supply (no T14, no magnitude) or that PandExo fails on yields NaN with the reason printed, rather than aborting the sample.
+# PandExo is NOT cached and takes seconds per planet, so call this once and keep the dict. A target the archive cannot supply (no T14, no magnitude) or that PandExo
+# fails on raises (KeyError / ValueError from pandexo_params, or PandExo's own error) rather than yielding NaN: a NaN sigma_1min would silently corrupt the fits downstream (planet_bias_table).
 def rms_1min_sample(names, instrument, instrument_pandexo, verbose=False, **overrides):
     out = {}
     for nm in names:
-        try:
-            pl = hi_planets_by_name(nm)
-            out[pl.name] = rms_1min(run_pandexo(nm, instrument_pandexo, verbose=verbose, t14_h=pl.T14, **overrides), pl.T14, filter_lambda(instrument))
-        except Exception as e:
-            out[str(nm)] = np.nan
-            print(f"{nm}: sigma_1min unavailable ({type(e).__name__}: {e})")
+        pl = hi_planets_by_name(nm)
+        out[pl.name] = rms_1min(run_pandexo(nm, instrument_pandexo, verbose=verbose, t14_h=pl.T14, **overrides), pl.T14, filter_lambda(instrument))
     return out

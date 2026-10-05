@@ -94,15 +94,28 @@ def fit_naive(cfg, truth, free_offset=True, bounds=(0.0, 0.6), xatol=1e-4, **kw)
     return res.x, res.fun, resid_rms # chi2 = cost(A_fit) = weighted sum of squared residuals (this χ² is not a goodness-of-fit to an observation — it's the squared distance between two noiseless models, expressed in units of the observational noise)
 
 
+# Nelder-Mead simplex around (A_B_, F): one step of 0.05 in A_B and 0.01 in F, each taken towards the inside of its bounds.
+def _redist_simplex(A_B_, F, bounds, F_bounds):
+    dA = 0.05 if A_B_ + 0.05 <= bounds[1] else -0.05
+    dF = 0.01 if F + 0.01 <= F_bounds[1] else -0.01
+    return [[A_B_, F], [A_B_ + dA, F], [A_B_, F + dF]]
+
+
 # Best-fit naive_redist (A_B, F) against a hyperillumination-generated truth, returning (A_B_fit, F_fit, chi2, resid_rms): the 2-parameter version of fit_naive (same binning, noise weighting and offset handling).
 # Nelder-Mead starts on the F = 0 slice (the truth has no redistribution) at A_B_start - by default the best F = 0 albedo; pass fit_naive's A_B to skip that extra 1-D fit.
-def fit_redist(cfg, truth, free_offset=True, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), A_B_start=None, xatol=1e-4, **kw):
+# Restart guard: with `bounds` scipy clips reflected vertices, so a simplex that reaches an edge (F = 0, or A_B at a bound) can collapse onto it and satisfy xatol there.
+# Measured: a naive_redist(0.30, F=0.20) truth returned (0.60, 0.16, chi2=82) instead of chi2=0, and a hyperillum truth started at A_B=0.6 returned the F=0 naive solution (chi2 3.09 instead of 1.16).
+# Restarting from the answer with a fresh simplex recovers both; an already converged fit pays one short extra Nelder-Mead (~3 s). n_restart=0 restores the single fit.
+def fit_redist(cfg, truth, free_offset=True, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), A_B_start=None, xatol=1e-4, n_restart=2, **kw):
     resid, cost = _chi2_problem(cfg, truth, "naive_redist", free_offset=free_offset, **kw)
     if A_B_start is None:
         A_B_start = minimize_scalar(lambda A_B_: cost(A_B_, F_bounds[0]), bounds=bounds, method="bounded", options={"xatol": 1e-3}).x
-    dA = 0.05 if A_B_start + 0.05 <= bounds[1] else -0.05   # initial simplex: one step in A_B, one in F
-    simplex = [[A_B_start, F_bounds[0]], [A_B_start + dA, F_bounds[0]], [A_B_start, F_bounds[0] + 0.01]]
-    res = minimize(lambda p: cost(*p), x0=simplex[0], method="Nelder-Mead", bounds=[bounds, F_bounds], options={"xatol": xatol, "initial_simplex": simplex})
+    nm = lambda simplex: minimize(lambda p: cost(*p), x0=simplex[0], method="Nelder-Mead", bounds=[bounds, F_bounds], options={"xatol": xatol, "initial_simplex": simplex})
+    res = nm(_redist_simplex(A_B_start, F_bounds[0], bounds, F_bounds))
+    for _ in range(n_restart):
+        chi2_before = res.fun
+        res = nm(_redist_simplex(res.x[0], res.x[1], bounds, F_bounds))
+        if chi2_before - res.fun < 1e-4: break   # no further improvement beyond Nelder-Mead's own fatol -> converged
     r = resid(*res.x)
     resid_rms = np.sqrt(np.mean(r ** 2))
     return res.x[0], res.x[1], res.fun, resid_rms
@@ -446,22 +459,29 @@ def plot_joint_measurability(A_B_grid, sweep, i0, cfg, target_label, title):
 
 
 # Stacked bias maps on a shared a/R* axis: |Delta A_B| (top), the relative bias |Delta A_B|/A_B (middle) and, if F_map is given, the fitted F of the joint fit (bottom).
+# show_relative / show_F switch the second and third panel on; by default only the absolute bias is drawn. show_F needs F_map (passing F_map alone still
+# masks the non-occulting cells and draws the grazing lines on every panel, it just does not add the F panel).
 # Grey cells = "the model breaks down": railed fits (NaN). With F_map, geometries without an occultation are greyed out as well:
 # once the impact parameter b = (a/R*) cos i reaches 1 + Rp/R*, nothing anchors the flux level and A_B, F become degenerate (the best fit is arbitrary along a flat chi^2 valley).
 # The dashed lines then bound the grazing zone 1 - Rp/R* < b < 1 + Rp/R*. rp_rs_of(y) is Rp/R* at the map's y values; the inclination is the planet's.
-def plot_bias_maps(xg, yg, bias_map, A_B_true, planet, AGG, ykey, ylabel, rp_rs_of, F_map=None, F_levels=(0.01, 0.02, 0.05)):
+def plot_bias_maps(xg, yg, bias_map, A_B_true, planet, AGG, ykey, ylabel, rp_rs_of, F_map=None, F_levels=(0.01, 0.02, 0.05),
+                   show_relative=False, show_F=False):
+    if show_F and F_map is None: raise ValueError("show_F=True needs F_map")
     cos_i = np.cos(np.radians(planet.incl))
     X, Y = np.meshgrid(xg, yg)
     no_occultation = (X * cos_i >= 1. + rp_rs_of(Y)) if F_map is not None else np.zeros(X.shape, bool)
     y_line = np.linspace(yg[0], yg[-1], 100)
 
-    panels = [(np.abs(bias_map), "magma_r", [0.02, 0.05, 0.10], "%g", r"$|\Delta A_B|$", r"Absolute bias in recovered $A_B$"),
-              (100. * np.abs(bias_map) / A_B_true, "magma_r", [5, 10, 20, 40], "%g %%", r"$|\Delta A_B|/A_B$ [%]", r"Relative bias in recovered $A_B$")]
+    panels = [(np.abs(bias_map), "magma_r", [0.02, 0.05, 0.10], "%g", r"$|\Delta A_B|$", r"Absolute bias in recovered $A_B$")]
+    if show_relative:
+        panels.append((100. * np.abs(bias_map) / A_B_true, "magma_r", [5, 10, 20, 40], "%g %%", r"$|\Delta A_B|/A_B$ [%]", r"Relative bias in recovered $A_B$"))
     if F_map is not None:
         panels = [p[:5] + (p[5] + " (joint fit)",) for p in panels]
-        panels.append((F_map, SEQ_BLUE, list(F_levels), "%g", r"fitted $F$", r"Fitted heat redistribution $F$ (truth: $F$ = 0)"))
+        if show_F:
+            panels.append((F_map, SEQ_BLUE, list(F_levels), "%g", r"fitted $F$", r"Fitted heat redistribution $F$ (truth: $F$ = 0)"))
 
-    fig, axs = plt.subplots(len(panels), 1, figsize=(12, 6.2 * len(panels)), sharex=True)
+    fig, axs = plt.subplots(len(panels), 1, figsize=(12, 6.2 * len(panels)), sharex=True, squeeze=False)
+    axs = axs.ravel()
     for ax, (z, cmap, levels, fmt, clabel, title) in zip(axs, panels):
         z = np.ma.masked_where(no_occultation | ~np.isfinite(z), z)
         im = ax.pcolormesh(xg, yg, z, cmap=cmap, shading="auto")
@@ -503,7 +523,8 @@ def _planet_bias_row(cfg, A_B_true, pl, s1, redist, bounds, F_bounds, kw):
 
 
 # Bias, Fisher sigma and critical noise for a SAMPLE of planets on one instrument, sorted by a/Rs.
-# planets: {name: PlanetParams} or a list of PlanetParams. sigma_1min: {name: ppm/min}, e.g. from HItargets_utils.rms_1min_sample - NaN entries propagate instead of raising.
+# planets: {name: PlanetParams} or a list of PlanetParams. sigma_1min: {name: ppm/min}, e.g. from HItargets_utils.rms_1min_sample. Every planet needs a finite entry:
+# sigma_1min enters cfg.sigma_bin and so the chi^2 of the fit itself, and a NaN there makes every cost NaN, i.e. the BIAS comes back wrong, not just the sigma (measured: K2-141 b -0.038 / F = 0 instead of -0.055 / F = 0.016). Hence the check rather than NaN propagation.
 # quantity picks which bias the decision columns (bias, sigma, bias_sigma, sigma_1min_crit) refer to: "A_B" (default, also for the joint fit) or "F" (requires redist=True; the truth has F = 0, so F_fit IS the bias).
 # A_B_true is the SAME assumed albedo for every planet - a notebook assumption, not a per-planet measurement.
 # sigma_1min_crit = sigma_1min * |bias| / sigma is exact rather than an extrapolation: the bias does not depend on the noise, and the Fisher sigma is strictly proportional to sigma_1min.
@@ -514,8 +535,10 @@ def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity
     if quantity not in ("A_B", "F"): raise ValueError(f'quantity must be "A_B" or "F", got {quantity!r}')
     if quantity == "F" and not redist: raise ValueError('quantity="F" needs redist=True (only the joint fit has an F)')
     pls = list(planets.values()) if isinstance(planets, dict) else list(planets)
+    bad = [pl.name for pl in pls if not np.isfinite(sigma_1min.get(pl.name, np.nan))]
+    if bad: raise ValueError(f"no finite sigma_1min for {bad}; sigma_1min has {sorted(sigma_1min)}")
 
-    rows = pmap(_planet_bias_row, [(cfg, A_B_true, pl, sigma_1min.get(pl.name, np.nan), redist, bounds, F_bounds, kw) for pl in pls], n_jobs)   # a planet PandExo could not do keeps its bias but gets no sigma_1min_crit
+    rows = pmap(_planet_bias_row, [(cfg, A_B_true, pl, sigma_1min[pl.name], redist, bounds, F_bounds, kw) for pl in pls], n_jobs)
     tab = pd.DataFrame(rows).sort_values("a_rs").reset_index(drop=True)
     tab["esm"] = [planet_esm(AGG, nm) for nm in tab["name"]] if AGG is not None else np.nan
     tab["rp_rearth"] = [planet_archive_value(AGG, nm, "pl_rade") for nm in tab["name"]] if AGG is not None else np.nan   # [R_Earth], for the figure's rows only
