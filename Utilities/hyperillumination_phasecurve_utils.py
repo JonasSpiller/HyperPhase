@@ -22,7 +22,8 @@ sigma = const.sigma_sb.value
 ###########################################################################################################################
 
 # F: Kreidberg & Loeb 2016 heat redistribution in [0, 0.5], required by (and only used for) insolation_model="naive_redist"
-def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0., A=0.1, n_eta=150, n_phi=80, n_tab=1000, n_lo=200, n_la=100, insolation_model="hyperillum", F=None, stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=60, include_transit=True, include_occultation=True, spman="fast", spman_kw=None):
+# N_LAYERS=None: the per-model default of thermal_PhaseCurve (40 for hyperillum, 80 for naive / naive_redist)
+def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0., A=0.1, n_eta=150, n_phi=80, n_tab=1000, n_lo=200, n_la=100, insolation_model="hyperillum", F=None, stellar_model="blackbody", filter_path=False, A_B = 0.1, emissivity=1., N_LAYERS=None, include_transit=True, include_occultation=True, spman="fast", spman_kw=None):
     check_redistribution(insolation_model, F)  # fail before the reflected part is computed
     # Reflected Part including transit ("naive_redist" reflects exactly like "naive")
     t_comb, refl, fp_refl = reflected_PhaseCurve(planet, t=t, t0=t0, u=u, u_B=u_B, include_transit=include_transit, include_occultation=include_occultation, A=A, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
