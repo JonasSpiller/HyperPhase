@@ -199,6 +199,17 @@ FILTER_FILES = {
     "JWST_NIRSpec.G395H_NRS2": "JWST_NIRSpec.G395H_NRS2.spiderman.dat"
 }
 
+# PandExo mode names (jdi.load_mode_dict) -- None where PandExo has no mode
+PANDEXO_MODES = {
+    "MIRI/F1280W":   None,           # MIRI imaging TSO is not in PandExo: rms_1min uses CUSTOM_SIGMA_1MIN instead
+    "MIRI/F1500W":   None,
+    "MIRI/F1800W":   None,
+    "MIRI/LRS":      "MIRI LRS",
+    "Spitzer/IRAC2": None,
+    "JWST_NIRSpec.G395H_NRS1": "NIRSpec G395H", # one PandExo mode covers both arrays,
+    "JWST_NIRSpec.G395H_NRS2": "NIRSpec G395H"  # rms_1min_pandexo then bins to the array's filter_lambda range
+}
+
 
 # Converted once at import
 FILTER_LAMBDA_M = {name: 1e-6 * np.array(r) for name, r in FILTER_LAMBDA_UM.items()}
@@ -215,6 +226,13 @@ def full_lambda(instrument):
 def filter_loc(instrument):
     """Path to the SPIDERMAN throughput file."""
     return str(FILTER_DIR / FILTER_FILES[instrument])
+
+def pandexo_mode(instrument):
+    """The PandExo mode name (as jdi.load_mode_dict expects it) for an instrument key of FILTER_LAMBDA_UM."""
+    mode = PANDEXO_MODES[instrument]
+    if mode is None:
+        raise ValueError(f"PandExo has no mode for {instrument!r}; rms_1min takes such noise levels from CUSTOM_SIGMA_1MIN.")
+    return mode
 
 
 def instruments():
@@ -248,14 +266,27 @@ REF_WAVE_UM = {"sy_kmag": 2.22, "sy_jmag": 1.25}
 # Keys pandexo_params returns, and therefore the keys accepted as overrides.
 PANDEXO_PARAM_KEYS = (*PANDEXO_COLUMNS, "mag", "ref_wave")
 
-# Noise Level for MIRI/Imaging of TOI-2431b (not included in Pandexo)
-# F12800W: 3.59 sec/int: rms_int = 1/989.38*1e6 ppm -> rms_1min = 247.2 ppm
-# F15000W: 5.39 sec/int: rms_int = 1/1135.44*1e6 ppm -> rms_1min = 264.0 ppm
-# F18000W: 13.48 sec/int: rms_int = 1/1196.43*1e6 ppm -> rms_1min = 396.2 ppm
+# sigma_1min [ppm/min] from the S/N of one integration and its duration: rms_int = 1e6 / snr_int ppm, scaled to one minute by sqrt(t_int / 60 s).
+def sigma_1min_from_integration(snr_int, t_int_s):
+    return 1e6 / snr_int * np.sqrt(t_int_s / 60.)
+
+
+# Custom noise levels sigma_1min [ppm/min] for instruments PandExo has no mode for (MIRI imaging, ...): {planet name: {instrument (FILTER_LAMBDA_UM key): sigma_1min}}.
+# rms_1min falls back to these only where PandExo cannot supply a value. Planet names are matched loosely ("TOI-2431b" == "TOI-2431 b").
+CUSTOM_SIGMA_1MIN = {
+    "TOI-2431 b": {
+        "MIRI/F1280W": sigma_1min_from_integration(989.38, 3.59),    # 3.59 s/int  -> 247.2 ppm/min
+        "MIRI/F1500W": sigma_1min_from_integration(1135.44, 5.39),   # 5.39 s/int  -> 264.0 ppm/min
+        "MIRI/F1800W": sigma_1min_from_integration(1196.43, 13.48),  # 13.48 s/int -> 396.2 ppm/min
+    },
+}
+_bad = {ins for d in CUSTOM_SIGMA_1MIN.values() for ins in d} - set(FILTER_LAMBDA_UM)
+if _bad: raise KeyError(f"CUSTOM_SIGMA_1MIN uses unknown instrument(s) {sorted(_bad)}; valid keys are {list(FILTER_LAMBDA_UM)}")
+CUSTOM_SIGMA_1MIN_N = {_normalise(k): v for k, v in CUSTOM_SIGMA_1MIN.items()}
 
 # Calculate the rms noise per minute of observation
-def rms_1min(result, T14, lambda_range, visualize=False, extra=False):
-    """The uncertainty per transit time interval is 1.4 times smaller than the transit precision itself.
+def rms_1min_pandexo(result, T14, lambda_range, visualize=False, extra=False):
+    """The uncertainty per transit time interval is sqrt(2) times smaller than the transit precision itself.
     Or differently said, lets say you know that the precision (or rms) of 1 hour of observations is 10 ppm, and your transit has a duration of 1 hour, the precision youll measure the transit depth is 10 * sqrt(2) ppm because you always measure the transit relative to the baseline.
     This example assumes in transit time = out of transit time. More precisely its
             rms_transit = rms_integration * sqrt(1 / Nin + 1 / Nout)
@@ -269,7 +300,7 @@ def rms_1min(result, T14, lambda_range, visualize=False, extra=False):
     rms_per_integration = rms_transit_bin / np.sqrt(2/integrations_per_transit)  # frac = 1 and therefore Nin = Nout = integrations_per_transit (for this to work it is important to keep exo_dict['observation']['noccultations']=1, exo_dict['observation']['baseline_unit']='frac', exo_dict['observation']['baseline']=1)
     rms_per_minute = rms_per_integration * np.sqrt(integration_duration / 60)
 
-    if extra: return {"Precision Transit": rms_transit_bin, "Integration Duration": integration_duration, "RMS_1min": rms_per_minute}
+    if extra: return {"Precision Transit": rms_transit_bin, "Integration Duration": integration_duration, "RMS_1min_pandexo": rms_per_minute}
     else: return rms_per_minute
 
 
@@ -305,17 +336,19 @@ def pandexo_params(planet_name, **overrides):
 
 
 def run_pandexo(planet_name, instrument, verbose=True, **overrides):
-    """PandExo noise estimate for one archive planet, identified by name alone. Any PANDEXO_PARAM_KEYS entry can be overridden by keyword.
+    """PandExo noise estimate for one archive planet, identified by name alone. instrument is a FILTER_LAMBDA_UM key; the PandExo mode is looked up via pandexo_mode.
+    Any PANDEXO_PARAM_KEYS entry can be overridden by keyword.
     """
     import pandexo.engine.justdoit as jdi   # imported lazily: PandExo is optional, and a module-level import would break every other notebook that imports this file
 
+    mode = pandexo_mode(instrument)
     p = pandexo_params(planet_name, **overrides)
 
     if verbose:   # the full set of values actually used, once per call, each tagged with where it came from
         src = lambda k: "override" if k in overrides else PANDEXO_COLUMNS.get(k, p["mag_band"])
         unit = {"period": "d", "rp_rearth": "R_earth", "rs_rsun": "R_sun", "teff": "K", "logg": "log cgs",
                 "metal": "log Fe/H", "t14_h": "h", "mag": f"mag ({p['mag_band']})", "ref_wave": "um"}
-        print(f"PandExo inputs for {p['name']}  [instrument={instrument}]")
+        print(f"PandExo inputs for {p['name']}  [instrument={instrument} (PandExo: {mode})]")
         for k in PANDEXO_PARAM_KEYS:
             print(f"    {k:10s} = {float(p[k]):<12.5g} {unit[k]:<16s} <- {src(k)}")
         print("    fixed: noccultations=1, sat_level=60%, baseline=1 (frac), R=None (native), noise_floor=0 ppm, "
@@ -346,7 +379,7 @@ def run_pandexo(planet_name, instrument, verbose=True, **overrides):
     exo_dict['planet']['r_unit'] = 'R_earth'
     exo_dict['planet']['f_unit'] = 'rp^2/r*^2'    # primary transit
 
-    inst_dict = jdi.load_mode_dict(instrument)
+    inst_dict = jdi.load_mode_dict(mode)
     inst_dict["configuration"]["detector"]["ngroup"] = 'optimize'   # picks the maximum that stays under sat_level
     inst_dict['background'] = 'ecliptic'
     inst_dict['background_level'] = 'high'
@@ -394,12 +427,42 @@ def binning(lam_start, lam_end, result, visualize=True):
     return rms_transit
 
 
-# sigma_1min [ppm] for a whole sample of archive planets on ONE instrument: run_pandexo + rms_1min per target, keyed by PlanetParams.name.
+# Raised by rms_1min when neither PandExo nor CUSTOM_SIGMA_1MIN can supply a noise level, so callers can skip exactly that case (and not PandExo / archive errors).
+class NoNoiseLevelError(ValueError):
+    pass
+
+
+# sigma_1min [ppm/min] of one planet on one instrument: run_pandexo + rms_1min_pandexo. instrument is a FILTER_LAMBDA_UM key (the PandExo mode is looked up via pandexo_mode),
+# lrs_range [m] the band the PandExo spectrum is binned over (default: filter_lambda(instrument)). overrides go to run_pandexo (verbose, mag, ...); the transit duration is planet.T14 unless t14_h overrides it.
+# Where PandExo has no mode for the instrument, the value comes from CUSTOM_SIGMA_1MIN (lrs_range and overrides then do not apply); if that has none either, a NoNoiseLevelError says where to add one.
+def rms_1min(planet, instrument, lrs_range=None, **overrides):
+    if PANDEXO_MODES[instrument] is None:
+        custom = CUSTOM_SIGMA_1MIN_N.get(_normalise(planet.name), {})
+        if instrument not in custom:
+            raise NoNoiseLevelError(f"no noise level for {planet.name!r} on {instrument!r}: PandExo has no mode for this instrument and CUSTOM_SIGMA_1MIN (HItargets_utils.py) has no entry "
+                             f"for this planet/instrument (it has {sorted(custom) or 'none'} for this planet). Add one there, or pass sigma_1min by hand.")
+        if overrides.pop("verbose", False): print(f"{planet.name} [{instrument}]: sigma_1min = {custom[instrument]:.1f} ppm/min from CUSTOM_SIGMA_1MIN (no PandExo mode)")
+        return custom[instrument]
+    if lrs_range is None: lrs_range = filter_lambda(instrument)
+    overrides.setdefault("t14_h", planet.T14)
+    return rms_1min_pandexo(run_pandexo(planet.name, instrument, **overrides), overrides["t14_h"], lrs_range)
+
+
+# sigma_1min [ppm] for a whole sample of archive planets on ONE instrument: rms_1min per target, keyed by PlanetParams.name.
 # PandExo is NOT cached and takes seconds per planet, so call this once and keep the dict. A target the archive cannot supply (no T14, no magnitude) or that PandExo
 # fails on raises (KeyError / ValueError from pandexo_params, or PandExo's own error) rather than yielding NaN: a NaN sigma_1min would silently corrupt the fits downstream (planet_bias_table).
-def rms_1min_sample(names, instrument, instrument_pandexo, verbose=False, **overrides):
-    out = {}
+# Only planets with no noise level at all (instrument without a PandExo mode and no CUSTOM_SIGMA_1MIN entry) are left out of the dict, with a note; planet_bias_table then drops them.
+# If that leaves no planet, NoNoiseLevelError.
+def rms_1min_pandexo_sample(names, instrument, verbose=False, **overrides):
+    out, missing = {}, []
     for nm in names:
         pl = hi_planets_by_name(nm)
-        out[pl.name] = rms_1min(run_pandexo(nm, instrument_pandexo, verbose=verbose, t14_h=pl.T14, **overrides), pl.T14, filter_lambda(instrument))
+        try:
+            out[pl.name] = rms_1min(pl, instrument, verbose=verbose, **overrides)
+        except NoNoiseLevelError:
+            missing.append(pl.name)
+    if not out:
+        raise NoNoiseLevelError(f"no planet of the sample has a noise level on {instrument!r}: PandExo has no mode for it and CUSTOM_SIGMA_1MIN (HItargets_utils.py) has no entry for any of {missing}.")
+    if missing:
+        print(f"no noise level on {instrument} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry) for {len(missing)} of {len(missing) + len(out)} planets, left out: {', '.join(missing)}")
     return out

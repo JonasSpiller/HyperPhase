@@ -18,17 +18,17 @@ from dynesty_utils import *
 # Planet data
 planet = hi_planets_by_name("TOI-2431 b") # "TOI-2431 b", "K2-141 b", "TOI-2260 b", "K2-157 b", KOI-1843.03
 
-u = [0.15, 0.08]  # Band-integrated (MIR) quadratic stellar limb darkening coefficients [u1, u2] (placeholders from grey Eddington atmosphere, not from K2-141 data, will be set by theoretical stellar atmosphere models)
+u = [0.15, 0.08]  # Band-integrated (MIR) quadratic stellar limb darkening coefficients [u1, u2] (placeholders from grey Eddington atmosphere, not from target data, will be set by theoretical stellar atmosphere models)
 u_B = 0.6  # Bolometric linear stellar limb darkening coefficient (placeholder, from Sadh_Gavassino_2026)
 
 A_B_true = 3/2 * 0.28 # 0.42 (Ag = 0.28 geometric albedo in the optical from Zieba 2022, placeholder)
 
-# ASSUMPTION (!): Model for band-integrated albedo in MIRI/LRS band (MIR)
+# ASSUMPTION (!): Model for band-integrated albedo in the observing band
 A_model = ConstantBandAlbedo(.1) # Band-integrated albedo of rocky surface fixed to A=0.1 (small reflected part) in MIR
 # A_model = ScaledBandAlbedo(1.)
 
 # Filter to be used
-instrument, instrument_pandexo = "JWST_NIRSpec.G395H_NRS1", "NIRSpec G395H" # "MIRI/LRS", "MIRI LRS" #  "MIRI/F1280W", "MIRI F1280W" (overwrite: sigma_1min = 247.2)
+instrument = "JWST_NIRSpec.G395H_NRS1" # "MIRI/LRS" #  "MIRI/F1280W" (no PandExo mode: rms_1min takes sigma_1min from CUSTOM_SIGMA_1MIN in HItargets_utils.py)
 
 INSOL_TRUTH = "hyperillum"   # insolation model the simulated data are drawn from (F = 0 in the truth: any fitted F is bias)
 MODELS = ("hyperillum", "naive", "naive_redist") # ("hyperillum", "naive", "naive_redist")   # insolation models fitted to those data; each one is sampled with its OWN pset (see PSETS)
@@ -60,15 +60,14 @@ sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10,
 # Everything below spawns the dynesty pool. multiprocessing uses SPAWN here, so each worker re-imports this file - without the guard it would re-run the whole script (PandExo, the fit, ...) in every worker.
 if __name__ == "__main__":
 
-    OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "more runs/OLD_before_midpoint_binning/dynesty_results")
+    OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dynesty_results")
 
     lrs_range = filter_lambda(instrument)
     l1, l2 = lrs_range
     filter_path = filter_loc(instrument)
 
     # Noise level, straight from PandExo
-    sigma_1min = sigma_1min_scaling * rms_1min(run_pandexo(planet.name, instrument_pandexo, t14_h=planet.T14), planet.T14, lrs_range)
+    sigma_1min = sigma_1min_scaling * rms_1min(planet, instrument, lrs_range)
     stellar_grid = sp.stellar_grid.gen_grid(l1, l2, logg=4.5, response=filter_path)
 
     # context for simulating data functions
@@ -80,7 +79,7 @@ if __name__ == "__main__":
     print(f"period = {planet.period*24*60:.1f} min -> {n_bins} bins of {planet.period*24*60/n_bins:.1f} min")
     print(f"1-sigma per bin (over all orbits) = {cfg.sigma_bin:.1f} ppm")
 
-    # SIMULATED OBSERVATION. Identical to run_dynesty.py's for the same inputs and seed.
+    # SIMULATED OBSERVATION. Reproducible: the same inputs and seed give the same data.
     data = simulate_data(cfg, A_B_true, insolation_model=INSOL_TRUTH, seed=seed, plotting=False)
 
     # LogLikelihoods. Same data for every model, each with its own pset
