@@ -211,22 +211,62 @@ def bias_vs_true_AB(cfg, A_B_grid, redist=True, bounds=(0., 1.), n_jobs=-1, **kw
     rows = pmap(_fit_truth_at, [(cfg, a, models, bounds, kw) for a in A_B_grid], n_jobs)
     return {m: {k: np.array([r[m][k] for r in rows]) for k in rows[0][m]} for m in models}
 
-# Calculate the Fisher sigma for A_B (and F)
-# sigma_F gets truncated by the prior boundry F=0, so it is not trustworthy.
-def fisher_sigma(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A=1e-3, h_F=1e-3, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), refl_unit=None, **kw):
+# Central-difference derivative of fn at x, one-sided at a bound (a railed fit, or F = 0, which is a common fit result) so the step never leaves [lo, hi].
+def _bounded_diff(fn, x, h, bounds):
+    lo, hi = max(x - h, bounds[0]), min(x + h, bounds[1])
+    return (fn(hi) - fn(lo)) / (hi - lo)
+
+
+# Fisher covariance of (A_B) or (A_B, F), the baseline marginalised (free_offset removes the mean from the residual): C = (J'J / sigma_bin^2)^-1.
+# Its diagonal gives fisher_sigma; the off-diagonal is the A_B-F correlation that a DERIVED quantity (e.g. the occultation depth, fisher_depth) needs.
+def fisher_covariance(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A=1e-3, h_F=1e-3, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), refl_unit=None, **kw):
     # truth=None: the residual is (truth - model), so any constant truth cancels in a central difference
     resid, _ = _chi2_problem(cfg, None, insolation_model, free_offset=free_offset, refl_unit=refl_unit, **kw)
 
-    lo, hi = max(A_B_ - h_A, bounds[0]), min(A_B_ + h_A, bounds[1])   # one-sided at a bound, so a railed fit still yields a derivative
-    cols = [(resid(hi, F) - resid(lo, F)) / (hi - lo)]
+    cols = [_bounded_diff(lambda a: resid(a, F), A_B_, h_A, bounds)]
     if F is not None:
-        lo, hi = max(F - h_F, F_bounds[0]), min(F + h_F, F_bounds[1])   # F = 0 is a common fit result, so the step must not leave [0, 0.5]
-        cols.append((resid(A_B_, hi) - resid(A_B_, lo)) / (hi - lo))
+        cols.append(_bounded_diff(lambda f: resid(A_B_, f), F, h_F, F_bounds))
     J = np.column_stack(cols)
     try:
-        return np.sqrt(np.diag(np.linalg.inv(J.T @ J / cfg.sigma_bin ** 2)))   # marginal sigmas = sqrt(diag(F^-1)); the inverse is what marginalises, 1/F_ii would instead fix the other parameters
+        return np.linalg.inv(J.T @ J / cfg.sigma_bin ** 2)   # the inverse is what marginalises; 1/F_ii would instead fix the other parameters
     except np.linalg.LinAlgError:
-        return np.full(J.shape[1], np.nan)   # singular J'J: a parameter the model does not respond to, or two that are exactly degenerate - NaN, like bias_cell on a rail
+        return np.full((J.shape[1], J.shape[1]), np.nan)   # singular J'J: a parameter the model does not respond to, or two that are exactly degenerate - NaN, like bias_cell on a rail
+
+
+# Calculate the Fisher sigma for A_B (and F): the marginal sigmas sqrt(diag(C)) of fisher_covariance.
+# sigma_F gets truncated by the prior boundry F=0, so it is not trustworthy.
+def fisher_sigma(cfg, insolation_model, A_B_, F=None, **kw):
+    return np.sqrt(np.diag(fisher_covariance(cfg, insolation_model, A_B_, F=F, **kw)))
+
+
+# Occultation depth [ppm] of a fitted model, taken exactly at mid-occultation rather than read off the phase curve just before ingress (thermal + reflected; the free baseline drops out of a depth).
+# Thermal: occultation_depth() of the SPIDERMAN model that model_pcurve evaluates (unblocked minus blocked flux at the occultation time). Reflected: the planet's reflected flux at full phase,
+# which is exactly what the occultation hides (assumes a full, non-grazing occultation, like occultation_depth's single totality point).
+# n_layers: the naive (and naive_redist) depth converges only ~1/n_layers (pcurve_params), so it is set well above the fitting default; use the same value for truth and fit.
+# kw: the model_pcurve keywords of the fit (n_lo, n_la, insol, a_rs / T_s / rp_rs), the rest is ignored.
+DEPTH_N_LAYERS = 200
+
+def model_depth(cfg, insolation_model, A_B_, F=None, n_layers=DEPTH_N_LAYERS, **kw):
+    geom = {k: kw[k] for k in ("a_rs", "T_s", "rp_rs") if k in kw}
+    p = pcurve_params(cfg, insolation_model, A_B_, F=F, n_layers=n_layers, **geom, **{k: kw[k] for k in ("n_lo", "n_la", "insol") if k in kw})
+    depth = occultation_depth(p, stellar_grid=cfg.stellar_grid)
+    if cfg.reflected:
+        planet = swept_planet(cfg, **geom)
+        eps_occultation = np.arccos(np.sin(np.radians(planet.incl)))   # epsilon at full phase, as in reflected_PhaseCurve
+        depth += 1e6 * float(reflected_lightcurve(eps_occultation, planet, u_B=cfg.u_B, A=cfg.A_(A_B_), insolation_model=insolation_model))
+    return float(depth)
+
+
+# Fisher sigma of the occultation depth of a fit, propagated from the parameter covariance: sigma_d^2 = g' C g with g = d(depth)/d(A_B, F) (same steps and bounds as fisher_covariance).
+# Exact to first order: the depth is a smooth function of (A_B, F). Returns (depth, sigma_depth) [ppm].
+def fisher_depth(cfg, insolation_model, A_B_, F=None, h_A=1e-3, h_F=1e-3, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), n_layers=DEPTH_N_LAYERS, **kw):
+    C = fisher_covariance(cfg, insolation_model, A_B_, F=F, h_A=h_A, h_F=h_F, bounds=bounds, F_bounds=F_bounds, **kw)
+    depth = lambda a, f: model_depth(cfg, insolation_model, a, F=f, n_layers=n_layers, **kw)
+    g = [_bounded_diff(lambda a: depth(a, F), A_B_, h_A, bounds)]
+    if F is not None:
+        g.append(_bounded_diff(lambda f: depth(A_B_, f), F, h_F, F_bounds))
+    g = np.array(g)
+    return depth(A_B_, F), float(np.sqrt(g @ C @ g))
 
 
 ###########################################################################################################################
@@ -611,10 +651,32 @@ def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigm
     if not used: raise ValueError(f"{planet.name}: no noise level for any of {list(instruments)}")
     rows = pmap(_instrument_row, [(cfg, A_B_true, planet, ins, sigma_1min[ins], redist, bounds, F_bounds, kw) for ins in used], n_jobs)
     tab = pd.DataFrame(rows)
-    tab.attrs.update(planet=planet.name, A_B_true=A_B_true, model="naive_redist" if redist else "naive", sigma_prior=flat_prior_sigma(bounds), n_orbits=cfg.n_orbits)
+    tab.attrs.update(planet=planet.name, A_B_true=A_B_true, model="naive_redist" if redist else "naive", sigma_prior=flat_prior_sigma(bounds), n_orbits=cfg.n_orbits,
+                     bounds=bounds, F_bounds=F_bounds)
     bias_sigma, _ = measurability(tab["bias_A_B"], tab["sigma_A_B"], tab["sigma_1min"])
     tab["bias_sigma"], tab["verdict"] = bias_sigma, bias_verdict(bias_sigma, tab["sigma_A_B"], tab.attrs["sigma_prior"])
     return tab
+
+
+def _instrument_depth_row(cfg, planet, r, model, A_B_true, bounds, F_bounds, n_layers, kw):
+    c = replace(instrument_cfg(cfg, r["instrument"]), planet=planet, sigma_1min=float(r["sigma_1min"]))
+    F = None if model == "naive" else float(r["F_fit"])
+    depth_true = model_depth(c, "hyperillum", A_B_true, n_layers=n_layers, **kw)
+    depth_fit, sigma_depth = fisher_depth(c, model, float(r["A_B_fit"]), F=F, bounds=bounds, F_bounds=F_bounds, n_layers=n_layers, **kw)
+    return dict(depth_true=depth_true, depth_fit=depth_fit, sigma_depth=sigma_depth)
+
+
+# The occultation depth of each fit in an instrument_retrievals table, next to the depth of the hyperillumination truth: does the misspecified fit still reproduce the eclipse?
+# Uses the fitted parameters already in `tab` (no refit), so cfg, planet and kw must be those that made it. Both depths are exact (model_depth, at n_layers), sigma_depth is the
+# propagated Fisher sigma (fisher_depth). Adds depth_true, depth_fit, bias_depth = depth_fit - depth_true [ppm], sigma_depth and depth_bias_sigma = |bias_depth| / sigma_depth.
+def instrument_depths(cfg, planet, tab, n_layers=DEPTH_N_LAYERS, n_jobs=-1, **kw):
+    a = tab.attrs
+    rows = pmap(_instrument_depth_row, [(cfg, planet, r, a["model"], a["A_B_true"], a["bounds"], a["F_bounds"], n_layers, kw) for _, r in tab.iterrows()], n_jobs)
+    out = pd.concat([tab.reset_index(drop=True), pd.DataFrame(rows)], axis=1)
+    out.attrs.update(a, depth_n_layers=n_layers)
+    out["bias_depth"] = out["depth_fit"] - out["depth_true"]
+    out["depth_bias_sigma"] = np.abs(out["bias_depth"]) / out["sigma_depth"]
+    return out
 
 
 # How well a bias map stands in for a planet's own-geometry fit: the A_B bias read off a map at each planet's position (linear interpolation) next to the
@@ -780,15 +842,24 @@ INSTRUMENT_LABELS = {"JWST_NIRSpec.G395H_NRS1": "NIRSpec G395H\nNRS1", "JWST_NIR
                      "MIRI/F1280W": "MIRI F1280W", "MIRI/F1500W": "MIRI F1500W", "MIRI/F1800W": "MIRI F1800W", "Spitzer/IRAC2": "Spitzer IRAC2"}
 
 
+# Plotted quantity of plot_instrument_retrievals: (value column, sigma column, truth column, y label, legend label of the dashed truth line, default ylim).
+# Truth column None: one line across the plot at attrs["A_B_true"]. "depth" (tables from instrument_depths): the true depth differs per band, so each instrument gets its own dashed segment.
+_RETRIEVAL_Q = {"A_B": ("A_B_fit", "sigma_A_B", None, "Bond albedo $A_B$", "injected $A_B$ = {A_B_true:.2f}", (0., 1.)),
+                "depth": ("depth_fit", "sigma_depth", "depth_true", r"Occultation depth $\delta$ [ppm]", "true (hyperillumination) occultation depth", None)}
+
+
 # Retrieved A_B per instrument for one planet, after Ramirez et al. 2026 (arXiv:2610.22338), Fig. 4: one colour per instrument, the marker at the fitted A_B,
 # dark / light error bars at sigma_levels x the Fisher sigma (default 1 and 2 sigma), the dashed line at the injected A_B_true.
 # tabs: one instrument_retrievals table, or {label: table} to set several fits side by side per instrument, one marker shape each (e.g. {"A_B only": ..., "joint A_B + F": ...},
-# like the paper's phase curve / transit pairs). An unconstrained fit (Fisher sigma >= the flat-prior std of the fit bounds) gets a hollow marker: its error bar is not a measurement.
-# ylim defaults to the physical range [0, 1]; error bars beyond it are clipped by the axes.
-def plot_instrument_retrievals(tabs, sigma_levels=(1, 2), markers=("o", "s", "D", "^"), ylim=(0., 1.), title=None, figsize=None, ax=None):
+# like the paper's phase curve / transit pairs). An unconstrained fit (A_B's Fisher sigma >= the flat-prior std of the fit bounds) gets a hollow marker: its error bar is not a measurement.
+# quantity="depth" plots the fitted occultation depth with its propagated Fisher sigma instead (tables from instrument_depths), with a dashed segment at each instrument's true depth.
+# ylim defaults to the physical range [0, 1] for A_B (error bars beyond it are clipped by the axes) and to autoscale for the depth.
+def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), markers=("o", "s", "D", "^"), ylim="default", title=None, figsize=None, ax=None):
     tabs = tabs if isinstance(tabs, dict) else {None: tabs}
     first = next(iter(tabs.values()))
     A_B_true = first.attrs["A_B_true"]
+    col, sig, truth_col, ylabel, ref_label, ylim_q = _RETRIEVAL_Q[quantity]
+    ylim = ylim_q if ylim == "default" else ylim
     instruments = list(dict.fromkeys(ins for t in tabs.values() for ins in t["instrument"]))   # order of first appearance
     color = {ins: INSTRUMENT_COLORS[k % len(INSTRUMENT_COLORS)] for k, ins in enumerate(instruments)}
     n = len(tabs)
@@ -802,16 +873,21 @@ def plot_instrument_retrievals(tabs, sigma_levels=(1, 2), markers=("o", "s", "D"
         for _, r in t.iterrows():
             x, c = instruments.index(r["instrument"]) + dx, color[r["instrument"]]
             for lev, alpha in zip(sorted(sigma_levels, reverse=True), np.linspace(.3, 1., len(sigma_levels))):   # widest bar first (lightest), the 1 sigma bar on top
-                ax.errorbar(x, r["A_B_fit"], yerr=lev * r["sigma_A_B"], fmt="none", ecolor=c, alpha=alpha, elinewidth=1.8, capsize=3.5, capthick=1.5, zorder=3)
+                ax.errorbar(x, r[col], yerr=lev * r[sig], fmt="none", ecolor=c, alpha=alpha, elinewidth=1.8, capsize=3.5, capthick=1.5, zorder=3)
             hollow = r["verdict"] == VERDICT_UNCONSTRAINED
-            ax.plot(x, r["A_B_fit"], markers[k % len(markers)], ms=8, color=c, mfc="#fcfcfb" if hollow else c, mew=1.6, zorder=4)
+            ax.plot(x, r[col], markers[k % len(markers)], ms=8, color=c, mfc="#fcfcfb" if hollow else c, mew=1.6, zorder=4)
 
-    ax.axhline(A_B_true, color="#333333", ls="--", lw=1.8, zorder=2)
+    if truth_col is None:
+        ax.axhline(A_B_true, color="#333333", ls="--", lw=1.8, zorder=2)
+    else:   # the truth of an instrument does not depend on the fit, so take it from the first table that has the instrument
+        for ins in instruments:
+            y_true = next(t.loc[t["instrument"] == ins, truth_col].iloc[0] for t in tabs.values() if (t["instrument"] == ins).any())
+            ax.hlines(y_true, instruments.index(ins) - 0.4, instruments.index(ins) + 0.4, color="#333333", ls="--", lw=1.8, zorder=2)
     ax.set_xticks(range(len(instruments)))
     ax.set_xticklabels([INSTRUMENT_LABELS.get(ins, ins) for ins in instruments], fontsize=9)
     ax.set_xlim(-0.6, len(instruments) - 0.4)
-    ax.set_ylim(*ylim)
-    ax.set_ylabel("Bond albedo $A_B$")
+    if ylim is not None: ax.set_ylim(*ylim)
+    ax.set_ylabel(ylabel)
     ax.grid(False)   # the paper's look: full frame, inward ticks on all sides, minor ticks on y
     for s in ("top", "right"): ax.spines[s].set_visible(True)
     for s in ax.spines.values(): s.set_color(INK); s.set_linewidth(1.)
@@ -820,13 +896,13 @@ def plot_instrument_retrievals(tabs, sigma_levels=(1, 2), markers=("o", "s", "D"
     ax.set_title(title or f"{first.attrs['planet']}  ({first.attrs['n_orbits']} orbits per instrument)", fontweight="bold")
 
     levels = " / ".join(f"{lev}$\\sigma$" for lev in sorted(sigma_levels))
-    handles = [plt.Line2D([], [], color="#333333", ls="--", lw=1.8, label=f"injected $A_B$ = {A_B_true:.2f}")]
+    handles = [plt.Line2D([], [], color="#333333", ls="--", lw=1.8, label=ref_label.format(A_B_true=A_B_true))]
     for k, label in enumerate(tabs):
         if label is not None:
             handles.append(plt.Line2D([], [], marker=markers[k % len(markers)], ls="none", ms=7, color="#666666", label=label))
     if any((t["verdict"] == VERDICT_UNCONSTRAINED).any() for t in tabs.values()):
-        handles.append(plt.Line2D([], [], marker="o", ls="none", ms=7, color="#666666", mfc="#fcfcfb", mew=1.4, label="unconstrained (Fisher $\\sigma \\geq$ prior std)"))
+        handles.append(plt.Line2D([], [], marker="o", ls="none", ms=7, color="#666666", mfc="#fcfcfb", mew=1.4, label=("" if quantity == "A_B" else "$A_B$ ") + "unconstrained (Fisher $\\sigma \\geq$ prior std)"))
     ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.07), ncol=min(len(handles), 4), fontsize=9, handletextpad=0.4, columnspacing=1.2,
-              title=f"fitted $A_B$, Fisher error bars {levels} (dark to light)", title_fontsize=9)
+              title=("fitted $A_B$" if quantity == "A_B" else "occultation depth of the fit") + f", Fisher error bars {levels} (dark to light)", title_fontsize=9)
     fig.tight_layout()
     return fig, ax
