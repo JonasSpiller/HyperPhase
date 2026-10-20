@@ -69,26 +69,35 @@ def fit_residual(cfg, yb_truth, insolation_model, A_B_, free_offset=True, **kw):
     return r - r.mean() if free_offset else r
 
 
-# The chi^2 problem of fitting `insolation_model` to the hyperillumination truth: resid(A_B_, F=None) [ppm] and cost(A_B_, F=None) = sum((resid / sigma_bin)^2).
-# Shared by fit_naive, fit_redist, fit_chi2 and fisher_sigma. The reflected shape does not depend on A_B or F, so it is built once unless refl_unit is passed.
-# truth=None gives the bare model residual (truth = 0), which is all a derivative needs.
-def _chi2_problem(cfg, truth, insolation_model, free_offset=True, refl_unit=None, **kw):
-    sigma_bin = cfg.sigma_bin
-    if refl_unit is None and cfg.reflected: refl_unit = reflected_unit(cfg, insolation_model, **kw)
-    yb_truth = 0. if truth is None else binned(cfg, truth)
+# A detector set: several FittingConfigs fitted JOINTLY with one shared (A_B, F) and a separate baseline per detector (e.g. the two NIRSpec/G395H arrays). Wherever a fit takes `cfg`,
+# a list/tuple of configs means such a set; `truth` is then a list of one truth curve per detector. The configs must share the geometry (planet, n_bins, u_B, A_) and differ only in
+# band (stellar_grid, filter_path, l1, l2) and noise. The per-detector baseline is the free_offset of each detector's own residual block, which is what the Fisher matrix marginalises too.
+def is_detector_set(cfg):
+    return isinstance(cfg, (list, tuple))
 
-    def resid(A_B_, F=None):
-        return fit_residual(cfg, yb_truth, insolation_model, A_B_, F=F, free_offset=free_offset, refl_unit=refl_unit, **kw)
+
+# The chi^2 problem of fitting `insolation_model` to the hyperillumination truth: resid(A_B_, F=None) [ppm], cost(A_B_, F=None) = sum((resid / sigma)^2) and sigma, the per-point
+# noise [ppm] (one sigma_bin per detector block). Shared by fit_naive, fit_redist, fit_chi2 and fisher_covariance. The reflected shape does not depend on A_B, F or the band,
+# so it is built once (from the first detector) unless refl_unit is passed. truth=None gives the bare model residual (truth = 0), which is all a derivative needs.
+def _chi2_problem(cfg, truth, insolation_model, free_offset=True, refl_unit=None, **kw):
+    cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
+    truths = [None] * len(cfgs) if truth is None else (list(truth) if is_detector_set(cfg) else [truth])
+    if refl_unit is None and cfgs[0].reflected: refl_unit = reflected_unit(cfgs[0], insolation_model, **kw)
+    yb_truth = [0. if t is None else binned(c, t) for c, t in zip(cfgs, truths)]
+    sigma = np.concatenate([np.full(c.n_bins, c.sigma_bin) for c in cfgs])
+
+    def resid(A_B_, F=None):   # each detector block with its own baseline removed (free_offset)
+        return np.concatenate([fit_residual(c, y, insolation_model, A_B_, F=F, free_offset=free_offset, refl_unit=refl_unit, **kw) for c, y in zip(cfgs, yb_truth)])
 
     def cost(A_B_, F=None):
-        return np.sum((resid(A_B_, F) / sigma_bin) ** 2)
+        return np.sum((resid(A_B_, F) / sigma) ** 2)
 
-    return resid, cost
+    return resid, cost, sigma
 
 
 # Best-fit naive albedo A (= A_B) against a hyperillumination-generated truth, returning (A_fit, chi2, resid_rms).
 def fit_naive(cfg, truth, free_offset=True, bounds=(0.0, 0.6), xatol=1e-4, **kw):
-    resid, cost = _chi2_problem(cfg, truth, "naive", free_offset=free_offset, **kw)
+    resid, cost, _ = _chi2_problem(cfg, truth, "naive", free_offset=free_offset, **kw)
     res = minimize_scalar(cost, bounds=bounds, method="bounded", options={"xatol": xatol})
     r = resid(res.x)
     resid_rms = np.sqrt(np.mean(r ** 2))
@@ -106,7 +115,7 @@ F_SCAN_FRAC = np.array([0., 0.004, 0.01, 0.02, 0.04, 0.08, 0.15, 0.3, 0.6, 1.])
 # The F = 0 edge is then a near-stationary trap: the former Nelder-Mead fit, started on it, collapsed onto F = 0 in about half the bias-map cells (chi2 0.445 instead of 0.226 there), and gradient methods see ~zero dchi2/dF.
 # Profiling also makes the outer problem insensitive to the inner tolerance (the profile error is second order in the A_B error). ~250 model evaluations per fit.
 def fit_redist(cfg, truth, free_offset=True, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), xatol=1e-5, F_xatol=1e-5, **kw):
-    resid, cost = _chi2_problem(cfg, truth, "naive_redist", free_offset=free_offset, **kw)
+    resid, cost, _ = _chi2_problem(cfg, truth, "naive_redist", free_offset=free_offset, **kw)
 
     def profile(F):   # (chi2, A_B) at the best A_B for fixed F
         r = minimize_scalar(lambda A_B_: cost(A_B_, F), bounds=bounds, method="bounded", options={"xatol": xatol})
@@ -127,7 +136,7 @@ def fit_redist(cfg, truth, free_offset=True, bounds=(0.0, 0.6), F_bounds=(0.0, 0
 
 # chi^2 of one model against the hyperillumination truth, with the same residual and noise weighting as the fits (F only for naive_redist).
 def fit_chi2(cfg, truth, insolation_model, A_B_, F=None, free_offset=True, refl_unit=None, **kw):
-    _, cost = _chi2_problem(cfg, truth, insolation_model, free_offset=free_offset, refl_unit=refl_unit, **kw)
+    _, cost, _ = _chi2_problem(cfg, truth, insolation_model, free_offset=free_offset, refl_unit=refl_unit, **kw)
     return float(cost(A_B_, F))
 
 
@@ -158,8 +167,9 @@ def chi2_region(d_chi2, AB_grid, F_grid, level=2.30):
 # ("naive": A_B; "naive_redist": A_B and F). Returns {model: {"A_B_fit", "bias_A_B", "chi2"[, "F_fit"][, "sigma_A_B"[, "sigma_F"]]}}.
 # The truth has F = 0, so F_fit is itself the bias in F. The two fits are independent (fit_redist needs no start).
 # fisher=True adds the Fisher sigmas, evaluated at the FITS, where the misspecified model's posterior sits.
+# cfg may be a detector set (see is_detector_set): one truth per detector, shared (A_B, F), a baseline per detector.
 def fit_truth(cfg, A_B_true, models=("naive",), free_offset=True, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), fisher=False, **kw):
-    _, truth = model_pcurve(cfg, "hyperillum", A_B_true, **kw)   # noiseless data
+    truth = [model_pcurve(c, "hyperillum", A_B_true, **kw)[1] for c in cfg] if is_detector_set(cfg) else model_pcurve(cfg, "hyperillum", A_B_true, **kw)[1]   # noiseless data
     out = {}
     if "naive" in models:
         A_fit, chi2, _ = fit_naive(cfg, truth, free_offset=free_offset, bounds=bounds, **kw)
@@ -217,18 +227,18 @@ def _bounded_diff(fn, x, h, bounds):
     return (fn(hi) - fn(lo)) / (hi - lo)
 
 
-# Fisher covariance of (A_B) or (A_B, F), the baseline marginalised (free_offset removes the mean from the residual): C = (J'J / sigma_bin^2)^-1.
-# Its diagonal gives fisher_sigma; the off-diagonal is the A_B-F correlation that a DERIVED quantity (e.g. the occultation depth, fisher_depth) needs.
+# Fisher covariance of (A_B) or (A_B, F), the baseline(s) marginalised (free_offset removes the mean from each detector's residual): C = (J' W J)^-1, W = diag(1 / sigma^2).
+# Its diagonal gives fisher_sigma; the off-diagonal is the A_B-F correlation that a DERIVED quantity (e.g. the occultation depth, fisher_depth) needs. cfg may be a detector set.
 def fisher_covariance(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A=1e-3, h_F=1e-3, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), refl_unit=None, **kw):
     # truth=None: the residual is (truth - model), so any constant truth cancels in a central difference
-    resid, _ = _chi2_problem(cfg, None, insolation_model, free_offset=free_offset, refl_unit=refl_unit, **kw)
+    resid, _, sigma = _chi2_problem(cfg, None, insolation_model, free_offset=free_offset, refl_unit=refl_unit, **kw)
 
     cols = [_bounded_diff(lambda a: resid(a, F), A_B_, h_A, bounds)]
     if F is not None:
         cols.append(_bounded_diff(lambda f: resid(A_B_, f), F, h_F, F_bounds))
-    J = np.column_stack(cols)
+    J = np.column_stack(cols) / sigma[:, None]   # whitened Jacobian
     try:
-        return np.linalg.inv(J.T @ J / cfg.sigma_bin ** 2)   # the inverse is what marginalises; 1/F_ii would instead fix the other parameters
+        return np.linalg.inv(J.T @ J)   # the inverse is what marginalises; 1/F_ii would instead fix the other parameters
     except np.linalg.LinAlgError:
         return np.full((J.shape[1], J.shape[1]), np.nan)   # singular J'J: a parameter the model does not respond to, or two that are exactly degenerate - NaN, like bias_cell on a rail
 
@@ -259,9 +269,11 @@ def model_depth(cfg, insolation_model, A_B_, F=None, n_layers=DEPTH_N_LAYERS, **
 
 # Fisher sigma of the occultation depth of a fit, propagated from the parameter covariance: sigma_d^2 = g' C g with g = d(depth)/d(A_B, F) (same steps and bounds as fisher_covariance).
 # Exact to first order: the depth is a smooth function of (A_B, F). Returns (depth, sigma_depth) [ppm].
-def fisher_depth(cfg, insolation_model, A_B_, F=None, h_A=1e-3, h_F=1e-3, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), n_layers=DEPTH_N_LAYERS, **kw):
+# For a detector set, C comes from the joint fit and the depth is that of `depth_cfg`, one of its detectors (the depth is a per-band quantity; default: the first detector).
+def fisher_depth(cfg, insolation_model, A_B_, F=None, h_A=1e-3, h_F=1e-3, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), n_layers=DEPTH_N_LAYERS, depth_cfg=None, **kw):
     C = fisher_covariance(cfg, insolation_model, A_B_, F=F, h_A=h_A, h_F=h_F, bounds=bounds, F_bounds=F_bounds, **kw)
-    depth = lambda a, f: model_depth(cfg, insolation_model, a, F=f, n_layers=n_layers, **kw)
+    if depth_cfg is None: depth_cfg = cfg[0] if is_detector_set(cfg) else cfg
+    depth = lambda a, f: model_depth(depth_cfg, insolation_model, a, F=f, n_layers=n_layers, **kw)
     g = [_bounded_diff(lambda a: depth(a, F), A_B_, h_A, bounds)]
     if F is not None:
         g.append(_bounded_diff(lambda f: depth(A_B_, f), F, h_F, F_bounds))
@@ -624,55 +636,84 @@ def instrument_cfg(cfg, instrument):
     return replace(cfg, stellar_grid=grid, filter_path=filter_loc(instrument), l1=l1, l2=l2)
 
 
-def _instrument_row(cfg, A_B_true, pl, instrument, s1, redist, bounds, F_bounds, kw):
-    c = replace(instrument_cfg(cfg, instrument), planet=pl, sigma_1min=float(s1))
+# Several detectors fitted jointly (a detector set, see is_detector_set) are one "instrument" of instrument_retrievals: given as a tuple/list of FILTER_LAMBDA_UM keys, carried in the
+# tables as one key joined with "+", e.g. "JWST_NIRSpec.G395H_NRS1+JWST_NIRSpec.G395H_NRS2". detectors() splits it again (a single instrument is its own one-element set).
+JOINT_SEP = "+"
+
+def instrument_key(instrument):
+    return instrument if isinstance(instrument, str) else JOINT_SEP.join(instrument)
+
+def detectors(instrument):
+    return instrument_key(instrument).split(JOINT_SEP)
+
+
+# The cfg (or detector set) of one table row: the planet's geometry with each detector's band and noise level ({detector: ppm/min}).
+def _detector_cfgs(cfg, planet, instrument, sigma_1min):
+    cfgs = [replace(instrument_cfg(cfg, d), planet=planet, sigma_1min=float(sigma_1min[d])) for d in detectors(instrument)]
+    return cfgs[0] if len(cfgs) == 1 else cfgs
+
+
+def _instrument_row(cfg, A_B_true, pl, instrument, sigma_1min, redist, bounds, F_bounds, kw):
+    c = _detector_cfgs(cfg, pl, instrument, sigma_1min)
     model = "naive_redist" if redist else "naive"
     fit = fit_truth(c, A_B_true, models=(model,), free_offset=True, bounds=bounds, F_bounds=F_bounds, fisher=True, **kw)[model]
-    return dict(instrument=instrument, sigma_1min=float(s1), A_B_fit=fit["A_B_fit"], bias_A_B=fit["bias_A_B"], sigma_A_B=fit["sigma_A_B"],
-                F_fit=fit.get("F_fit", np.nan), sigma_F=fit.get("sigma_F", np.nan))
+    dets = detectors(instrument)
+    return dict(instrument=instrument, sigma_1min=float(sigma_1min[dets[0]]) if len(dets) == 1 else np.nan,   # a joint fit has one noise level per detector: see tab.attrs["sigma_1min"]
+                A_B_fit=fit["A_B_fit"], bias_A_B=fit["bias_A_B"], sigma_A_B=fit["sigma_A_B"], F_fit=fit.get("F_fit", np.nan), sigma_F=fit.get("sigma_F", np.nan))
 
 
 # One planet, several instruments: the fitted A_B and its Fisher sigma per instrument, for a hyperillumination truth injected at A_B_true (the multi-instrument
 # counterpart of planet_bias_table, plotted by plot_instrument_retrievals). cfg supplies everything but the instrument (albedo model, n_bins, n_orbits, limb darkening).
-# sigma_1min: {instrument: ppm/min}; by default HItargets_utils.rms_1min per instrument (PandExo, or CUSTOM_SIGMA_1MIN where PandExo has no mode). PandExo is not cached,
-# so pass the returned table's sigma_1min back in (dict(zip(tab.instrument, tab.sigma_1min))) to refit without rerunning it. Instruments without a noise level are left out with a note.
+# An entry of `instruments` is a FILTER_LAMBDA_UM key, or a tuple of keys for a JOINT fit of those detectors (one shared A_B / F, a separate baseline per detector; its table
+# row carries the "+"-joined key and NaN as sigma_1min).
+# sigma_1min: {detector: ppm/min}; by default HItargets_utils.rms_1min per detector (PandExo, or CUSTOM_SIGMA_1MIN where PandExo has no mode). PandExo is not cached, so pass the
+# returned table's attrs["sigma_1min"] back in to refit without rerunning it. Instruments with a detector without a noise level are left out with a note.
 # Returns a DataFrame in the order of `instruments`, with the verdict of each fit (bias_verdict on A_B, at the flat-prior std of `bounds`).
 def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigma_1min=None, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), n_jobs=-1, **kw):
     from HItargets_utils import rms_1min, NoNoiseLevelError
+    instruments = [instrument_key(ins) for ins in instruments]
+    dets = list(dict.fromkeys(d for ins in instruments for d in detectors(ins)))
     if sigma_1min is None:
         sigma_1min, missing = {}, []
-        for ins in instruments:
+        for d in dets:
             try:
-                with contextlib.redirect_stdout(io.StringIO()): sigma_1min[ins] = rms_1min(planet, ins)
+                with contextlib.redirect_stdout(io.StringIO()): sigma_1min[d] = rms_1min(planet, d)
             except NoNoiseLevelError:
-                missing.append(ins)
+                missing.append(d)
         if missing: print(f"{planet.name}: no noise level on {', '.join(missing)} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry), left out")
-    used = [ins for ins in instruments if ins in sigma_1min]
-    if not used: raise ValueError(f"{planet.name}: no noise level for any of {list(instruments)}")
-    rows = pmap(_instrument_row, [(cfg, A_B_true, planet, ins, sigma_1min[ins], redist, bounds, F_bounds, kw) for ins in used], n_jobs)
+    used = [ins for ins in instruments if all(d in sigma_1min for d in detectors(ins))]
+    if not used: raise ValueError(f"{planet.name}: no noise level for any of {instruments}")
+    rows = pmap(_instrument_row, [(cfg, A_B_true, planet, ins, sigma_1min, redist, bounds, F_bounds, kw) for ins in used], n_jobs)
     tab = pd.DataFrame(rows)
     tab.attrs.update(planet=planet.name, A_B_true=A_B_true, model="naive_redist" if redist else "naive", sigma_prior=flat_prior_sigma(bounds), n_orbits=cfg.n_orbits,
-                     bounds=bounds, F_bounds=F_bounds)
+                     bounds=bounds, F_bounds=F_bounds, sigma_1min={d: float(sigma_1min[d]) for d in dets if d in sigma_1min})
     bias_sigma, _ = measurability(tab["bias_A_B"], tab["sigma_A_B"], tab["sigma_1min"])
     tab["bias_sigma"], tab["verdict"] = bias_sigma, bias_verdict(bias_sigma, tab["sigma_A_B"], tab.attrs["sigma_prior"])
     return tab
 
 
-def _instrument_depth_row(cfg, planet, r, model, A_B_true, bounds, F_bounds, n_layers, kw):
-    c = replace(instrument_cfg(cfg, r["instrument"]), planet=planet, sigma_1min=float(r["sigma_1min"]))
+def _instrument_depth_row(cfg, planet, r, det, sigma_1min, model, A_B_true, bounds, F_bounds, n_layers, kw):
+    c = _detector_cfgs(cfg, planet, r["instrument"], sigma_1min)   # the fit's cfg or detector set (its covariance), ...
+    c_det = c[detectors(r["instrument"]).index(det)] if is_detector_set(c) else c   # ... and the detector whose band the depth is in
     F = None if model == "naive" else float(r["F_fit"])
-    depth_true = model_depth(c, "hyperillum", A_B_true, n_layers=n_layers, **kw)
-    depth_fit, sigma_depth = fisher_depth(c, model, float(r["A_B_fit"]), F=F, bounds=bounds, F_bounds=F_bounds, n_layers=n_layers, **kw)
-    return dict(depth_true=depth_true, depth_fit=depth_fit, sigma_depth=sigma_depth)
+    depth_true = model_depth(c_det, "hyperillum", A_B_true, n_layers=n_layers, **kw)
+    depth_fit, sigma_depth = fisher_depth(c, model, float(r["A_B_fit"]), F=F, bounds=bounds, F_bounds=F_bounds, n_layers=n_layers, depth_cfg=c_det, **kw)
+    return dict(instrument=det, fit=r["instrument"], sigma_1min=float(sigma_1min[det]), depth_true=depth_true, depth_fit=depth_fit, sigma_depth=sigma_depth)
 
 
 # The occultation depth of each fit in an instrument_retrievals table, next to the depth of the hyperillumination truth: does the misspecified fit still reproduce the eclipse?
 # Uses the fitted parameters already in `tab` (no refit), so cfg, planet and kw must be those that made it. Both depths are exact (model_depth, at n_layers), sigma_depth is the
-# propagated Fisher sigma (fisher_depth). Adds depth_true, depth_fit, bias_depth = depth_fit - depth_true [ppm], sigma_depth and depth_bias_sigma = |bias_depth| / sigma_depth.
-def instrument_depths(cfg, planet, tab, n_layers=DEPTH_N_LAYERS, n_jobs=-1, **kw):
+# propagated Fisher sigma (fisher_depth). Columns: instrument (the band the depth is in), fit (the table row the parameters come from), the fit's parameter columns, depth_true,
+# depth_fit, bias_depth = depth_fit - depth_true [ppm], sigma_depth and depth_bias_sigma = |bias_depth| / sigma_depth.
+# Joint fits of several detectors are left out by default (the depth is a per-band quantity, so they have no single depth); joint=True gives one row per detector of such a fit,
+# each with that band's depth and the joint covariance, which plot_instrument_retrievals then draws as an extra marker at the detectors' positions.
+def instrument_depths(cfg, planet, tab, n_layers=DEPTH_N_LAYERS, joint=False, n_jobs=-1, **kw):
     a = tab.attrs
-    rows = pmap(_instrument_depth_row, [(cfg, planet, r, a["model"], a["A_B_true"], a["bounds"], a["F_bounds"], n_layers, kw) for _, r in tab.iterrows()], n_jobs)
-    out = pd.concat([tab.reset_index(drop=True), pd.DataFrame(rows)], axis=1)
+    rows_in = [r for _, r in tab.iterrows() if joint or len(detectors(r["instrument"])) == 1]
+    jobs = [(cfg, planet, r, d, a["sigma_1min"], a["model"], a["A_B_true"], a["bounds"], a["F_bounds"], n_layers, kw) for r in rows_in for d in detectors(r["instrument"])]
+    rows = pmap(_instrument_depth_row, jobs, n_jobs)
+    params = tab.drop(columns=["instrument", "sigma_1min"]).set_index(tab["instrument"])
+    out = pd.DataFrame([{**r, **params.loc[r["fit"]].to_dict()} for r in rows])
     out.attrs.update(a, depth_n_layers=n_layers)
     out["bias_depth"] = out["depth_fit"] - out["depth_true"]
     out["depth_bias_sigma"] = np.abs(out["bias_depth"]) / out["sigma_depth"]
@@ -848,10 +889,37 @@ _RETRIEVAL_Q = {"A_B": ("A_B_fit", "sigma_A_B", None, "Bond albedo $A_B$", "inje
                 "depth": ("depth_fit", "sigma_depth", "depth_true", r"Occultation depth $\delta$ [ppm]", "true (hyperillumination) occultation depth", None)}
 
 
+# Tick label of an instrument key; a joint key ("A+B") joins the detector labels, on one head line where they share it ("NIRSpec G395H\nNRS1 + NRS2").
+# short=True drops that shared head line ("NRS1 + NRS2", for legends); oneline=True puts the label on one line.
+def instrument_label(instrument, oneline=False, short=False):
+    labels = [INSTRUMENT_LABELS.get(d, d) for d in detectors(instrument)]
+    heads = {l.split("\n")[0] for l in labels}
+    if len(labels) > 1 and len(heads) == 1 and all("\n" in l for l in labels):
+        label = ("" if short else heads.pop() + "\n") + " + ".join(l.split("\n", 1)[1] for l in labels)
+    else:
+        label = " + ".join(labels)
+    return label.replace("\n", " ") if oneline else label
+
+
+# Marker groups of the plot: each table is one group, except that the rows of a depth table whose parameters come from a joint fit of several detectors (fit != instrument,
+# see instrument_depths) form their own group per joint key - the same parameters evaluated in each detector's band, so they sit at the detector positions with another marker.
+def _retrieval_groups(tabs):
+    groups = []
+    for label, t in tabs.items():
+        joint = (t["fit"] != t["instrument"]) if "fit" in t else np.zeros(len(t), bool)
+        groups.append((label if not joint.any() or label is not None else "one detector per fit", t[~joint]))
+        if joint.any():
+            for key, part in t[joint].groupby("fit", sort=False):
+                groups.append(((f"{label}, " if label is not None else "") + f"{instrument_label(key, oneline=True, short=True)} jointly", part))
+    return groups
+
+
 # Retrieved A_B per instrument for one planet, after Ramirez et al. 2026 (arXiv:2610.22338), Fig. 4: one colour per instrument, the marker at the fitted A_B,
 # dark / light error bars at sigma_levels x the Fisher sigma (default 1 and 2 sigma), the dashed line at the injected A_B_true.
 # tabs: one instrument_retrievals table, or {label: table} to set several fits side by side per instrument, one marker shape each (e.g. {"A_B only": ..., "joint A_B + F": ...},
 # like the paper's phase curve / transit pairs). An unconstrained fit (A_B's Fisher sigma >= the flat-prior std of the fit bounds) gets a hollow marker: its error bar is not a measurement.
+# A joint fit of several detectors is its own x position in the A_B plot (its "+"-joined key); in the depth plot (instrument_depths(joint=True)) its rows sit at the detectors'
+# positions as an extra marker group (_retrieval_groups), since the depth is a per-band quantity.
 # quantity="depth" plots the fitted occultation depth with its propagated Fisher sigma instead (tables from instrument_depths), with a dashed segment at each instrument's true depth.
 # ylim defaults to the physical range [0, 1] for A_B (error bars beyond it are clipped by the axes) and to autoscale for the depth.
 def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), markers=("o", "s", "D", "^"), ylim="default", title=None, figsize=None, ax=None):
@@ -860,18 +928,20 @@ def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), marker
     A_B_true = first.attrs["A_B_true"]
     col, sig, truth_col, ylabel, ref_label, ylim_q = _RETRIEVAL_Q[quantity]
     ylim = ylim_q if ylim == "default" else ylim
-    instruments = list(dict.fromkeys(ins for t in tabs.values() for ins in t["instrument"]))   # order of first appearance
+    groups = _retrieval_groups(tabs)
+    instruments = list(dict.fromkeys(ins for _, g in groups for ins in g["instrument"]))   # x positions, in order of first appearance
     color = {ins: INSTRUMENT_COLORS[k % len(INSTRUMENT_COLORS)] for k, ins in enumerate(instruments)}
-    n = len(tabs)
     if ax is None:
-        fig, ax = plt.subplots(figsize=figsize or (max(5.5, 1.5 * len(instruments) + 1.5), 4.6))
+        fig, ax = plt.subplots(figsize=figsize or (max(5.5, 1.5 * len(instruments) + 1.5), 8.))
     else:
         fig = ax.figure
 
-    for k, (label, t) in enumerate(tabs.items()):
-        dx = (k - (n - 1) / 2) * 0.16
-        for _, r in t.iterrows():
-            x, c = instruments.index(r["instrument"]) + dx, color[r["instrument"]]
+    for ins in instruments:   # the groups present at this position, centred on it
+        present = [k for k, (_, g) in enumerate(groups) if (g["instrument"] == ins).any()]
+        step = min(0.18, 0.7 / len(present))   # marker spacing within one position
+        for j, k in enumerate(present):
+            x, c = instruments.index(ins) + (j - (len(present) - 1) / 2) * step, color[ins]
+            r = groups[k][1][groups[k][1]["instrument"] == ins].iloc[0]
             for lev, alpha in zip(sorted(sigma_levels, reverse=True), np.linspace(.3, 1., len(sigma_levels))):   # widest bar first (lightest), the 1 sigma bar on top
                 ax.errorbar(x, r[col], yerr=lev * r[sig], fmt="none", ecolor=c, alpha=alpha, elinewidth=1.8, capsize=3.5, capthick=1.5, zorder=3)
             hollow = r["verdict"] == VERDICT_UNCONSTRAINED
@@ -879,12 +949,12 @@ def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), marker
 
     if truth_col is None:
         ax.axhline(A_B_true, color="#333333", ls="--", lw=1.8, zorder=2)
-    else:   # the truth of an instrument does not depend on the fit, so take it from the first table that has the instrument
+    else:   # the truth of an instrument does not depend on the fit, so take it from the first group that has the instrument
         for ins in instruments:
-            y_true = next(t.loc[t["instrument"] == ins, truth_col].iloc[0] for t in tabs.values() if (t["instrument"] == ins).any())
+            y_true = next(g.loc[g["instrument"] == ins, truth_col].iloc[0] for _, g in groups if (g["instrument"] == ins).any())
             ax.hlines(y_true, instruments.index(ins) - 0.4, instruments.index(ins) + 0.4, color="#333333", ls="--", lw=1.8, zorder=2)
     ax.set_xticks(range(len(instruments)))
-    ax.set_xticklabels([INSTRUMENT_LABELS.get(ins, ins) for ins in instruments], fontsize=9)
+    ax.set_xticklabels([instrument_label(ins) for ins in instruments], fontsize=9)
     ax.set_xlim(-0.6, len(instruments) - 0.4)
     if ylim is not None: ax.set_ylim(*ylim)
     ax.set_ylabel(ylabel)
@@ -897,12 +967,12 @@ def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), marker
 
     levels = " / ".join(f"{lev}$\\sigma$" for lev in sorted(sigma_levels))
     handles = [plt.Line2D([], [], color="#333333", ls="--", lw=1.8, label=ref_label.format(A_B_true=A_B_true))]
-    for k, label in enumerate(tabs):
+    for k, (label, _) in enumerate(groups):
         if label is not None:
             handles.append(plt.Line2D([], [], marker=markers[k % len(markers)], ls="none", ms=7, color="#666666", label=label))
-    if any((t["verdict"] == VERDICT_UNCONSTRAINED).any() for t in tabs.values()):
+    if any((g["verdict"] == VERDICT_UNCONSTRAINED).any() for _, g in groups):
         handles.append(plt.Line2D([], [], marker="o", ls="none", ms=7, color="#666666", mfc="#fcfcfb", mew=1.4, label=("" if quantity == "A_B" else "$A_B$ ") + "unconstrained (Fisher $\\sigma \\geq$ prior std)"))
-    ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.07), ncol=min(len(handles), 4), fontsize=9, handletextpad=0.4, columnspacing=1.2,
+    ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.07), ncol=min(len(handles), 3), fontsize=9, handletextpad=0.4, columnspacing=1.2,
               title=("fitted $A_B$" if quantity == "A_B" else "occultation depth of the fit") + f", Fisher error bars {levels} (dark to light)", title_fontsize=9)
     fig.tight_layout()
     return fig, ax
