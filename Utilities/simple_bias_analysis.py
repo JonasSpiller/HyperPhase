@@ -318,6 +318,48 @@ def bias_map_grid(cfg, A_B_true, a_rs_grid, y_grid, y_param, redist=False, n_job
     return tuple(np.moveaxis(out, -1, 0)) if redist else out
 
 
+# False-positive heat redistribution. The truth has F = 0, so an observer who finds F > 0 significantly would claim heat transport, i.e. an atmosphere. How significant the spurious F is,
+# is the likelihood-ratio statistic dchi2_F = chi2(A_B-only fit) - chi2(joint A_B + F fit), both at their best fit with a free baseline, on the noiseless (Asimov) truth: sqrt(dchi2_F)
+# is the median expected one-sided significance of "F > 0" (Cowan et al. 2011), exact for the nonlinear T ∝ F^(1/4) response and the F = 0 boundary (null distribution 1/2 chi2_1).
+# NOT F_fit / sigma_F: the Fisher sigma_F is the slope AT F_fit, but the model responds ∝ F^~1.5 near 0, so the quadratic extrapolation to F = 0 overstates the significance (by ~1.4x
+# on TOI-2431 b / NRS1), and it ignores the boundary. dchi2_F ∝ n_orbits / sigma_1min^2 exactly (the fits do not depend on the noise scale), see critical_sigma_1min.
+# One map cell: (dchi2_F, F_fit); NaN on a rail, as in bias_cell. dchi2_F >= 0 since the A_B-only model is the F = 0 member of the joint one; tiny negative values from the tolerances are clipped.
+def false_F_cell(cfg, A_B_true, free_offset=True, rail_tol=1e-3, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), **kw):
+    d = false_F_fit(cfg, A_B_true, free_offset=free_offset, rail_tol=rail_tol, bounds=bounds, F_bounds=F_bounds, **kw)
+    return d["dchi2_F"], d["F_fit"]
+
+
+# Both fits and the statistic as a dict (the row of the false-positive tables): A_B_fit_naive, chi2_naive, A_B_fit, F_fit, chi2_joint, dchi2_F (NaN on a rail) and T_night_fit, the nightside
+# temperature [K] that the fitted (A_B, F) imply (Kreidberg & Loeb eq. 1): what the false positive would be reported as. cfg may be a detector set.
+def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=1e-3, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), **kw):
+    from hyperillumination_utils import surface_temperature
+    fit = fit_truth(cfg, A_B_true, models=("naive", "naive_redist"), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)
+    n, r = fit["naive"], fit["naive_redist"]
+    lo, hi = bounds
+    railed = any((x - lo) < rail_tol or (hi - x) < rail_tol for x in (n["A_B_fit"], r["A_B_fit"])) or (F_bounds[1] - r["F_fit"]) < rail_tol
+    pl = (cfg[0] if is_detector_set(cfg) else cfg).planet
+    return dict(A_B_fit_naive=n["A_B_fit"], chi2_naive=n["chi2"], A_B_fit=r["A_B_fit"], F_fit=np.nan if railed else r["F_fit"], chi2_joint=r["chi2"],
+                dchi2_F=np.nan if railed else max(n["chi2"] - r["chi2"], 0.),
+                T_night_fit=float(surface_temperature(np.pi, pl, "naive_redist", A_B=r["A_B_fit"], F=r["F_fit"])))
+
+
+def _false_F_cell_at(cfg, A_B_true, a_rs, y_param, y, kw):
+    return false_F_cell(cfg, A_B_true, a_rs=a_rs, **{y_param: y}, **kw)
+
+
+# dchi2_F over a map (like bias_map_grid): returns (dchi2 map, F map), shape (len(y_grid), len(a_rs_grid)). The F map should agree with bias_map_grid(redist=True)'s.
+def false_F_map_grid(cfg, A_B_true, a_rs_grid, y_grid, y_param, n_jobs=-1, **kw):
+    flat = pmap(_false_F_cell_at, [(cfg, A_B_true, ar, y_param, y, kw) for y in y_grid for ar in a_rs_grid], n_jobs)
+    out = np.array(flat).reshape(len(y_grid), len(a_rs_grid), 2)
+    return out[..., 0], out[..., 1]
+
+
+# The per-minute noise [ppm/min] at which the spurious F is a z-sigma detection (dchi2_F = z^2), at the n_orbits of the fit: sigma_crit = sigma_1min * sqrt(dchi2_F) / z, where sigma_1min
+# is the noise the fit was evaluated with. Exact, like measurability's sigma_1min_crit: dchi2_F ∝ 1 / sigma_1min^2. A planet observed with better noise than sigma_crit gets the false positive.
+def critical_sigma_1min(dchi2, sigma_1min, z=2.):
+    return sigma_1min * np.sqrt(np.asarray(dchi2, float)) / z
+
+
 # Emission Spectroscopy Metric (Kempton et al. 2018) formatted for a legend entry; the archive column is NaN for a few planets.
 def _fmt_esm(esm):
     return f"{esm:.1f}" if np.isfinite(esm) else "n/a"
@@ -580,6 +622,48 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
     print(f"railed: {(~no_occultation & ~np.isfinite(bias_map)).sum()}" + (f",  without occultation: {no_occultation.sum()}" if F_map is not None else ""))
 
 
+# Map of the critical noise sigma_crit(a/Rs, y) for a z-sigma false-positive F (critical_sigma_1min of a false_F_map_grid result), log colour scale, with the archive planets overlaid
+# as in plot_bias_maps. cfg: the map's config (its sigma_1min is the noise the dchi2 map was evaluated with, its n_orbits the number of orbits the critical noise refers to).
+# The map holds Rp/R* and i at the reference values: the phase-curve signal is ∝ (Rp/R*)^2, so dchi2_F ∝ (Rp/R*)^4 and sigma_crit ∝ (Rp/R*)^2 to a good approximation; planets with a
+# different Rp/R* must be rescaled (or fitted at their own geometry) before their noise level is compared with the map.
+def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=90., z=2., sigma_levels=(10., 20., 50., 100., 200., 500., 1000., 2000., 5000.), target=None, title=None):
+    from matplotlib.colors import LogNorm
+    cos_i = np.cos(np.radians(incl))
+    X, Y = np.meshgrid(xg, yg)
+    no_occultation = X * cos_i >= 1. + rp_rs_of(Y)
+    y_line = np.linspace(yg[0], yg[-1], 100)
+    grazing = xg[-1] * cos_i > 1. - np.max(rp_rs_of(y_line))
+
+    sig_crit = critical_sigma_1min(dchi2_map, cfg.sigma_1min, z=z)
+    ok = ~no_occultation & np.isfinite(sig_crit) & (sig_crit > 0.)
+    z_ = np.ma.masked_where(~ok, sig_crit)
+    levels = [lv for lv in sigma_levels if z_.min() < lv < z_.max()]
+
+    fig, ax = plt.subplots(figsize=(12, 6.2))
+    im = ax.pcolormesh(xg, yg, z_, cmap="magma_r", norm=LogNorm(vmin=z_.min(), vmax=z_.max()), shading="auto")
+    if levels:
+        cs = ax.contour(xg, yg, z_, levels=levels, colors=["w" if im.norm(lv) > 0.5 else INK for lv in levels], linewidths=.8)
+        ax.clabel(cs, fmt="%g")
+    if grazing:
+        for sign in (-1., 1.):
+            ax.plot((1. + sign * rp_rs_of(y_line)) / cos_i, y_line, color=INK, ls="--", lw=1.2, label=r"grazing occultation ($b = 1 \mp R_p/R_\star$)" if sign > 0 else None)
+    overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target)
+    ax.set_facecolor("0.85")
+    ax.grid(False)
+    ax.set_xlim(xg[0], xg[-1]); ax.set_ylim(yg[0], yg[-1])
+    ax.set_xlabel(r"$a/R_\star$"); ax.set_ylabel(ylabel)
+    ax.set_title(title or rf"Critical noise for a {z:g}$\sigma$ false-positive $F$ ({cfg.n_orbits} orbits)")
+    fig.colorbar(im, ax=ax, label=rf"$\sigma_{{1\,\rm min,\,crit}}$ [ppm/min] for a {z:g}$\sigma$ detection of $F > 0$")
+    fig.tight_layout()
+    fig.legend(*ax.get_legend_handles_labels(), loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=8, framealpha=.9)
+    plt.show()
+
+    print(f"occulting, non-railed cells: {ok.sum()} of {ok.size};  sigma_1min,crit ({z:g} sigma, {cfg.n_orbits} orbits) in [{sig_crit[ok].min():.1f}, {sig_crit[ok].max():.1f}] ppm/min;  "
+          f"sqrt(dchi2_F) at sigma_1min = {cfg.sigma_1min:g} ppm/min in [{np.sqrt(dchi2_map[ok]).min():.2f}, {np.sqrt(dchi2_map[ok]).max():.2f}] sigma")
+    print(f"railed: {(~no_occultation & ~np.isfinite(dchi2_map)).sum()},  without occultation: {no_occultation.sum()}")
+    return sig_crit
+
+
 # One row of planet_bias_table: the planet's own geometry and its own sigma_1min, everything else inherited from cfg.
 def _planet_bias_row(cfg, A_B_true, pl, s1, redist, bounds, F_bounds, kw):
     c = replace(cfg, planet=pl, sigma_1min=float(s1))   # stellar_grid / filter / A_ / n_bins / n_orbits are instrument-level, not per planet
@@ -624,6 +708,113 @@ def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity
     tab["verdict"] = bias_verdict(tab["bias_sigma"], tab["sigma"], tab.attrs["sigma_prior"][quantity])
     tab["t_crit"] = critical_time(tab["t_obs"], tab["bias_sigma"], tab["verdict"])   # [h] at which the bias is a 1 sigma effect; NaN where unconstrained
     return tab
+
+
+# False-positive tables. The decision columns, from dchi2_F at each row's own noise (see false_F_cell): z_F = sqrt(dchi2_F), the expected significance of the spurious F; noise_margin =
+# z_F / z = sigma_1min,crit / sigma_1min, the factor by which the noise may be worse (> 1) or must be better (< 1) for a z-sigma false positive, which also holds for a joint fit of several
+# detectors (all their noise levels scaled alike); sigma_1min_crit (critical_sigma_1min; NaN for a joint fit); t_crit [h] = t_obs * (z / z_F)^2, the observing time at which the spurious F
+# reaches z sigma (dchi2_F ∝ t_obs); verdict: FALSE_POSITIVE where z_F >= z. Railed fits (dchi2_F NaN) get no verdict.
+FALSE_POSITIVE, NO_FALSE_POSITIVE = "false positive", "below threshold"
+
+def _false_F_decision(tab, z):
+    tab["z_F"] = np.sqrt(tab["dchi2_F"])
+    tab["noise_margin"] = tab["z_F"] / z
+    tab["sigma_1min_crit"] = critical_sigma_1min(tab["dchi2_F"], tab["sigma_1min"], z=z)
+    tab["t_crit"] = tab["t_obs"] * (z / tab["z_F"]) ** 2
+    tab["verdict"] = np.where(~np.isfinite(tab["z_F"]), "-", np.where(tab["z_F"] >= z, FALSE_POSITIVE, NO_FALSE_POSITIVE))
+    tab.attrs["z"] = z
+    return tab
+
+
+def _planet_false_F_row(cfg, A_B_true, pl, s1, bounds, F_bounds, kw):
+    c = replace(cfg, planet=pl, sigma_1min=float(s1))
+    return dict(name=pl.name, a_rs=pl.R / pl.r2, period=pl.period, T_eff=pl.T2_eff, sigma_1min=float(s1), **false_F_fit(c, A_B_true, bounds=bounds, F_bounds=F_bounds, **kw))
+
+
+# False-positive F for a SAMPLE of planets on one instrument, each at its own geometry and noise (the counterpart of planet_bias_table; same inputs, same handling of planets without a noise
+# level). Sorted by a/Rs. z: the significance the decision refers to.
+def planet_false_F_table(cfg, A_B_true, planets, sigma_1min, z=2., bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), AGG=None, n_jobs=-1, **kw):
+    pls = list(planets.values()) if isinstance(planets, dict) else list(planets)
+    missing = [pl.name for pl in pls if pl.name not in sigma_1min]
+    if len(missing) == len(pls): raise ValueError(f"no planet has a sigma_1min entry (planets: {missing}; sigma_1min has {sorted(sigma_1min)}), so there is nothing to tabulate")
+    if missing:
+        print(f"no sigma_1min for {len(missing)} of {len(pls)} planets, left out of the table: {', '.join(missing)}")
+        pls = [pl for pl in pls if pl.name in sigma_1min]
+    bad = [pl.name for pl in pls if not np.isfinite(sigma_1min[pl.name])]
+    if bad: raise ValueError(f"non-finite sigma_1min for {bad}: {[sigma_1min[nm] for nm in bad]}")
+    rows = pmap(_planet_false_F_row, [(cfg, A_B_true, pl, sigma_1min[pl.name], bounds, F_bounds, kw) for pl in pls], n_jobs)
+    tab = pd.DataFrame(rows).sort_values("a_rs").reset_index(drop=True)
+    tab["esm"] = [planet_esm(AGG, nm) for nm in tab["name"]] if AGG is not None else np.nan
+    tab["t_obs"] = cfg.n_orbits * tab["period"] * 24.   # [h]
+    tab.attrs.update(A_B_true=A_B_true, n_orbits=cfg.n_orbits)
+    return _false_F_decision(tab, z)
+
+
+def _instrument_false_F_row(cfg, A_B_true, pl, instrument, sigma_1min, bounds, F_bounds, kw):
+    c = _detector_cfgs(cfg, pl, instrument, sigma_1min)
+    dets = detectors(instrument)
+    return dict(instrument=instrument, sigma_1min=float(sigma_1min[dets[0]]) if len(dets) == 1 else np.nan, **false_F_fit(c, A_B_true, bounds=bounds, F_bounds=F_bounds, **kw))
+
+
+# False-positive F for one planet on several instruments (the counterpart of instrument_retrievals: same `instruments` entries incl. tuples for a joint fit of several detectors, same
+# sigma_1min handling). A joint fit's sigma_1min_crit is NaN; its noise_margin applies to all its detectors alike.
+def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), n_jobs=-1, **kw):
+    from HItargets_utils import rms_1min, NoNoiseLevelError
+    instruments = [instrument_key(ins) for ins in instruments]
+    dets = list(dict.fromkeys(d for ins in instruments for d in detectors(ins)))
+    if sigma_1min is None:
+        sigma_1min, missing = {}, []
+        for d in dets:
+            try:
+                with contextlib.redirect_stdout(io.StringIO()): sigma_1min[d] = rms_1min(planet, d)
+            except NoNoiseLevelError:
+                missing.append(d)
+        if missing: print(f"{planet.name}: no noise level on {', '.join(missing)} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry), left out")
+    used = [ins for ins in instruments if all(d in sigma_1min for d in detectors(ins))]
+    if not used: raise ValueError(f"{planet.name}: no noise level for any of {instruments}")
+    rows = pmap(_instrument_false_F_row, [(cfg, A_B_true, planet, ins, sigma_1min, bounds, F_bounds, kw) for ins in used], n_jobs)
+    tab = pd.DataFrame(rows)
+    tab["t_obs"] = cfg.n_orbits * planet.period * 24.   # [h]
+    tab.attrs.update(planet=planet.name, A_B_true=A_B_true, n_orbits=cfg.n_orbits, sigma_1min={d: float(sigma_1min[d]) for d in dets if d in sigma_1min})
+    return _false_F_decision(tab, z)
+
+
+# Bar chart of the expected significance z_F of the spurious F per row of a false-positive table (planets, labelled with a/Rs, or instruments), with the threshold z as a dashed line;
+# bars at or above it (FALSE_POSITIVE) in the hyperillumination colour. Rows under the axis: the fitted F and the nightside temperature it implies, the delivered and critical noise, and the critical observing time.
+def plot_false_F_bars(tab, title=None, figsize=None, ax=None):
+    z = tab.attrs["z"]
+    by_planet = "name" in tab
+    x = np.arange(len(tab))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize or (max(6., 1.3 * len(tab) + 2.), 6.5))
+    else:
+        fig = ax.figure
+    colors = [C_HI if v == FALSE_POSITIVE else (MUTED if v == "-" else C_NAIVE) for v in tab["verdict"]]
+    bars = ax.bar(x, tab["z_F"].fillna(0.), color=colors, width=.6, zorder=3)
+    _bar_values(ax, bars, "{:.2f}", values=tab["z_F"])
+    ax.axhline(z, color=INK, ls="--", lw=1.2)
+    ax.set_ylim(0., max(1.2 * np.nanmax(tab["z_F"]), 1.3 * z))
+    ax.set_ylabel(r"$\sqrt{\Delta\chi^2_F}$ [$\sigma$]")
+    if by_planet:
+        ax.set_xticks(x, [f"{nm}\n$a/R_\star$ = {ar:.2f}" for nm, ar in zip(tab["name"], tab["a_rs"])], fontsize=8)
+    else:
+        ax.set_xticks(x, [instrument_label(ins) for ins in tab["instrument"]], fontsize=8)
+    ax.set_xlim(-0.6, len(tab) - 0.4)
+    ax.grid(axis="x", visible=False)
+    rows = [(r"fitted $F$", tab["F_fit"], "{:.4f}"),
+            (r"implied $T_{\rm night}$ [K]", tab["T_night_fit"], "{:.0f}"),
+            (r"$\sigma_{1\,\rm min}$ [ppm/min]", tab["sigma_1min"], "{:.0f}"),
+            (r"$\sigma_{1\,\rm min,\,crit}$ [ppm/min]", tab["sigma_1min_crit"], "{:.0f}"),
+            (r"$t_{\rm crit}$ [h]", tab["t_crit"], "{:.0f}")]
+    below = _param_rows(ax, x, rows, y0=-0.17, dy=0.055)
+    handles = [plt.Rectangle((0, 0), 1, 1, color=C_HI, label=f"{FALSE_POSITIVE} ($\\geq$ {z:g}$\\sigma$)"), plt.Rectangle((0, 0), 1, 1, color=C_NAIVE, label=NO_FALSE_POSITIVE),
+               plt.Line2D([], [], color=INK, ls="--", lw=1.2, label=f"{z:g}$\\sigma$ threshold")]
+    ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.03), ncol=3, fontsize=9, title=r"expected significance $\sqrt{\Delta\chi^2_F}$ of the spurious $F$ (Asimov)", title_fontsize=9)
+    ax.set_title(title or (f"False-positive heat redistribution ({tab.attrs['n_orbits']} orbits)" if by_planet else f"{tab.attrs['planet']}: false-positive heat redistribution ({tab.attrs['n_orbits']} orbits per instrument)"),
+                 fontweight="bold", pad=52)
+    fig.tight_layout()
+    fig.subplots_adjust(bottom=min(0.6, 0.12 + below * ax.get_position().height))   # room for the tick labels and the parameter rows (axes fraction -> figure fraction)
+    return fig, ax
 
 
 # cfg rebuilt for another instrument: its filter, band and stellar grid; everything else (albedo model, n_bins, n_orbits, limb darkening, ...) is kept.
