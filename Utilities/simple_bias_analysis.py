@@ -2,6 +2,7 @@ import contextlib, io
 from scipy.optimize import minimize_scalar
 from scipy.interpolate import RegularGridInterpolator
 from hyperillumination_phasecurve_utils import *
+from astro_utils import C_ROCHE_FLUID, C_ROCHE_RIGID, roche_limit_a_rs, roche_limit_period_h, kepler_period_days, main_sequence_rho_star, main_sequence_T_eff, main_sequence_R_star
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -288,18 +289,31 @@ def fisher_depth(cfg, insolation_model, A_B_, F=None, h_A=1e-3, h_F=1e-3, bounds
 ###########################################################################################################################
 
 
+# A railed fit: a fitted parameter within RAIL_TOL of a bound of its fit range, i.e. the point-source model cannot reproduce the truth at any value inside the range, so the bias is undefined
+# there (bias_cell / false_F_fit return NaN, the sweeps flag the point). F = 0 is a valid fit, only F's upper bound counts as a rail.
+RAIL_TOL = 1e-3
+
+def is_railed(x, bounds, rail_tol=RAIL_TOL):
+    """True where x sits within rail_tol of either bound (scalar or array)."""
+    x = np.asarray(x, dtype=float)
+    return ((x - bounds[0]) < rail_tol) | ((bounds[1] - x) < rail_tol)
+
+def fit_railed(fit, bounds, F_bounds=(0.0, 0.5), rail_tol=RAIL_TOL):
+    """Rail test of one model's fit_truth result: A_B on either bound, or (joint fit) F on its upper bound."""
+    return bool(is_railed(fit["A_B_fit"], bounds, rail_tol)) or ("F_fit" in fit and (F_bounds[1] - fit["F_fit"]) < rail_tol)
+
+
 # One grid cell of a bias map: generate the hyperillumination truth, fit the naive model, return the recovered-A_B bias.
 # NaN if the fit railed against a bound, i.e. the naive model cannot reproduce the truth at ANY albedo.
 # redist=True fits naive_redist (A_B and F) instead and returns (A_B bias, F_fit); the truth has no redistribution, so F_fit is itself the bias in F.
-def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=1e-3, temp_bias=False, bounds=(0.0, 0.6), redist=False, F_bounds=(0.0, 0.5), **kw):
+def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, temp_bias=False, bounds=(0.0, 0.6), redist=False, F_bounds=(0.0, 0.5), **kw):
     """Recovered-A_B bias for one map cell. NaN if the fit railed against a bound,
     i.e. the naive model cannot reproduce the truth at ANY albedo.
     With redist=True: (A_B bias, F_fit), both NaN on a rail. F_fit = 0 is a valid fit, only F's upper bound counts as a rail."""
     model = "naive_redist" if redist else "naive"
     fit = fit_truth(cfg, A_B_true, models=(model,), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)[model]   # same bounds the rail check below uses
     A_B_fit, F_fit = fit["A_B_fit"], fit.get("F_fit", 0.)
-    lo, hi = bounds
-    if (A_B_fit - lo) < rail_tol or (hi - A_B_fit) < rail_tol or (F_bounds[1] - F_fit) < rail_tol:
+    if fit_railed(fit, bounds, F_bounds, rail_tol):
         return (np.nan, np.nan) if redist else np.nan
     A_B_bias = A_B_fit - A_B_true
     out = temperature_bias(A_B_true, A_B_bias, F_fit) if temp_bias else A_B_bias
@@ -318,25 +332,55 @@ def bias_map_grid(cfg, A_B_true, a_rs_grid, y_grid, y_param, redist=False, n_job
     return tuple(np.moveaxis(out, -1, 0)) if redist else out
 
 
+# The 1-D counterpart of bias_map_grid along a/Rs alone (the limit curve of HypotheticalExtremePlanet.ipynb): both fits with their Fisher sigmas at every a/Rs, one DataFrame row per point.
+# bounds=(0, 1) by default, the physical range, so `railed` means the model cannot reproduce the truth at any albedo (fit_railed); the fitted values are kept, so the caller decides what to do with them.
+# rho_star [g/cm^3]: with it each point gets the period a circular orbit at that a/Rs has around a star of that mean density (kepler_period_days). The period never enters the bias,
+# only sigma_bin, so the Fisher sigmas and chi2 then belong to a physically consistent orbit; None keeps cfg.planet.period at every point.
+# Columns: a_rs, period_h, sigma_bin; A_B_fit, bias, sigma, chi2, railed (A_B-only fit); A_B_fit_J, bias_J, sigma_J, F_fit, sigma_F, chi2_J, railed_J (joint fit); each model's block only if it is in `models`.
+def _bias_vs_a_rs_point(cfg, A_B_true, a_rs, rho_star, models, bounds, F_bounds, kw):
+    c = cfg if rho_star is None else replace(cfg, planet=replace(cfg.planet, period=float(kepler_period_days(a_rs, rho_star))))
+    fit = fit_truth(c, A_B_true, models=models, free_offset=True, bounds=bounds, F_bounds=F_bounds, fisher=True, a_rs=a_rs, **kw)
+    row = dict(a_rs=a_rs, period_h=24. * c.planet.period, sigma_bin=c.sigma_bin)
+    if "naive" in fit:
+        n = fit["naive"]
+        row.update(A_B_fit=n["A_B_fit"], bias=n["bias_A_B"], sigma=n["sigma_A_B"], chi2=n["chi2"], railed=fit_railed(n, bounds, F_bounds))
+    if "naive_redist" in fit:
+        j = fit["naive_redist"]
+        row.update(A_B_fit_J=j["A_B_fit"], bias_J=j["bias_A_B"], sigma_J=j["sigma_A_B"], F_fit=j["F_fit"], sigma_F=j["sigma_F"], chi2_J=j["chi2"], railed_J=fit_railed(j, bounds, F_bounds))
+    return row
+
+
+def bias_vs_a_rs(cfg, A_B_true, a_rs_grid, rho_star=None, models=("naive", "naive_redist"), bounds=(0., 1.), F_bounds=(0., 0.5), n_jobs=-1, **kw):
+    """fit_truth (both models, Fisher sigmas) at every a/Rs of a_rs_grid, points in parallel, as a DataFrame; see the comment above for the columns and the rho_star / bounds conventions."""
+    return pd.DataFrame(pmap(_bias_vs_a_rs_point, [(cfg, A_B_true, float(a), rho_star, models, bounds, F_bounds, kw) for a in a_rs_grid], n_jobs))
+
+
+# The illumination geometry along an a/Rs grid at cfg's Rp/Rs: the area fractions of PlanetParams.fraction_illuminated (Knuth et al. 2017 / Carter et al. 2024) and the stellar angular radius.
+def sweep_geometry(cfg, a_rs_grid):
+    geo = pd.DataFrame([{"a_rs": a, **{k.replace(" ", "_"): v for k, v in swept_planet(cfg, a_rs=a).fraction_illuminated(extra=True).items()}} for a in a_rs_grid])
+    geo["night"] = 1. - geo["fully_illuminated"] - geo["penumbra"]
+    geo["angular_radius_deg"] = np.degrees(np.arcsin(1. / geo["a_rs"]))
+    return geo
+
+
 # False-positive heat redistribution. The truth has F = 0, so an observer who finds F > 0 significantly would claim heat transport, i.e. an atmosphere. How significant the spurious F is,
 # is the likelihood-ratio statistic dchi2_F = chi2(A_B-only fit) - chi2(joint A_B + F fit), both at their best fit with a free baseline, on the noiseless (Asimov) truth: sqrt(dchi2_F)
 # is the median expected one-sided significance of "F > 0" (Cowan et al. 2011), exact for the nonlinear T ∝ F^(1/4) response and the F = 0 boundary (null distribution 1/2 chi2_1).
 # NOT F_fit / sigma_F: the Fisher sigma_F is the slope AT F_fit, but the model responds ∝ F^~1.5 near 0, so the quadratic extrapolation to F = 0 overstates the significance (by ~1.4x
 # on TOI-2431 b / NRS1), and it ignores the boundary. dchi2_F ∝ n_orbits / sigma_1min^2 exactly (the fits do not depend on the noise scale), see critical_sigma_1min.
 # One map cell: (dchi2_F, F_fit); NaN on a rail, as in bias_cell. dchi2_F >= 0 since the A_B-only model is the F = 0 member of the joint one; tiny negative values from the tolerances are clipped.
-def false_F_cell(cfg, A_B_true, free_offset=True, rail_tol=1e-3, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), **kw):
+def false_F_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), **kw):
     d = false_F_fit(cfg, A_B_true, free_offset=free_offset, rail_tol=rail_tol, bounds=bounds, F_bounds=F_bounds, **kw)
     return d["dchi2_F"], d["F_fit"]
 
 
 # Both fits and the statistic as a dict (the row of the false-positive tables): A_B_fit_naive, chi2_naive, A_B_fit, F_fit, chi2_joint, dchi2_F (NaN on a rail) and T_night_fit, the nightside
 # temperature [K] that the fitted (A_B, F) imply (Kreidberg & Loeb eq. 1): what the false positive would be reported as. cfg may be a detector set.
-def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=1e-3, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), **kw):
+def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), **kw):
     from hyperillumination_utils import surface_temperature
     fit = fit_truth(cfg, A_B_true, models=("naive", "naive_redist"), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)
     n, r = fit["naive"], fit["naive_redist"]
-    lo, hi = bounds
-    railed = any((x - lo) < rail_tol or (hi - x) < rail_tol for x in (n["A_B_fit"], r["A_B_fit"])) or (F_bounds[1] - r["F_fit"]) < rail_tol
+    railed = fit_railed(n, bounds, F_bounds, rail_tol) or fit_railed(r, bounds, F_bounds, rail_tol)
     pl = (cfg[0] if is_detector_set(cfg) else cfg).planet
     return dict(A_B_fit_naive=n["A_B_fit"], chi2_naive=n["chi2"], A_B_fit=r["A_B_fit"], F_fit=np.nan if railed else r["F_fit"], chi2_joint=r["chi2"],
                 dchi2_F=np.nan if railed else max(n["chi2"] - r["chi2"], 0.),
@@ -405,6 +449,16 @@ def target_marker(ax, planet, ykey, AGG=None, **kw):
 def reference_planet(a_rs=2.5, rp_rs=0.015, T_eff=4000., incl=90., period=0.3, R_star_Rsun=0.6, name="reference geometry"):
     return PlanetParams(name=name, period=period, incl=incl, ecc=0., w=90., r1=rp_rs, r2=1., R=a_rs, T2_eff=T_eff,
                         a_AU=a_rs * R_star_Rsun * float(const.R_sun / const.au), T14=np.nan)
+
+
+# A synthetic planet of mean density rho_p [g/cm^3] exactly at the Roche limit of a main-sequence host with rho_star = rho_ratio * rho_p: a/Rs = c rho_ratio^(1/3) and the period follow from
+# (rho_ratio, rho_p, c) alone (roche_limit_a_rs / roche_limit_period_h), T_eff and R_star from the main-sequence table (astro_utils.MAIN_SEQUENCE). Units as reference_planet (r2 = 1, so r1 = Rp/Rs);
+# T14 is NaN, only PandExo needs it and it never runs on a hypothetical planet. The name carries rho_ratio, so a set of them is told apart in tables and tick labels.
+def roche_planet(rho_ratio, rho_p, c=C_ROCHE_FLUID, rp_rs=0.015, incl=90., name=None):
+    T_eff = float(main_sequence_T_eff(rho_ratio * rho_p))
+    a_rs = float(roche_limit_a_rs(rho_ratio, c))
+    return PlanetParams(name=name or f"Roche-limit planet ({rho_ratio:g})", period=float(roche_limit_period_h(rho_p, c)) / 24., incl=incl, ecc=0., w=90., r1=rp_rs, r2=1., R=a_rs, T2_eff=T_eff,
+                        a_AU=a_rs * float(main_sequence_R_star(T_eff)) * float(const.R_sun / const.au), T14=np.nan)
 
 
 def map_grid(lo, hi, n, include=None, pad=0.1):
@@ -564,24 +618,160 @@ def plot_joint_measurability(A_B_grid, sweep, i0, cfg, target_label, title):
     plt.show()
 
 
+# The hyperillumination truth next to the best point-source fits of fit_truth (A_B-only and, if present, joint; baselines refitted) with one mock noise realisation at sigma_bin, and the
+# residuals truth - model before (naive at the true A_B) and after absorbing the bias, against the same noise. fit: a fit_truth result for cfg at A_B_true; kw: its model_pcurve keywords.
+# Times in hours from transit. Returns fig, ax so the notebook can set the suptitle.
+def plot_fit_vs_truth(cfg, A_B_true, fit, seed=43, title=None, **kw):
+    t_, truth = model_pcurve(cfg, "hyperillum", A_B_true, **kw)
+    naive_0 = model_pcurve(cfg, "naive", A_B_true, **kw)[1]
+    fits = [("naive", "best $A_B$-only fit", "--", C_NAIVE), ("naive_redist", "best joint fit", "-.", C_REDIST)]
+    curves = []
+    for model, label, ls, color in fits:
+        if model not in fit: continue
+        f = fit[model]
+        y = model_pcurve(cfg, model, f["A_B_fit"], F=f.get("F_fit"), **kw)[1]
+        tag = f"$A_B$ = {f['A_B_fit']:.3f}" + (f", $F$ = {f['F_fit']:.4f}" if "F_fit" in f else "")
+        curves.append((y + (truth - y).mean(), f"{label} ({tag})", ls, color))   # the fitted baseline (free_offset)
+    sigma_bin, P = cfg.sigma_bin, cfg.planet.period
+    tb = np.linspace(0., P, cfg.n_bins, endpoint=False) + 0.5 * P / cfg.n_bins   # bin centres of binned()
+    yb_truth = binned(cfg, truth)
+    y_data = yb_truth + np.random.default_rng(seed).normal(0., sigma_bin, size=yb_truth.size)   # one draw ~ N(truth, sigma_bin) per bin
+
+    fig, ax = plt.subplots(1, 2, figsize=(16, 5.2))
+    ax[0].errorbar(tb * 24., y_data, yerr=sigma_bin, label=rf"mock data (truth $\pm\,{sigma_bin:.0f}$ ppm)", **MOCK_KW)
+    ax[0].plot(t_ * 24., truth, lw=1.2, color=C_HI, label="hyperillumination (truth)")
+    for y, label, ls, color in curves: ax[0].plot(t_ * 24., y, lw=1.2, ls=ls, color=color, label=label)
+    ax[0].set_xlabel("time [h]"); ax[0].set_ylabel(r"$F_p/F_s$ [ppm]"); ax[0].set_title("truth and best fits")
+    ax[1].axhline(0., color=AXIS, lw=.8)
+    ax[1].errorbar(tb * 24., y_data - yb_truth, yerr=sigma_bin, label="mock data $-$ truth (the noise realisation)", **MOCK_KW)
+    ax[1].plot(t_ * 24., truth - naive_0, lw=1.2, color=C_HI, label=rf"truth $-$ naive at the true $A_B$ = {A_B_true:.2f}")
+    for y, label, ls, color in curves: ax[1].plot(t_ * 24., truth - y, lw=1.2, color=color, label=f"truth $-$ {label.split(' (')[0]} (irreducible)")
+    ax[1].set_xlabel("time [h]"); ax[1].set_ylabel("residual [ppm]"); ax[1].set_title("residual before and after absorbing the bias")
+    for a_ in ax: a_.legend(fontsize=9)
+    fig.suptitle(title or rf"{cfg.planet.name}: $a/R_\star$ = {cfg.planet.R / cfg.planet.r2:.2f}, {cfg.n_orbits} orbits, {cfg.n_bins} bins, $\sigma_{{\rm bin}}$ = {sigma_bin:.0f} ppm", y=1.02)
+    fig.tight_layout()
+    return fig, ax
+
+
+# Vertical marks of the limit curve, on one axes: the contact limit (hatched), the fluid (solid) and rigid (dotted) Roche limits per density ratio, the anchor planets (grey dashed).
+# Returns the legend handles (one per ratio, one per anchor, the contact span).
+def _mark_limits(ax, contact, ratios, anchors):
+    handles = [ax.axvspan(ax.get_xlim()[0], contact, facecolor="0.85", edgecolor="0.5", hatch="///", lw=0, zorder=0, label=r"inside the star ($a/R_\star < 1 + R_p/R_\star$)")]
+    for k, r in enumerate(ratios):
+        col = F_COLORS[k % len(F_COLORS)]
+        handles.append(ax.axvline(roche_limit_a_rs(r, C_ROCHE_FLUID), color=col, lw=1.2, label=rf"Roche limit, $\rho_\star/\rho_p$ = {r:g}  (solid: fluid, dotted: rigid)"))
+        ax.axvline(roche_limit_a_rs(r, C_ROCHE_RIGID), color=col, lw=1., ls=":")
+    for nm, pl in anchors.items():
+        handles.append(ax.axvline(pl.R / pl.r2, color=MUTED, lw=1., ls="--", label=rf"{nm}  ($a/R_\star$ = {pl.R / pl.r2:.2f})"))
+    return handles
+
+
+# The limit curve: a bias_vs_a_rs sweep (both models) on a log a/Rs axis, three stacked panels - the geometry of sweep_geometry (area fractions, stellar angular radius on the right axis),
+# the biases (Delta A_B of both fits, the spurious F on the right axis, hollow markers where a fit railed, and sweep_uB0's A_B-only bias as the limb-darkening sensitivity, if given)
+# and the measurability (|Delta A_B| / sigma of both fits, sqrt(dchi2_F) of the spurious F, sqrt(chi2) of the best A_B-only fit; all four scale as 1 / sigma_1min and as sqrt(n_orbits), so
+# another noise level is a vertical shift of every curve on the log axis). _mark_limits on every panel; ratios are the rho_star / rho_p of the Roche lines, anchors {name: PlanetParams} the planets marked.
+# cfg: the sweep's config (sigma_1min, n_orbits, n_bins for the labels and the right axis); rp_rs: the sweep's Rp/Rs (the contact limit). titles: (geometry, bias, measurability) panel titles.
+def plot_limit_curve(sweep, geo, cfg, rp_rs, ratios, anchors, sweep_uB0=None, u_B=None, titles=(None, None, None), suptitle=None):
+    contact = 1. + rp_rs
+    bad, badJ = sweep["railed"], sweep["railed_J"]
+    fig, axs = plt.subplots(3, 1, figsize=(13, 15), sharex=True)
+    for a_ in axs: a_.set_xscale("log"); a_.set_xlim(sweep["a_rs"].iloc[0], sweep["a_rs"].iloc[-1])
+    limit_handles = [_mark_limits(a_, contact, ratios, anchors) for a_ in axs][0]
+
+    a0 = axs[0]
+    h = [a0.plot(geo["a_rs"], geo["fully_illuminated"], color=C_HI, lw=1.5, label="fully illuminated fraction")[0],
+         a0.plot(geo["a_rs"], geo["penumbra"], color=C_REDIST, lw=1.5, label=r"penumbra fraction $R_\star/a$")[0],
+         a0.plot(geo["a_rs"], geo["night"], color=C_NAIVE, lw=1.5, label="nightside fraction")[0]]
+    a0.set_ylabel("area fraction"); a0.set_ylim(0., 1.)
+    a0r = a0.twinx()
+    h.append(a0r.plot(geo["a_rs"], geo["angular_radius_deg"], color=INK, lw=1., ls="-.", label="stellar angular radius [deg]")[0])
+    a0r.set_ylabel("stellar angular radius [deg]"); a0r.set_ylim(0., 90.); a0r.grid(False)
+    a0.set_title(titles[0] or rf"Geometry at $R_p/R_\star$ = {rp_rs:g}")
+    a0.legend(handles=h, fontsize=9, loc="center right")
+
+    a1 = axs[1]
+    a1.axhline(0., color=AXIS, lw=.8)
+    h = [a1.plot(sweep["a_rs"], sweep["bias"], "o-", color=C_NAIVE, lw=1.5, ms=5, label=r"$\Delta A_B$, $A_B$-only fit")[0],
+         a1.plot(sweep["a_rs"][bad], sweep["bias"][bad], "o", color=C_NAIVE, mfc="#fcfcfb", ms=7, label="railed fit ($A_B$ on a bound of [0, 1])")[0]]
+    if sweep_uB0 is not None:
+        h.append(a1.plot(sweep_uB0["a_rs"], sweep_uB0["bias"], ":", color=C_NAIVE, lw=1.4, label=r"$\Delta A_B$, $A_B$-only fit, uniform stellar disc ($u_B$ = 0)")[0])
+    h.append(a1.plot(sweep["a_rs"], sweep["bias_J"], "s-", color=C_REDIST, lw=1.5, ms=5, label=r"$\Delta A_B$, joint $A_B$ + $F$ fit")[0])
+    a1.plot(sweep["a_rs"][badJ], sweep["bias_J"][badJ], "s", color=C_REDIST, mfc="#fcfcfb", ms=7)
+    a1.set_ylabel(r"bias $\Delta A_B = A_{B,\rm fit} - A_B$")
+    a1r = a1.twinx()
+    h.append(a1r.plot(sweep["a_rs"], sweep["F_fit"], "^--", color=F_COLORS[-1], lw=1.2, ms=5, label="spurious $F$ of the joint fit, right axis (truth: $F$ = 0)")[0])
+    a1r.set_ylabel("fitted $F$"); a1r.grid(False)
+    a1.set_title(titles[1] or "Bias from neglecting hyperillumination" + (rf"  ($u_B$ = {u_B:g})" if u_B is not None else ""))
+    a1.legend(handles=h, fontsize=9, loc="lower right")
+
+    a2 = axs[2]
+    bs_n, _ = measurability(sweep["bias"], sweep["sigma"], cfg.sigma_1min)
+    bs_j, _ = measurability(sweep["bias_J"], sweep["sigma_J"], cfg.sigma_1min)
+    h = [a2.plot(sweep["a_rs"], bs_n, "o-", color=C_NAIVE, lw=1.5, ms=5, label=r"$|\Delta A_B| / \sigma_{A_B}$, $A_B$-only fit")[0],
+         a2.plot(sweep["a_rs"], bs_j, "s-", color=C_REDIST, lw=1.5, ms=5, label=r"$|\Delta A_B| / \sigma_{A_B}$, joint fit")[0],
+         a2.plot(sweep["a_rs"], np.sqrt(np.clip(sweep["chi2"] - sweep["chi2_J"], 0., None)), "^--", color=F_COLORS[-1], lw=1.2, ms=5, label=r"$\sqrt{\Delta\chi^2_F}$: significance of the spurious $F$")[0],
+         a2.plot(sweep["a_rs"], np.sqrt(sweep["chi2"]), "d:", color=C_HI, lw=1.4, ms=5, label=r"$\sqrt{\chi^2}$: misfit of the best $A_B$-only fit")[0],
+         a2.axhline(1., color=INK, lw=.9, ls="--", label=r"1 $\sigma$")]
+    a2.set_yscale("log"); a2.set_ylabel(r"significance [$\sigma$]")
+    a2.set_title(titles[2] or rf"Measurability  ($\sigma_{{1\rm min}}$ = {cfg.sigma_1min:.0f} ppm/min, {cfg.n_orbits} orbits, {cfg.n_bins} bins)")
+    a2.legend(handles=h, fontsize=9, loc="upper right", frameon=True, facecolor="#fcfcfb", edgecolor="none")
+
+    from matplotlib.ticker import FixedLocator, FormatStrFormatter, NullFormatter
+    x0, x1 = sweep["a_rs"].iloc[0], sweep["a_rs"].iloc[-1]
+    ticks = [t for t in (1., 1.2, 1.5, 2., 3., 4., 5., 7., 10., 15., 20.) if x0 <= t <= x1]
+    for a_ in axs:
+        a_.set_xlim(x0, x1)   # axvline / axvspan widen the autoscaled limits otherwise
+        a_.xaxis.set_major_locator(FixedLocator(ticks)); a_.xaxis.set_major_formatter(FormatStrFormatter("%g")); a_.xaxis.set_minor_formatter(NullFormatter())   # plain numbers, not 2 x 10^0
+    axs[-1].set_xlabel(r"$a/R_\star$")
+    fig.suptitle(suptitle or "The limit curve: bias from neglecting hyperillumination towards the contact limit", y=0.995)
+    fig.legend(handles=limit_handles, loc="lower center", bbox_to_anchor=(0.5, 0.), ncol=3, fontsize=9)
+    fig.tight_layout(rect=(0., 0.06, 1., 0.985))   # room for the limit legend below the panels and the suptitle above
+    return fig, axs
+
+
+# The printed summary of a limit curve: the rail boundaries, the largest non-railed biases, the u_B sensitivity (if sweep_uB0 is given) and the sweep read off at each ratio's fluid Roche limit.
+def print_limit_curve(sweep, A_B_true, ratios, sweep_uB0=None, u_B=None):
+    ok, okJ = ~sweep["railed"], ~sweep["railed_J"]
+    print(f"A_B-only fit railed at {int((~ok).sum())} of {len(sweep)} points" + (f" (a/Rs <= {sweep.loc[~ok, 'a_rs'].max():.3f})" if (~ok).any() else "")
+          + f";  joint fit railed at {int((~okJ).sum())}" + (f" (a/Rs <= {sweep.loc[~okJ, 'a_rs'].max():.3f})" if (~okJ).any() else ""))
+    if ok.any():
+        i = np.abs(sweep.loc[ok, "bias"]).idxmax()
+        print(f"largest non-railed |Delta A_B|, A_B-only: {sweep.loc[i, 'bias']:+.3f} ({100 * sweep.loc[i, 'bias'] / A_B_true:+.1f} % of A_B) at a/Rs = {sweep.loc[i, 'a_rs']:.3f}")
+    if okJ.any():
+        i = np.abs(sweep.loc[okJ, "bias_J"]).idxmax()
+        print(f"largest non-railed |Delta A_B|, joint:     {sweep.loc[i, 'bias_J']:+.3f} ({100 * sweep.loc[i, 'bias_J'] / A_B_true:+.1f} % of A_B) at a/Rs = {sweep.loc[i, 'a_rs']:.3f};  largest spurious F = {sweep.loc[okJ, 'F_fit'].max():.4f}")
+    if sweep_uB0 is not None:
+        both = ok & ~sweep_uB0["railed"]
+        print(f"u_B sensitivity: max |bias(u_B = {u_B:g}) - bias(u_B = 0)| = {np.max(np.abs(sweep.loc[both, 'bias'] - sweep_uB0.loc[both, 'bias'])):.4f} over the {int(both.sum())} points where neither fit railed" if both.any() else "u_B sensitivity: no point where neither fit railed")
+    for r in ratios:   # linear interpolation of the sweep at each ratio's fluid Roche limit (NaN outside the sweep range)
+        a_R = float(roche_limit_a_rs(r, C_ROCHE_FLUID))
+        at = lambda col: np.interp(a_R, sweep["a_rs"], sweep[col], left=np.nan, right=np.nan)
+        print(f"at the fluid Roche limit of rho_star/rho_p = {r:<4g} (a/Rs = {a_R:.2f}): Delta A_B = {at('bias'):+.3f} (A_B-only), {at('bias_J'):+.3f} (joint), F = {at('F_fit'):.4f}, misfit {np.sqrt(at('chi2')):.2f} sigma")
+
+
 # Stacked bias maps on a shared a/R* axis: |Delta A_B| (top), the relative bias |Delta A_B|/A_B (middle) and, if F_map is given, the fitted F of the joint fit (bottom).
-# show_relative / show_F switch the second and third panel on; by default only the absolute bias is drawn. show_F needs F_map (passing F_map alone still
+# show_absolute / show_relative / show_F switch the three panels on; by default only the absolute bias is drawn (show_absolute=False, show_relative=True shows
+# the relative map alone). show_F needs F_map (passing F_map alone still
 # masks the non-occulting cells and draws the grazing lines on every panel, it just does not add the F panel).
 # Grey cells = "the model breaks down": railed fits (NaN). With F_map, geometries without an occultation are greyed out as well:
 # once the impact parameter b = (a/R*) cos i reaches 1 + Rp/R*, nothing anchors the flux level and A_B, F become degenerate (the best fit is arbitrary along a flat chi^2 valley).
 # The dashed lines then bound the grazing zone 1 - Rp/R* < b < 1 + Rp/R* (drawn only where it reaches into the map; at incl = 90 every cell occults and there is none).
 # rp_rs_of(y) is Rp/R* at the map's y values; incl [deg] is the inclination the map was computed at (cfg.planet.incl).
 # The maps are planet-agnostic: target=None highlights no planet; a PlanetParams there is drawn as the green star (and dropped from the archive scatter). title overrides the suptitle.
+# overlay: a callable overlay(ax) drawn on every panel under the archive planets, e.g. the Roche frontier (draw_roche_frontier); its labelled artists join the figure legend.
 def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl=90., F_map=None, F_levels=(0.01, 0.02, 0.05),
-                   show_relative=False, show_F=False, target=None, title=None):
+                   show_absolute=True, show_relative=False, show_F=False, target=None, title=None, overlay=None, legend_fontsize=12):
     if show_F and F_map is None: raise ValueError("show_F=True needs F_map")
+    if not (show_absolute or show_relative or show_F): raise ValueError("nothing to draw: set show_absolute, show_relative or show_F")
     cos_i = np.cos(np.radians(incl))
     X, Y = np.meshgrid(xg, yg)
     no_occultation = (X * cos_i >= 1. + rp_rs_of(Y)) if F_map is not None else np.zeros(X.shape, bool)
     y_line = np.linspace(yg[0], yg[-1], 100)
     grazing = F_map is not None and xg[-1] * cos_i > 1. - np.max(rp_rs_of(y_line))   # b = 1 - Rp/R* reached inside the map
 
-    panels = [(np.abs(bias_map), "magma_r", [0.02, 0.05, 0.10], "%g", r"$|\Delta A_B|$", r"Absolute bias in recovered $A_B$")]
+    panels = []
+    if show_absolute:
+        panels.append((np.abs(bias_map), "magma_r", [0.02, 0.05, 0.10], "%g", r"$|\Delta A_B|$", r"Absolute bias in recovered $A_B$"))
     if show_relative:
         panels.append((100. * np.abs(bias_map) / A_B_true, "magma_r", [5, 10, 20, 40], "%g %%", r"$|\Delta A_B|/A_B$ [%]", r"Relative bias in recovered $A_B$"))
     if F_map is not None:
@@ -599,6 +789,7 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
         if grazing:
             for sign in (-1., 1.):
                 ax.plot((1. + sign * rp_rs_of(y_line)) / cos_i, y_line, color=INK, ls="--", lw=1.2, label=r"grazing occultation ($b = 1 \mp R_p/R_\star$)" if sign > 0 else None)
+        if overlay is not None: overlay(ax)
         # known ROCKY planets (NASA Exoplanet Archive, Rp < 1.7 R_Earth), labelled with a/Rs and ESM; a target is drawn as the green star
         overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target)
         ax.set_facecolor("0.85")
@@ -610,7 +801,7 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
     axs[-1].set_xlabel(r"$a/R_\star$")
     fig.suptitle(title or f"Biases from neglecting hyperillumination ($A_B$ = {A_B_true:.2f}, $i$ = {incl:g}°)")
     fig.tight_layout()
-    fig.legend(*axs[0].get_legend_handles_labels(), loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=8, framealpha=.9)
+    fig.legend(*axs[0].get_legend_handles_labels(), loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=legend_fontsize, framealpha=.9)
     plt.show()
 
     ok = ~no_occultation & np.isfinite(bias_map)
@@ -620,6 +811,42 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
         line += f",  F in [{F_map[ok].min():.4f}, {F_map[ok].max():.4f}]"
     print(line)
     print(f"railed: {(~no_occultation & ~np.isfinite(bias_map)).sum()}" + (f",  without occultation: {no_occultation.sum()}" if F_map is not None else ""))
+
+
+# The Roche frontier on an (a/Rs, T_eff) map, for main-sequence hosts: a_R/Rs(T_eff) = c [rho_star(T_eff) / rho_p]^(1/3) per composition of rho_p_cases ({label: rho_p [g/cm^3]}), the fluid
+# limit solid and the rigid one dotted, the region left of the most permissive curve (rigid limit of the densest composition) hatched - no rocky planet can sit there - and the contact limit
+# 1 + Rp/Rs as a dashed line where it reaches into the map. Made for plot_bias_maps(overlay=...): draw_roche_frontier draws on one axes, roche_allowed_masks gives the cell masks the
+# statistics need ({(composition, "fluid" | "rigid"): bool array of the map's shape, True where a/Rs is beyond that limit}).
+_ROCHE_COLORS = (C_HI, C_REDIST, F_COLORS[-1])
+_ROCHE_LIMITS = ((C_ROCHE_FLUID, "-", "fluid"), (C_ROCHE_RIGID, ":", "rigid"))
+
+def roche_frontier_a_rs(T_eff, rho_p, c=C_ROCHE_FLUID):
+    """a_R/Rs along a T_eff axis for main-sequence hosts."""
+    return roche_limit_a_rs(main_sequence_rho_star(T_eff) / rho_p, c)
+
+def draw_roche_frontier(ax, xg, yg, rho_p_cases, rp_rs):
+    y_line = np.linspace(yg[0], yg[-1], 200)
+    for color, (comp, rho_p) in zip(_ROCHE_COLORS, rho_p_cases.items()):
+        for c, ls, lim in _ROCHE_LIMITS:
+            ax.plot(roche_frontier_a_rs(y_line, rho_p, c), y_line, color=color, ls=ls, lw=1.8, label=rf"Roche limit, {comp} ($\rho_p$ = {rho_p:g} g cm$^{{-3}}$), {lim}")
+    x_min = roche_frontier_a_rs(y_line, max(rho_p_cases.values()), C_ROCHE_RIGID)
+    ax.fill_betweenx(y_line, xg[0], x_min, facecolor="none", edgecolor=INK, hatch="///", lw=0, label="forbidden for any rocky composition")
+    if xg[0] < 1. + rp_rs: ax.axvline(1. + rp_rs, color=INK, lw=1.2, ls="--", label=r"contact ($a/R_\star = 1 + R_p/R_\star$)")
+
+def roche_allowed_masks(xg, yg, rho_p_cases):
+    X, Y = np.meshgrid(xg, yg)
+    return {(comp, lim): X >= roche_frontier_a_rs(Y, rho_p, c) for comp, rho_p in rho_p_cases.items() for c, _, lim in _ROCHE_LIMITS}
+
+# The largest |bias| a map reaches inside each allowed region of roche_allowed_masks, printed one line per (composition, limit): the physically reachable extreme instead of the box's corner.
+def print_allowed_extremes(xg, yg, bias_map, A_B_true, allowed):
+    fin = np.isfinite(bias_map)
+    print(f"non-railed cells: {fin.sum()} of {fin.size};  largest |Delta A_B| on the whole box: {np.nanmax(np.abs(bias_map)):.3f}")
+    for (comp, lim), m in allowed.items():
+        sel = m & fin
+        if not sel.any():
+            print(f"  beyond the {lim} Roche limit, {comp}: no allowed non-railed cell"); continue
+        i = np.unravel_index(np.nanargmax(np.where(sel, np.abs(bias_map), np.nan)), bias_map.shape)
+        print(f"  beyond the {lim} Roche limit, {comp}: {sel.sum()} cells allowed, largest |Delta A_B| = {abs(bias_map[i]):.3f} ({100 * abs(bias_map[i]) / A_B_true:.1f} % of A_B) at a/Rs = {xg[i[1]]:.2f}, T_eff = {yg[i[0]]:.0f} K")
 
 
 # Map of the critical noise sigma_crit(a/Rs, y) for a z-sigma false-positive F (critical_sigma_1min of a false_F_map_grid result), log colour scale, with the archive planets overlaid
@@ -701,13 +928,31 @@ def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity
     tab["esm"] = [planet_esm(AGG, nm) for nm in tab["name"]] if AGG is not None else np.nan
     tab["rp_rearth"] = [planet_archive_value(AGG, nm, "pl_rade") for nm in tab["name"]] if AGG is not None else np.nan   # [R_Earth], for the figure's rows only
     tab["t_obs"] = cfg.n_orbits * tab["period"] * 24.   # [h] total observation: n_orbits full orbits, so it differs per planet at fixed n_orbits
+    tab["A_B_fit"] = tab["bias_A_B"] + A_B_true   # the fitted value itself, for plot_instrument_retrievals(xcol="name")
 
+    tab.attrs.update(A_B_true=A_B_true, n_orbits=cfg.n_orbits, model="naive_redist" if redist else "naive", bounds=bounds, F_bounds=F_bounds)
     tab.attrs["quantity"], tab.attrs["sigma_prior"] = quantity, {"A_B": flat_prior_sigma(bounds), "F": flat_prior_sigma(F_bounds)}   # per quantity, so the figure can re-derive the verdict for either
     tab["bias"], tab["sigma"] = tab[f"bias_{quantity}" if quantity == "A_B" else "F_fit"], tab[f"sigma_{quantity}"]
     tab["bias_sigma"], tab["sigma_1min_crit"] = measurability(tab["bias"], tab["sigma"], tab["sigma_1min"])   # at each planet's own sigma_1min
     tab["verdict"] = bias_verdict(tab["bias_sigma"], tab["sigma"], tab.attrs["sigma_prior"][quantity])
     tab["t_crit"] = critical_time(tab["t_obs"], tab["bias_sigma"], tab["verdict"])   # [h] at which the bias is a 1 sigma effect; NaN where unconstrained
     return tab
+
+
+# The planets of a planet_bias_table whose A_B fit railed (A_B_fit = bias_A_B + A_B_true on a bound of the fit's `bounds`): the table keeps their fitted values, so this is the list to print next to it.
+def railed_names(tab, A_B_true, bounds=(0.0, 1.0)):
+    return list(tab.loc[is_railed(tab["bias_A_B"] + A_B_true, bounds), "name"])
+
+
+# A planet_bias_table without its unconstrained planets (verdict VERDICT_UNCONSTRAINED), e.g. for plot_instrument_retrievals(xcol="name"), where a hollow marker with a bar as wide as the
+# prior only clutters the figure. `like`: drop the planets that are unconstrained in THAT table instead (e.g. the joint fit's, whose sigmas are the larger ones), so two fits keep the same planets.
+# The attrs are copied, since pandas does not carry them through every selection.
+def drop_unconstrained(tab, like=None):
+    keep = (like if like is not None else tab)
+    names = set(keep.loc[keep["verdict"] != VERDICT_UNCONSTRAINED, "name"])
+    out = tab[tab["name"].isin(names)].reset_index(drop=True)
+    out.attrs = dict(tab.attrs)
+    return out
 
 
 # False-positive tables. The decision columns, from dchi2_F at each row's own noise (see false_F_cell): z_F = sqrt(dchi2_F), the expected significance of the spurious F; noise_margin =
@@ -1074,10 +1319,13 @@ INSTRUMENT_LABELS = {"JWST_NIRSpec.G395H_NRS1": "NIRSpec G395H\nNRS1", "JWST_NIR
                      "MIRI/F1280W": "MIRI F1280W", "MIRI/F1500W": "MIRI F1500W", "MIRI/F1800W": "MIRI F1800W", "Spitzer/IRAC2": "Spitzer IRAC2"}
 
 
-# Plotted quantity of plot_instrument_retrievals: (value column, sigma column, truth column, y label, legend label of the dashed truth line, default ylim).
-# Truth column None: one line across the plot at attrs["A_B_true"]. "depth" (tables from instrument_depths): the true depth differs per band, so each instrument gets its own dashed segment.
-_RETRIEVAL_Q = {"A_B": ("A_B_fit", "sigma_A_B", None, "Bond albedo $A_B$", "injected $A_B$ = {A_B_true:.2f}", (0., 1.)),
-                "depth": ("depth_fit", "sigma_depth", "depth_true", r"Occultation depth $\delta$ [ppm]", "true (hyperillumination) occultation depth", None)}
+# Plotted quantity of plot_instrument_retrievals: (value column, sigma column, truth column, y label, legend label of the dashed truth line, default ylim, truth value, legend title, name).
+# Truth column None: one line across the plot at the truth value - attrs["A_B_true"] for A_B, 0 for F (the truth has no redistribution, so the plotted F_fit is the spurious F itself).
+# "depth" (tables from instrument_depths): the true depth differs per band, so each instrument gets its own dashed segment. "F" needs the joint fit's tables (redist=True); its hollow
+# marker is F's own verdict (sigma_F >= the flat-prior std of F_bounds), not A_B's.
+_RETRIEVAL_Q = {"A_B": ("A_B_fit", "sigma_A_B", None, "Bond albedo $A_B$", "injected $A_B$ = {A_B_true:.2f}", (0., 0.8), "A_B_true", "fitted $A_B$", "$A_B$"),
+                "F": ("F_fit", "sigma_F", None, "heat redistribution $F$", "truth: $F$ = 0 (no redistribution)", (0., None), 0., "fitted $F$ (spurious: the truth has none)", "$F$"),
+                "depth": ("depth_fit", "sigma_depth", "depth_true", r"Occultation depth $\delta$ [ppm]", "true (hyperillumination) occultation depth", None, None, "occultation depth of the fit", "$A_B$")}
 
 
 # Tick label of an instrument key; a joint key ("A+B") joins the detector labels, on one head line where they share it ("NIRSpec G395H\nNRS1 + NRS2").
@@ -1112,40 +1360,49 @@ def _retrieval_groups(tabs):
 # A joint fit of several detectors is its own x position in the A_B plot (its "+"-joined key); in the depth plot (instrument_depths(joint=True)) its rows sit at the detectors'
 # positions as an extra marker group (_retrieval_groups), since the depth is a per-band quantity.
 # quantity="depth" plots the fitted occultation depth with its propagated Fisher sigma instead (tables from instrument_depths), with a dashed segment at each instrument's true depth.
-# ylim defaults to the physical range [0, 1] for A_B (error bars beyond it are clipped by the axes) and to autoscale for the depth.
-def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), markers=("o", "s", "D", "^"), ylim="default", title=None, figsize=None, ax=None):
+# ylim defaults to [0, 0.8] for A_B (the fits of interest sit well below 1; error bars beyond the range are clipped by the axes) and to autoscale for the depth.
+# xcol: the column whose values are the x positions - "instrument" (instrument_retrievals tables) or "name" for planet_bias_table tables, one position per PLANET on one instrument
+# (the tick label then carries the planet's a/Rs); the fits side by side per position work the same way.
+def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), markers=("o", "s", "D", "^"), ylim="default", title=None, figsize=None, ax=None, xcol="instrument"):
     tabs = tabs if isinstance(tabs, dict) else {None: tabs}
     first = next(iter(tabs.values()))
     A_B_true = first.attrs["A_B_true"]
-    col, sig, truth_col, ylabel, ref_label, ylim_q = _RETRIEVAL_Q[quantity]
+    col, sig, truth_col, ylabel, ref_label, ylim_q, ref, legend_title, qname = _RETRIEVAL_Q[quantity]
+    ref = first.attrs[ref] if isinstance(ref, str) else ref   # the dashed truth line (truth_col None)
+    sp = first.attrs.get("sigma_prior")   # F's flat-prior std: planet_bias_table stores {quantity: std}, instrument_retrievals a single A_B value (then F_bounds gives it)
+    sigma_prior_F = sp["F"] if isinstance(sp, dict) else flat_prior_sigma(first.attrs.get("F_bounds", (0., 0.5)))
     ylim = ylim_q if ylim == "default" else ylim
     groups = _retrieval_groups(tabs)
-    instruments = list(dict.fromkeys(ins for _, g in groups for ins in g["instrument"]))   # x positions, in order of first appearance
+    instruments = list(dict.fromkeys(ins for _, g in groups for ins in g[xcol]))   # x positions, in order of first appearance
     color = {ins: INSTRUMENT_COLORS[k % len(INSTRUMENT_COLORS)] for k, ins in enumerate(instruments)}
     if ax is None:
-        fig, ax = plt.subplots(figsize=figsize or (max(5.5, 1.5 * len(instruments) + 1.5), 8.))
+        fig, ax = plt.subplots(figsize=figsize or (max(5.5, 1.5 * len(instruments) + 1.5), 5.5))
     else:
         fig = ax.figure
 
     for ins in instruments:   # the groups present at this position, centred on it
-        present = [k for k, (_, g) in enumerate(groups) if (g["instrument"] == ins).any()]
+        present = [k for k, (_, g) in enumerate(groups) if (g[xcol] == ins).any()]
         step = min(0.18, 0.7 / len(present))   # marker spacing within one position
         for j, k in enumerate(present):
             x, c = instruments.index(ins) + (j - (len(present) - 1) / 2) * step, color[ins]
-            r = groups[k][1][groups[k][1]["instrument"] == ins].iloc[0]
+            r = groups[k][1][groups[k][1][xcol] == ins].iloc[0]
             for lev, alpha in zip(sorted(sigma_levels, reverse=True), np.linspace(.3, 1., len(sigma_levels))):   # widest bar first (lightest), the 1 sigma bar on top
                 ax.errorbar(x, r[col], yerr=lev * r[sig], fmt="none", ecolor=c, alpha=alpha, elinewidth=1.8, capsize=3.5, capthick=1.5, zorder=3)
-            hollow = r["verdict"] == VERDICT_UNCONSTRAINED
+            hollow = (r["verdict"] == VERDICT_UNCONSTRAINED) if quantity != "F" else (not np.isfinite(r[sig]) or r[sig] >= sigma_prior_F)
             ax.plot(x, r[col], markers[k % len(markers)], ms=8, color=c, mfc="#fcfcfb" if hollow else c, mew=1.6, zorder=4)
 
     if truth_col is None:
-        ax.axhline(A_B_true, color="#333333", ls="--", lw=1.8, zorder=2)
+        ax.axhline(ref, color="#333333", ls="--", lw=1.8, zorder=2)
     else:   # the truth of an instrument does not depend on the fit, so take it from the first group that has the instrument
         for ins in instruments:
-            y_true = next(g.loc[g["instrument"] == ins, truth_col].iloc[0] for _, g in groups if (g["instrument"] == ins).any())
+            y_true = next(g.loc[g[xcol] == ins, truth_col].iloc[0] for _, g in groups if (g[xcol] == ins).any())
             ax.hlines(y_true, instruments.index(ins) - 0.4, instruments.index(ins) + 0.4, color="#333333", ls="--", lw=1.8, zorder=2)
     ax.set_xticks(range(len(instruments)))
-    ax.set_xticklabels([instrument_label(ins) for ins in instruments], fontsize=9)
+    if xcol == "instrument":
+        ax.set_xticklabels([instrument_label(ins) for ins in instruments], fontsize=9)
+    else:   # one planet per position: its name and a/Rs (from the first table that has it)
+        a_rs = {ins: next(g.loc[g[xcol] == ins, "a_rs"].iloc[0] for _, g in groups if (g[xcol] == ins).any()) for ins in instruments} if "a_rs" in first else {}
+        ax.set_xticklabels([f"{ins}\n$a/R_\\star$ = {a_rs[ins]:.2f}" if ins in a_rs else str(ins) for ins in instruments], fontsize=8)
     ax.set_xlim(-0.6, len(instruments) - 0.4)
     if ylim is not None: ax.set_ylim(*ylim)
     ax.set_ylabel(ylabel)
@@ -1154,16 +1411,17 @@ def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), marker
     for s in ax.spines.values(): s.set_color(INK); s.set_linewidth(1.)
     ax.minorticks_on(); ax.tick_params(axis="x", which="minor", bottom=False, top=False)
     ax.tick_params(which="both", direction="in", top=True, right=True, colors=INK)
-    ax.set_title(title or f"{first.attrs['planet']}  ({first.attrs['n_orbits']} orbits per instrument)", fontweight="bold")
+    ax.set_title(title or (f"{first.attrs['planet']}  ({first.attrs['n_orbits']} orbits per instrument)" if "planet" in first.attrs else f"{first.attrs['n_orbits']} orbits"), fontweight="bold")
 
     levels = " / ".join(f"{lev}$\\sigma$" for lev in sorted(sigma_levels))
     handles = [plt.Line2D([], [], color="#333333", ls="--", lw=1.8, label=ref_label.format(A_B_true=A_B_true))]
     for k, (label, _) in enumerate(groups):
         if label is not None:
             handles.append(plt.Line2D([], [], marker=markers[k % len(markers)], ls="none", ms=7, color="#666666", label=label))
-    if any((g["verdict"] == VERDICT_UNCONSTRAINED).any() for _, g in groups):
-        handles.append(plt.Line2D([], [], marker="o", ls="none", ms=7, color="#666666", mfc="#fcfcfb", mew=1.4, label=("" if quantity == "A_B" else "$A_B$ ") + "unconstrained (Fisher $\\sigma \\geq$ prior std)"))
+    unconstrained = any((~np.isfinite(g[sig]) | (g[sig] >= sigma_prior_F)).any() for _, g in groups) if quantity == "F" else any((g["verdict"] == VERDICT_UNCONSTRAINED).any() for _, g in groups)
+    if unconstrained:
+        handles.append(plt.Line2D([], [], marker="o", ls="none", ms=7, color="#666666", mfc="#fcfcfb", mew=1.4, label=("" if quantity == "A_B" else qname + " ") + "unconstrained (Fisher $\\sigma \\geq$ prior std)"))
     ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.07), ncol=min(len(handles), 3), fontsize=9, handletextpad=0.4, columnspacing=1.2,
-              title=("fitted $A_B$" if quantity == "A_B" else "occultation depth of the fit") + f", Fisher error bars {levels} (dark to light)", title_fontsize=9)
+              title=legend_title + f", Fisher error bars {levels} (dark to light)", title_fontsize=9)
     fig.tight_layout()
     return fig, ax

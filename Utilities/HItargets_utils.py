@@ -134,6 +134,16 @@ def best_hi_planets_df(n_planets):
     return df[["Name", "Period [d]", "Incl [°]", "Ecc", "w [°]", "Rp/Rs", "Rs/Rs", "a/Rs", "a [AU]", "Ts_eff [K]", "T14 [h]", "theta_hi [°]", "theta_pen [°]", "f_illum [%]", "sub_boost [%]"]]
 
 
+def archive_densities(name):
+    """(rho_star, rho_p) [g/cm^3] of an archive planet by loose name: the host from st_logg and st_rad (rho = 3 g / (4 pi G R), the archive has no mass column), the planet from
+    pl_bmasse and pl_rade. NaN where the archive lacks a value; KeyError for a planet the archive does not have (CUSTOM entries are not consulted)."""
+    row = _archive_row(name)
+    g = 10. ** row["st_logg"]                                                   # [cm/s^2]
+    R = row["st_rad"] * const.R_sun.cgs.value
+    m_p, r_p = row["pl_bmasse"] * const.M_earth.cgs.value, row["pl_rade"] * const.R_earth.cgs.value
+    return 3. * g / (4. * np.pi * const.G.cgs.value * R), m_p / (4. / 3. * np.pi * r_p ** 3)
+
+
 
 
 ###########################################################################################################################

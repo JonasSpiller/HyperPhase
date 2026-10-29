@@ -435,6 +435,25 @@ def plot_quad_insolmap(planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, 
     return fig
 
 
+# Several planets side by side, one column each, one row per insolation model, all at the same phase: the surface maps the models disagree on (e.g. the Roche-limit planets of
+# HypotheticalExtremePlanet.ipynb). Each column has its own temperature scale, 0 to 1.1 x its substellar temperature (the same in every model: there is no substellar boost), so the
+# panels of one planet are comparable; the colour bar of the last column labels the rows. The terminator is drawn in grey, the penumbra borders in green on the hyperillum panels only.
+# planets: {name: PlanetParams} or a list. F is passed to "naive_redist" only. Returns fig, axs (shape (len(models), len(planets))).
+def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_B=0., A_B=0.1, emissivity=1., F=None, n_grid=400, theme="black", terminator=True, show_penumbra="both", title=None):
+    planets = list(planets.values()) if isinstance(planets, dict) else list(planets)
+    bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
+    fig, axs = plt.subplots(len(models), len(planets), figsize=(4.3 * len(planets), 4.3 * len(models)), facecolor=bg, squeeze=False)
+    for j, pl in enumerate(planets):
+        T_hot = float(np.atleast_1d(surface_temperature(np.array([0.]), pl, "naive", A_B=A_B, emissivity=emissivity))[0])
+        for i, model in enumerate(models):
+            plot_insolmap(phase, pl, u_B=u_B, A_B=A_B, emissivity=emissivity, min_temp=0., max_temp=1.1 * T_hot, n_grid=n_grid, ax=axs[i, j], theme=theme, show_cax=(j == len(planets) - 1),
+                          terminator=terminator, show_penumbra=show_penumbra if model == "hyperillum" else None, insolation_model=model, F=F if model == "naive_redist" else None, unit="temperature")
+            axs[i, j].set_title((f"{pl.name}\n" if i == 0 else "") + rf"{model}, $a/R_\star$ = {pl.R / pl.r2:.2f}, $T_{{\rm eff}}$ = {pl.T2_eff:.0f} K", color=tc, fontsize=9)
+    fig.suptitle(title or rf"Surface temperature at phase {phase:g}  ($A_B$ = {A_B:.2f}, $u_B$ = {u_B:g})", color=tc)
+    fig.tight_layout()
+    return fig, axs
+
+
 
 def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", u_B=0., min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
                        show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_frames=1000, fps=50, phase_start=0., phase_end=1., n_tab=3000):
