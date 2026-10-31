@@ -101,21 +101,22 @@ def roche_radius_over_r1(q, a_over_r2, r1_over_r2):
 # Roche limit and main-sequence hosts
 # --------------------------------------------------------------------------
 
-# Roche LIMIT - the tidal-disruption distance of the planet, not the Roche LOBE of roche_radius_over_r1: a_R / R_star = c (rho_star / rho_p)^(1/3) for a satellite of mean density rho_p
-# around a star of mean density rho_star. c = 2.456 for a fluid body, 2^(1/3) for a rigid strengthless sphere (tidal stretching = self-gravity at the surface); the two bracket a rocky planet.
-# In period the limit is host-independent (roche_limit_period_h); in a/R_star it moves with the host through rho_star (kepler_period_days), so on an a/R_star axis it is a family labelled by rho_star / rho_p.
-C_ROCHE_FLUID = 2.456
-C_ROCHE_RIGID = 2. ** (1. / 3.)
+# Roche LIMIT - the tidal-disruption distance of the planet, not the Roche LOBE of roche_radius_over_r1: a_R / R_star = c (rho_star / rho_p)^(1/3) for an incompressible fluid body of mean
+# density rho_p around a star of mean density rho_star, c = 2.456 (Roche 1849; Rappaport, Sanchis-Ojeda, Rogers, Petigura & Winn 2013, ApJL 773, L15, eq. 1, who round it to 2.44). The fluid
+# value is the right one for any planet-sized body: self-gravity dwarfs material strength at that scale (the rigid-sphere 2^(1/3) is a small-body limit). A centrally condensed planet survives
+# somewhat inside it (Rappaport et al. 2013 eq. 5), so 2.456 is the conservative, outer edge. In period the limit is host-independent (roche_limit_period_h, their eq. 2); in a/R_star it moves
+# with the host through rho_star (kepler_period_days), so on an a/R_star axis it is a family labelled by rho_star / rho_p.
+C_ROCHE = 2.456
 G_CGS = const.G.cgs.value                                                        # [cm^3 g^-1 s^-2]
 RHO_SUN_CGS = (const.M_sun / (4. / 3. * np.pi * const.R_sun ** 3)).cgs.value   # [g/cm^3]
 
 
-def roche_limit_a_rs(rho_star_over_rho_p, c=C_ROCHE_FLUID):
+def roche_limit_a_rs(rho_star_over_rho_p, c=C_ROCHE):
     """a/R_star of the Roche limit for the density ratio rho_star / rho_p."""
     return c * np.asarray(rho_star_over_rho_p, dtype=float) ** (1. / 3.)
 
 
-def roche_limit_period_h(rho_p, c=C_ROCHE_FLUID):
+def roche_limit_period_h(rho_p, c=C_ROCHE):
     """Orbital period [h] at the Roche limit, P = sqrt(3 pi c^3 / (G rho_p)): independent of the star. rho_p in g/cm^3."""
     return np.sqrt(3. * np.pi * c ** 3 / (G_CGS * rho_p)) / 3600.
 
@@ -125,8 +126,8 @@ def kepler_period_days(a_over_r2, rho_star):
     return np.sqrt(3. * np.pi * np.asarray(a_over_r2, dtype=float) ** 3 / (G_CGS * rho_star)) / 86400.
 
 
-# Main-sequence hosts: (T_eff [K], M [M_sun], R [R_sun]) per spectral type, Pecaut & Mamajek 2013 (online table, rounded). Hand-maintained; the main_sequence_* functions interpolate it in
-# T_eff (log rho linearly) and clip outside its range, so a T_eff beyond F0V / M6V silently gets the end value.
+# Main-sequence hosts: (T_eff [K], M [M_sun], R [R_sun]) per spectral type, Pecaut & Mamajek 2013 (online table, rounded). Hand-maintained; rho_star and the main_sequence_* functions
+# interpolate it in T_eff (log rho linearly) and clip outside its range, so a T_eff beyond F0V / M6V silently gets the end value. Main sequence only: an evolved host is far less dense.
 MAIN_SEQUENCE = {"F0V": (7220, 1.59, 1.73), "F5V": (6510, 1.33, 1.47), "G0V": (5930, 1.06, 1.10), "G2V": (5770, 1.02, 1.01), "G5V": (5660, 0.98, 0.95),
                  "K0V": (5280, 0.88, 0.81), "K2V": (5040, 0.82, 0.76), "K5V": (4440, 0.70, 0.71), "K7V": (4050, 0.63, 0.63), "M0V": (3850, 0.57, 0.59),
                  "M1V": (3660, 0.50, 0.50), "M2V": (3560, 0.44, 0.45), "M3V": (3430, 0.37, 0.36), "M4V": (3210, 0.23, 0.27), "M5V": (3060, 0.16, 0.20), "M6V": (2810, 0.10, 0.14)}
@@ -135,8 +136,8 @@ _MS_RHO = np.array([RHO_SUN_CGS * v[1] / v[2] ** 3 for v in MAIN_SEQUENCE.values
 _MS_R = np.array([v[2] for v in MAIN_SEQUENCE.values()], dtype=float)[::-1]
 
 
-def main_sequence_rho_star(T_eff):
-    """Mean density [g/cm^3] of a main-sequence star of this T_eff [K]."""
+def rho_star(T_eff):
+    """Mean density [g/cm^3] of a main-sequence star of effective temperature T_eff [K]: rho_sun M / R^3 from MAIN_SEQUENCE, log-interpolated in T_eff."""
     return 10. ** np.interp(T_eff, _MS_T, np.log10(_MS_RHO))
 
 

@@ -2,7 +2,7 @@ import contextlib, io
 from scipy.optimize import minimize_scalar
 from scipy.interpolate import RegularGridInterpolator
 from hyperillumination_phasecurve_utils import *
-from astro_utils import C_ROCHE_FLUID, C_ROCHE_RIGID, roche_limit_a_rs, roche_limit_period_h, kepler_period_days, main_sequence_rho_star, main_sequence_T_eff, main_sequence_R_star
+from astro_utils import C_ROCHE, roche_limit_a_rs, roche_limit_period_h, kepler_period_days, rho_star, main_sequence_T_eff, main_sequence_R_star
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -454,7 +454,7 @@ def reference_planet(a_rs=2.5, rp_rs=0.015, T_eff=4000., incl=90., period=0.3, R
 # A synthetic planet of mean density rho_p [g/cm^3] exactly at the Roche limit of a main-sequence host with rho_star = rho_ratio * rho_p: a/Rs = c rho_ratio^(1/3) and the period follow from
 # (rho_ratio, rho_p, c) alone (roche_limit_a_rs / roche_limit_period_h), T_eff and R_star from the main-sequence table (astro_utils.MAIN_SEQUENCE). Units as reference_planet (r2 = 1, so r1 = Rp/Rs);
 # T14 is NaN, only PandExo needs it and it never runs on a hypothetical planet. The name carries rho_ratio, so a set of them is told apart in tables and tick labels.
-def roche_planet(rho_ratio, rho_p, c=C_ROCHE_FLUID, rp_rs=0.015, incl=90., name=None):
+def roche_planet(rho_ratio, rho_p, c=C_ROCHE, rp_rs=0.015, incl=90., name=None):
     T_eff = float(main_sequence_T_eff(rho_ratio * rho_p))
     a_rs = float(roche_limit_a_rs(rho_ratio, c))
     return PlanetParams(name=name or f"Roche-limit planet ({rho_ratio:g})", period=float(roche_limit_period_h(rho_p, c)) / 24., incl=incl, ecc=0., w=90., r1=rp_rs, r2=1., R=a_rs, T2_eff=T_eff,
@@ -653,14 +653,13 @@ def plot_fit_vs_truth(cfg, A_B_true, fit, seed=43, title=None, **kw):
     return fig, ax
 
 
-# Vertical marks of the limit curve, on one axes: the contact limit (hatched), the fluid (solid) and rigid (dotted) Roche limits per density ratio, the anchor planets (grey dashed).
+# Vertical marks of the limit curve, on one axes: the contact limit (hatched), the Roche limit per density ratio, the anchor planets (grey dashed).
 # Returns the legend handles (one per ratio, one per anchor, the contact span).
 def _mark_limits(ax, contact, ratios, anchors):
     handles = [ax.axvspan(ax.get_xlim()[0], contact, facecolor="0.85", edgecolor="0.5", hatch="///", lw=0, zorder=0, label=r"inside the star ($a/R_\star < 1 + R_p/R_\star$)")]
     for k, r in enumerate(ratios):
         col = F_COLORS[k % len(F_COLORS)]
-        handles.append(ax.axvline(roche_limit_a_rs(r, C_ROCHE_FLUID), color=col, lw=1.2, label=rf"Roche limit, $\rho_\star/\rho_p$ = {r:g}  (solid: fluid, dotted: rigid)"))
-        ax.axvline(roche_limit_a_rs(r, C_ROCHE_RIGID), color=col, lw=1., ls=":")
+        handles.append(ax.axvline(roche_limit_a_rs(r), color=col, lw=1.2, label=rf"Roche limit, $\rho_\star/\rho_p$ = {r:g}"))
     for nm, pl in anchors.items():
         handles.append(ax.axvline(pl.R / pl.r2, color=MUTED, lw=1., ls="--", label=rf"{nm}  ($a/R_\star$ = {pl.R / pl.r2:.2f})"))
     return handles
@@ -729,7 +728,7 @@ def plot_limit_curve(sweep, geo, cfg, rp_rs, ratios, anchors, sweep_uB0=None, u_
     return fig, axs
 
 
-# The printed summary of a limit curve: the rail boundaries, the largest non-railed biases, the u_B sensitivity (if sweep_uB0 is given) and the sweep read off at each ratio's fluid Roche limit.
+# The printed summary of a limit curve: the rail boundaries, the largest non-railed biases, the u_B sensitivity (if sweep_uB0 is given) and the sweep read off at each ratio's Roche limit.
 def print_limit_curve(sweep, A_B_true, ratios, sweep_uB0=None, u_B=None):
     ok, okJ = ~sweep["railed"], ~sweep["railed_J"]
     print(f"A_B-only fit railed at {int((~ok).sum())} of {len(sweep)} points" + (f" (a/Rs <= {sweep.loc[~ok, 'a_rs'].max():.3f})" if (~ok).any() else "")
@@ -743,10 +742,10 @@ def print_limit_curve(sweep, A_B_true, ratios, sweep_uB0=None, u_B=None):
     if sweep_uB0 is not None:
         both = ok & ~sweep_uB0["railed"]
         print(f"u_B sensitivity: max |bias(u_B = {u_B:g}) - bias(u_B = 0)| = {np.max(np.abs(sweep.loc[both, 'bias'] - sweep_uB0.loc[both, 'bias'])):.4f} over the {int(both.sum())} points where neither fit railed" if both.any() else "u_B sensitivity: no point where neither fit railed")
-    for r in ratios:   # linear interpolation of the sweep at each ratio's fluid Roche limit (NaN outside the sweep range)
-        a_R = float(roche_limit_a_rs(r, C_ROCHE_FLUID))
+    for r in ratios:   # linear interpolation of the sweep at each ratio's Roche limit (NaN outside the sweep range)
+        a_R = float(roche_limit_a_rs(r))
         at = lambda col: np.interp(a_R, sweep["a_rs"], sweep[col], left=np.nan, right=np.nan)
-        print(f"at the fluid Roche limit of rho_star/rho_p = {r:<4g} (a/Rs = {a_R:.2f}): Delta A_B = {at('bias'):+.3f} (A_B-only), {at('bias_J'):+.3f} (joint), F = {at('F_fit'):.4f}, misfit {np.sqrt(at('chi2')):.2f} sigma")
+        print(f"at the Roche limit of rho_star/rho_p = {r:<4g} (a/Rs = {a_R:.2f}): Delta A_B = {at('bias'):+.3f} (A_B-only), {at('bias_J'):+.3f} (joint), F = {at('F_fit'):.4f}, misfit {np.sqrt(at('chi2')):.2f} sigma")
 
 
 # Stacked bias maps on a shared a/R* axis: |Delta A_B| (top), the relative bias |Delta A_B|/A_B (middle) and, if F_map is given, the fitted F of the joint fit (bottom).
@@ -813,40 +812,40 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
     print(f"railed: {(~no_occultation & ~np.isfinite(bias_map)).sum()}" + (f",  without occultation: {no_occultation.sum()}" if F_map is not None else ""))
 
 
-# The Roche frontier on an (a/Rs, T_eff) map, for main-sequence hosts: a_R/Rs(T_eff) = c [rho_star(T_eff) / rho_p]^(1/3) per composition of rho_p_cases ({label: rho_p [g/cm^3]}), the fluid
-# limit solid and the rigid one dotted, the region left of the most permissive curve (rigid limit of the densest composition) hatched - no rocky planet can sit there - and the contact limit
-# 1 + Rp/Rs as a dashed line where it reaches into the map. Made for plot_bias_maps(overlay=...): draw_roche_frontier draws on one axes, roche_allowed_masks gives the cell masks the
-# statistics need ({(composition, "fluid" | "rigid"): bool array of the map's shape, True where a/Rs is beyond that limit}).
+# The Roche frontier on an (a/Rs, T_eff) map, for main-sequence hosts: a_R/Rs(T_eff) = C_ROCHE [rho_star(T_eff) / rho_p]^(1/3) per composition of rho_p_cases ({label: rho_p [g/cm^3]}),
+# the region left of the most permissive curve (densest composition) hatched - no rocky planet can sit there - and the contact limit 1 + Rp/Rs as a dashed line where it reaches into the map.
+# Made for plot_bias_maps(overlay=...): draw_roche_frontier draws on one axes, roche_allowed_masks gives the cell masks the statistics need ({composition: bool array of the map's shape,
+# True where a/Rs is beyond that composition's limit}).
 _ROCHE_COLORS = (C_HI, C_REDIST, F_COLORS[-1])
-_ROCHE_LIMITS = ((C_ROCHE_FLUID, "-", "fluid"), (C_ROCHE_RIGID, ":", "rigid"))
 
-def roche_frontier_a_rs(T_eff, rho_p, c=C_ROCHE_FLUID):
+def roche_frontier_a_rs(T_eff, rho_p):
     """a_R/Rs along a T_eff axis for main-sequence hosts."""
-    return roche_limit_a_rs(main_sequence_rho_star(T_eff) / rho_p, c)
+    return roche_limit_a_rs(rho_star(T_eff) / rho_p)
 
 def draw_roche_frontier(ax, xg, yg, rho_p_cases, rp_rs):
     y_line = np.linspace(yg[0], yg[-1], 200)
     for color, (comp, rho_p) in zip(_ROCHE_COLORS, rho_p_cases.items()):
-        for c, ls, lim in _ROCHE_LIMITS:
-            ax.plot(roche_frontier_a_rs(y_line, rho_p, c), y_line, color=color, ls=ls, lw=1.8, label=rf"Roche limit, {comp} ($\rho_p$ = {rho_p:g} g cm$^{{-3}}$), {lim}")
-    x_min = roche_frontier_a_rs(y_line, max(rho_p_cases.values()), C_ROCHE_RIGID)
+        ax.plot(roche_frontier_a_rs(y_line, rho_p), y_line, color=color, lw=1.8, label=rf"Roche limit for $\rho_p$ = {rho_p:g} g cm$^{{-3}}$ ({comp})")
+    x_min = roche_frontier_a_rs(y_line, max(rho_p_cases.values()))
     ax.fill_betweenx(y_line, xg[0], x_min, facecolor="none", edgecolor=INK, hatch="///", lw=0, label="forbidden for any rocky composition")
     if xg[0] < 1. + rp_rs: ax.axvline(1. + rp_rs, color=INK, lw=1.2, ls="--", label=r"contact ($a/R_\star = 1 + R_p/R_\star$)")
 
 def roche_allowed_masks(xg, yg, rho_p_cases):
     X, Y = np.meshgrid(xg, yg)
-    return {(comp, lim): X >= roche_frontier_a_rs(Y, rho_p, c) for comp, rho_p in rho_p_cases.items() for c, _, lim in _ROCHE_LIMITS}
+    return {comp: X >= roche_frontier_a_rs(Y, rho_p) for comp, rho_p in rho_p_cases.items()}
 
-# The largest |bias| a map reaches inside each allowed region of roche_allowed_masks, printed one line per (composition, limit): the physically reachable extreme instead of the box's corner.
-def print_allowed_extremes(xg, yg, bias_map, A_B_true, allowed):
+# The largest |bias| a map reaches inside each allowed region of roche_allowed_masks, one line per composition of rho_p_cases (the same labels as the map legend): the physically
+# reachable extreme instead of the box's corner.
+def print_allowed_extremes(xg, yg, bias_map, A_B_true, allowed, rho_p_cases):
     fin = np.isfinite(bias_map)
     print(f"non-railed cells: {fin.sum()} of {fin.size};  largest |Delta A_B| on the whole box: {np.nanmax(np.abs(bias_map)):.3f}")
-    for (comp, lim), m in allowed.items():
+    for comp, m in allowed.items():
+        label = f"Roche limit for rho_p = {rho_p_cases[comp]:g} g/cm^3 ({comp})"
         sel = m & fin
         if not sel.any():
-            print(f"  beyond the {lim} Roche limit, {comp}: no allowed non-railed cell"); continue
+            print(f"  beyond the {label}: no allowed non-railed cell"); continue
         i = np.unravel_index(np.nanargmax(np.where(sel, np.abs(bias_map), np.nan)), bias_map.shape)
-        print(f"  beyond the {lim} Roche limit, {comp}: {sel.sum()} cells allowed, largest |Delta A_B| = {abs(bias_map[i]):.3f} ({100 * abs(bias_map[i]) / A_B_true:.1f} % of A_B) at a/Rs = {xg[i[1]]:.2f}, T_eff = {yg[i[0]]:.0f} K")
+        print(f"  beyond the {label}: {sel.sum()} cells allowed, largest |Delta A_B| = {abs(bias_map[i]):.3f} ({100 * abs(bias_map[i]) / A_B_true:.1f} % of A_B) at a/Rs = {xg[i[1]]:.2f}, T_eff = {yg[i[0]]:.0f} K")
 
 
 # Map of the critical noise sigma_crit(a/Rs, y) for a z-sigma false-positive F (critical_sigma_1min of a false_F_map_grid result), log colour scale, with the archive planets overlaid
