@@ -210,7 +210,7 @@ def band_avg_planck(T, lambda_range, filter_path=None, n=300):
     """
     lam, w = load_filter(lambda_range, filter_path=filter_path, n=n)
 
-    # R [counts/photon] -> [counts/energy], so that weighting B_lambda (an energy spectral radiance) below yields a photon-integrated band average.
+    # R [counts/photon] -> [counts/energy], so that weighting B_lambda (an energy spectral radiance) below yields a photon-integrated band average. Same convention as fspiderman.get_filter (fork README, patch 6), so T_bright inverts exactly the band integral SPIDERMAN's depths are computed with.
     w =  w * lam / (H_PLANCK * C_LIGHT)
 
     B_lambda = planck_spectrum(lam, T)

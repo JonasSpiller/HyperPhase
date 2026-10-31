@@ -169,7 +169,7 @@ def load_filter(lambda_range, filter_path=None, n=300):
     mask = (lam >= l1) & (lam <= l2)
 
     lam_out = lam[mask]
-    w_out = w[mask] / (lam_out*1e6)**2 # correct for SPIDERMAN correction factor that was applied when creating the throughput dat-files. w_out is a dimensionless throughput.
+    w_out = w[mask]   # the files are plain throughputs T(lambda) [electrons per incident photon], the SVO / Pandeia convention; the photon weighting lambda/(hc) is applied by the consumer (band_avg_planck here, get_filter in fspiderman)
     return lam_out, w_out
 
 
