@@ -272,10 +272,10 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0.
     lo, la, temp_grid = custom_temperature_grid(planet, u_B=u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B = A_B, emissivity=emissivity)
 
     # pass indexing='ij' meshgrids in deg and the transposed temp_grid (wrong orientation fails silently!)
-    # Floor the map: 0 K nightside + sharp terminator makes the bicubic spline overshoot to negative temperatures ("CANNOT DO NEGATIVE TEMPERATURES"); ~100 K adds negligible flux at 1-20 um
-    T_floor = 100.  # temperature floor for nightside [K]
+    # The map goes in as is, nightside at exactly 0 K for "naive": the installed fspiderman clamps the direct_T bicubic to the cell corners (fork README, patch 4). Upstream SPIDERMAN
+    # overshoots below 0 K at the sharp terminator and exit()s ("CANNOT DO NEGATIVE TEMPERATURES"), which is why older versions of this code floored the map at 100-200 K.
     LO_deg, LA_deg = np.meshgrid(lo, la, indexing='ij')  # longitude/latitude meshgrids [deg]
-    grid = sp.format_grid(LO_deg, LA_deg, np.maximum(temp_grid, T_floor).T)
+    grid = sp.format_grid(LO_deg, LA_deg, temp_grid.T)
 
     spider_params = sp.ModelParams(brightness_model="direct_T", stellar_model=stellar_model)  # stellar model can also be custom or PHOENIX
     spider_params.n_layers = N_LAYERS  # Number of layers in the brightness map
@@ -502,7 +502,6 @@ class FittingConfig:
     u: tuple = (0.1, 0.3)   # quadratic stellar limb darkening [u1, u2] for the transit
     reflected: bool = True  # True -> full (reflected + thermal); False -> thermal only
     transit: bool = True    # include the primary transit (batman)
-    T_floor: float = 200.   # min temperature for the direct_T grid [K]; blocks negative-T spline overshoot
 
     @property
     def sigma_bin(self):
@@ -572,7 +571,7 @@ def pcurve_params(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_r
 
     planet = swept_planet(cfg, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs)
 
-    # "naive_redist": SPIDERMAN's analytic Louden map, as in thermal_PhaseCurve (insol, n_lo, n_la and cfg.T_floor are unused)
+    # "naive_redist": SPIDERMAN's analytic Louden map, as in thermal_PhaseCurve (insol, n_lo and n_la are unused)
     if insolation_model == "naive_redist":
         p = louden_params(planet, (cfg.l1, cfg.l2), F, t0=0., filter_path=cfg.filter_path, A_B=A_B_, N_LAYERS=n_layers)
         p.eclipse = True
@@ -589,7 +588,7 @@ def pcurve_params(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_r
     p.rp, p.a = planet.r1 / planet.r2, planet.R / planet.r2
     p.p_u1 = p.p_u2 = 0.
     p.T_s, p.l1, p.l2 = planet.T2_eff, cfg.l1, cfg.l2
-    p.grid = sp.format_grid(LO, LA, np.maximum(Tg, cfg.T_floor).T)
+    p.grid = sp.format_grid(LO, LA, Tg.T)   # no temperature floor, see thermal_PhaseCurve
     p.filter, p.eclipse = cfg.filter_path, True
     return p
 

@@ -722,7 +722,7 @@ def bayes_factor(fits, num="hyperillum", den="naive", K=200, seed=0, verbose=Tru
 def derived_samples(logl, thetas, n_jobs=-1):
     """Posterior draws pushed through to physical quantities -> {key: array of length n_draws}.
 
-    T_sub / T_term / T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point. Under "naive" the last two are the T=0 nightside (only the T_floor of the SPIDERMAN grid keeps it finite); under "hyperillum" the extended star pushes real flux past 90 deg, which is exactly the physical difference the Bayes factor is measuring.
+    T_sub / T_term / T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point. Under "naive" T_anti is the 0 K nightside and T_term is only np.interp of the grid between the last dayside and the first nightside node; under "hyperillum" the extended star pushes real flux past 90 deg, which is exactly the physical difference the Bayes factor is measuring.
     depth_th / depth_refl / depth : occultation depth [ppm], thermal / reflected / total. Feed depth_th to brightness_temperature().
     """
     cfg, m = logl.cfg, logl.insolation_model
