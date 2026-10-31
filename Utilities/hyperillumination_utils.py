@@ -59,6 +59,7 @@ class PlanetParams:
 
     # Fractional change in substellar insolation/temperature through hyperillumination (compared to naive point-source approximation)
     def substellar_boost(self, insolation=True):
+        # the boost is not effected by hyperillumination at all, it is purely the stellar distance correction a-rp: the boost is (R/(R − r₁))² − 1 ≈ 2 r₁/R
         if insolation: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self)) - 1
         else: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self))**0.25 - 1
 
@@ -300,6 +301,13 @@ def surface_temperature(gamma1, planet, insolation_model, u_B=0., A_B = 0.1, emi
 #####   Plotting
 #####
 ###########################################################################################################################
+
+
+# Dotted horizontal line marking the stellar flux on plots of the observed signal with the transit included (the "phase curve" views): y = 0 for F/F_s - 1 in ppm,
+# y = 1 (or 1e6) for normalised flux. Draws on ax (default: current axes); kw overrides the style. Shows up in the legend as "Stellar Flux".
+def stellar_flux_line(ax=None, y=0., **kw):
+    ax = ax or plt.gca()
+    return ax.axhline(y, **{"color": "k", "ls": ":", "lw": 1., "label": "Stellar Flux", "zorder": 1, **kw})
 
 
 def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=1.5, zorder=5):
