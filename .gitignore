@@ -73,5 +73,5 @@ ENV/
 /Dynesty Fits/more runs/
 /Hyperillumination/Plots TOI-2431b/
 /Hyperillumination/Plots K2-141b/
-/Dynesty Fits/dynesty_results/
+/Dynesty Fits/more runs/OLD_before_Tfloor_removal/dynesty_results/
 *.pptx

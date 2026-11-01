@@ -36,6 +36,26 @@ def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=[0.1, 0.3], u_B=0., A
     return t_comb, total, fp
 
 
+# Nightside signal at mid-transit (t = t0: the nightside faces the observer), transit dip excluded. It is the hemisphere the observer sees, not the antistellar point:
+# under "naive" the nightside is 0 K, so for i < 90 deg the value is only the sliver of dayside visible past the pole (exactly 0 edge-on); "hyperillum" adds the real emission of the
+# penumbra band past 90 deg and "naive_redist" the uniform Kreidberg & Loeb nightside (F required). A single time point, so SPIDERMAN is evaluated exactly (spman="normal", no phase interpolation).
+#   unit="flux":        (thermal, reflected) planet signal F_p/F_s [ppm]
+#   unit="temperature": nightside brightness temperature [K] of the THERMAL part, astro_utils.T_bright on the band flux exactly like the dayside value from the occultation depth.
+#                       Reflected light is not thermal, so it is neither included nor computed. 0 K when the thermal signal vanishes (<= 0, or below the band flux at T_bright's 10 K lower bracket).
+# No limb-darkening argument: the transit is excluded, so u has no effect. Lambda_range / filter_path as in thermal_PhaseCurve (tophat without a filter_path).
+def nightside_flux(planet, lambda_range, insolation_model="hyperillum", unit="flux", t0=0., u_B=0., A_B=0.1, A=0.1, F=None, emissivity=1., filter_path=False, stellar_model="blackbody", N_LAYERS=None, n_lo=200, n_la=100, n_eta=150, n_phi=80, n_tab=1000):
+    if unit not in ("flux", "temperature"): raise ValueError(f"unit must be 'flux' or 'temperature', got {unit!r}")
+    t = np.array([t0])
+    _, therm, _, _ = thermal_PhaseCurve(planet, lambda_range, t=t, t0=t0, u_B=u_B, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, F=F, stellar_model=stellar_model, filter_path=filter_path, A_B=A_B, emissivity=emissivity, N_LAYERS=N_LAYERS, include_transit=False, spman="normal")
+    therm = 1e6 * float(therm[0])
+    if unit == "temperature":
+        if therm <= 0.: return 0.
+        try: return float(astro_utils.T_bright(therm, planet, lambda_range, filter_path=filter_path or None))
+        except ValueError: return 0.   # brentq has no sign change: the signal is below the band flux of the 10 K lower bracket
+    _, refl, _ = reflected_PhaseCurve(planet, t=t, t0=t0, u_B=u_B, include_transit=False, A=A, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
+    return therm, 1e6 * float(refl[0])
+
+
 ###########################################################################################################################
 #####
 #####   Reflected Lightcurve

@@ -60,7 +60,8 @@ sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10,
 # Everything below spawns the dynesty pool. multiprocessing uses SPAWN here, so each worker re-imports this file - without the guard it would re-run the whole script (PandExo, the fit, ...) in every worker.
 if __name__ == "__main__":
 
-    OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dynesty_results")
+    OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "more runs/OLD_before_Tfloor_removal/dynesty_results")
 
     lrs_range = filter_lambda(instrument)
     l1, l2 = lrs_range
