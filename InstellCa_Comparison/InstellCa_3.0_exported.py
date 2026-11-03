@@ -1,3 +1,32 @@
+# ---------------------------------------------------------------------------------------------------------------------
+# Modified copy of InstellCa_3.0.py (InstellCa, Exoplanet Instellation Calculator)
+#   Original: https://github.com/Mradumay137/InstellCa, commit 99225f4 (file last changed 2025-09-15),
+#   Copyright (c) 2021 Mradumay137 (Mradumay Sadh), MIT License. Reference: Sadh & Gavassino 2026, ApJ 997, 167.
+#   The MIT permission notice is reproduced at the end of this header; the original LICENSE file is in the clone.
+#
+# Modifications (Jonas Spiller, 2026-11-01), marked "# MOD" below; everything else is verbatim:
+#   1. The limb-darkening coefficient u (hard-wired to 0.6 in the original) is read from the environment variable
+#      INSTELLCA_U (default 0.6), so the u = 0 branch of the original code can be run without editing the file.
+#   2. The computed arrays are written to a text file in a subfolder next to this script (they were only plotted in the original):
+#      (in the subfolder outfiles/); columns = angle from the substellar point [deg], geometric (extended-source) model [kW/m^2], inverse-square
+#      model [kW/m^2]. The figure is saved next to it as well, under the same name.
+#   3. Numerical knobs for convergence tests, all defaulting to the original behaviour: INSTELLCA_EPSREL / INSTELLCA_EPSABS /
+#      INSTELLCA_LIMIT are passed to both scipy.integrate.quad calls (original: scipy defaults), INSTELLCA_NLAT sets the number
+#      of latitude points (original: 500), INSTELLCA_TAG is appended to the output file names.
+#   The physics, integration limits, integrand and normalisation are unchanged.
+#   The script must still be run with the InstellCa clone as working directory (it reads ./Exoplanet_Catalogs).
+#
+# MIT License
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+# persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice
+# and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS
+# PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+# ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+# ---------------------------------------------------------------------------------------------------------------------
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -23,6 +52,11 @@ import os
 import glob
 import sys
 from scipy import integrate
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outfiles")   # MOD: where the exported arrays and the figure go
+os.makedirs(OUT_DIR, exist_ok=True)   # MOD
+QUAD_KW = {k: float(os.environ[v]) for k, v in (("epsrel", "INSTELLCA_EPSREL"), ("epsabs", "INSTELLCA_EPSABS")) if v in os.environ}   # MOD
+if "INSTELLCA_LIMIT" in os.environ: QUAD_KW["limit"] = int(os.environ["INSTELLCA_LIMIT"])   # MOD
+NLAT = int(os.environ.get("INSTELLCA_NLAT", "500"))   # MOD: original: 500 latitude points
 
 num=int(input("Enter number of planets to be plotted:"))
 num1=round(math.sqrt(num))
@@ -176,7 +210,7 @@ for te in range(1,num+1):
             M1=float(input("Enter stellar mass(solar units):"))
             met=float(input("Enter metallicity[Fe/H]:"))
     if para==1:
-        u=0.6
+        u=float(os.environ.get("INSTELLCA_U", "0.6"))   # MOD: was u=0.6; INSTELLCA_U=0 selects the original u==0 branch
         met=0
         M1=1
     if para==2:
@@ -239,8 +273,8 @@ for te in range(1,num+1):
             s1=s1*np.pi/180
             s=np.pi/2
             symp=math.acos((rs+rp)/al)
-            la1=np.linspace(-s1,s1,500)
-            la2=np.linspace((-s1+ob)*180/np.pi,(s1-ob)*180/np.pi,500)
+            la1=np.linspace(-s1,s1,NLAT)   # MOD: was 500
+            la2=np.linspace((-s1+ob)*180/np.pi,(s1-ob)*180/np.pi,NLAT)   # MOD: was 500
             surfgrav=100*6.67*10**(-11)*M/rs**(2)
             logg=math.log10(surfgrav)
             oldfor=[]
@@ -291,7 +325,7 @@ for te in range(1,num+1):
                         lf=1-u1*(1-mu)-u2*(1-mu)**2
                     return abs(a-b*math.cos(x))*lf*mu/(c+e*math.cos(x))**(3/2)
                 def integration(th,la): #First integral
-                    return quad(function,-y3,y3,args=(th,la))[0]
+                    return quad(function,-y3,y3,args=(th,la),**QUAD_KW)[0]   # MOD: QUAD_KW empty by default
                 
                 #Geometric Limits
                 
@@ -318,7 +352,7 @@ for te in range(1,num+1):
                 
                 #Second integral
                 
-                value=quad(lambda th: integration(th,la),ll, ul)[0]
+                value=quad(lambda th: integration(th,la),ll, ul,**QUAD_KW)[0]   # MOD: QUAD_KW empty by default
                 la5=math.atan(al*math.tan(la)*math.cos(la)/(al*math.cos(la)-rp))
                 if la5<0:
                     newp=la
@@ -336,7 +370,7 @@ for te in range(1,num+1):
                 oldfor.append(old/1000)
                 approx.append(app/1000)
             
-            err=abs(oldfor[250]-final[250])
+            err=abs(oldfor[NLAT//2]-final[NLAT//2])   # MOD: was index 250 (unused diagnostic)
             
            
             inverse.append(oldfor)
@@ -366,6 +400,11 @@ for te in range(1,num+1):
 imagename=exoplanet+".jpg"
 if num>1:
     imagename=input("Saving image..Enter image name and format:")
+# MOD: export the plotted arrays (last planet of the run) and save the figure next to this script
+tag=exoplanet.replace(" ","_")+"_u{:g}".format(u)+os.environ.get("INSTELLCA_TAG","")
+np.savetxt(os.path.join(OUT_DIR,tag+"_instellca.txt"),np.c_[la2,aver1,inve1],
+           header="InstellCa_3.0 (u={:g}, quad={}, nlat={}, {}): angle_from_substellar_deg  geometric_model_kW_m2  inverse_square_kW_m2".format(u,QUAD_KW or "scipy defaults",NLAT,plt.gca().get_title()))
+imagename=os.path.join(OUT_DIR,tag+".png")
 plt.savefig(imagename,dpi=300)
 plt.show()  
 print("The Terminator extends to ",round(s1*57.3,3), "degrees from the equator")
