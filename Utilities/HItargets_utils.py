@@ -190,12 +190,12 @@ FILTER_LAMBDA_UM = {
 # Full filter ranges [um] -- the extent of the throughput files
 FULL_LAMBDA_UM = {
     "MIRI/F1280W":   [11.0654, 14.5816],
-    "MIRI/F1500W":   [12.7875, 17.4925],
+    "MIRI/F1500W":   [12.7876, 17.4925],
     "MIRI/F1800W":   [15.5725, 20.8505],
     "MIRI/LRS":      [4.8900, 10.6100],   # 5.0-12.0 um and 5.0-14.0 um versions also exist in FILTER_DIR
     "Spitzer/IRAC2": [3.6955, 5.1008],
     "JWST_NIRSpec.G395H_NRS1": [2.8530, 3.7363], # two arrays of NIRSpec/G395H
-    "JWST_NIRSpec.G395H_NRS2": [3.7959, 5.2040] # two arrays of NIRSpec/G395H
+    "JWST_NIRSpec.G395H_NRS2": [3.7960, 5.2039] # two arrays of NIRSpec/G395H
 }
 
 # SPIDERMAN throughput files
