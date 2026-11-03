@@ -647,4 +647,77 @@ def insolation_penumbra_hyperillum_approx(gamma1, planet, u_B=0.0, runtime=False
     return result
 
 
+# Full surface (all gamma1): brute-force integration over the stellar sphere in vector form, for validation.
+# Independent of the Kopal-style geometry above (no alpha_, no theta kernels, no Delta): stellar surface points Q are sampled
+# on a midpoint grid about the star -> planet-centre axis, and the visibility of each Q is decided by the signs of the
+# emission cosine (Q faces P) and the incidence cosine (Q is above the horizon of P). Includes linear limb darkening.
+# Slow (~1 s per point at the default grid, accurate to ~1e-6 of the substellar insolation): use for spot checks, parallelise across points.
+def insolation_hyperillum_bruteforce(gamma1, planet, u_B=0.0, n_theta=3000, n_phi=6000, runtime=False):
 
+    t0 = time.perf_counter()
+    gamma1 = np.atleast_1d(np.asarray(gamma1, dtype=float))
+    result = np.array([_insolation_hyperillum_bruteforce_scalar(g, planet, u_B, n_theta, n_phi) for g in gamma1])
+    if runtime: print(f"insolation_hyperillum_bruteforce runtime: {time.perf_counter() - t0:.4f} s")
+    return result # incident flux on planet (W/m^2)
+def _insolation_hyperillum_bruteforce_scalar(gamma1, planet, u_B, n_theta, n_phi, rows_per_chunk=50):
+    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
+
+    # lengths in units of the stellar radius: star centre at the origin, planet centre at (a, 0, 0), substellar point towards -x
+    rp, a = r1 / r2, R / r2
+    n_hat = np.array([-np.cos(gamma1), np.sin(gamma1), 0.])     # surface normal at P
+    P = np.array([a, 0., 0.]) + rp * n_hat                      # surface point P
+
+    # the visible cap lies within arccos(1/rho) <= arccos(1/(a+rp)) of the star -> P axis,
+    # which is tilted from the star -> planet-centre axis by at most arcsin(rp/a)
+    t_max = min(np.pi, np.arccos(1. / (a + rp)) + np.arcsin(rp / a) + 1e-3)
+    dt, dp = t_max / n_theta, 2. * np.pi / n_phi
+    t = (np.arange(n_theta) + 0.5) * dt                         # polar angle of Q about the x axis
+    p = (np.arange(n_phi) + 0.5) * dp                           # azimuth of Q about the x axis
+    cos_p, sin_p = np.cos(p)[None, :], np.sin(p)[None, :]
+
+    B0 = sigma * T2_eff ** 4 / np.pi / (1 - u_B / 3)            # central surface brightness, fixes L = 4 pi r2^2 sigma T^4
+    total = 0.
+    for rows in np.array_split(np.arange(n_theta), max(1, n_theta // rows_per_chunk)):
+        cos_t, sin_t = np.cos(t[rows])[:, None], np.sin(t[rows])[:, None]
+        Qx, Qy, Qz = cos_t * np.ones_like(cos_p), sin_t * cos_p, sin_t * sin_p   # on the unit sphere, Q is also its outward normal
+        dx, dy, dz = P[0] - Qx, P[1] - Qy, P[2] - Qz            # Q -> P
+        dist2 = dx ** 2 + dy ** 2 + dz ** 2
+        dist = np.sqrt(dist2)
+        cos_emit = (Qx * dx + Qy * dy + Qz * dz) / dist         # emission angle at Q
+        cos_inc = -(n_hat[0] * dx + n_hat[1] * dy) / dist       # incidence angle at P (n_hat has no z component)
+        visible = (cos_emit > 0.) & (cos_inc > 0.)
+        integrand = np.where(visible, (1. - u_B + u_B * cos_emit) * cos_emit * cos_inc / dist2, 0.)
+        total += np.sum(integrand * sin_t)                      # dA = r2^2 sin(t) dt dphi; r2^2 cancels against dist^2 in units of r2
+    return B0 * total * dt * dp
+
+
+# Full surface (all gamma1): closed form of Kang, Nimmo & Ding 2023 (ApJL 949, L20), Appendix eqs. (A1)-(A2) and (A5)-(A12), as printed.
+# Uniformly bright stellar disk only ("isotropic approximation", no limb darkening): exact reference for u_B = 0.
+# Kang -> our notation: d (star-planet separation) = R, a (planet radius) = r1, R_star = r2, theta_TL = gamma1, theta_d = terminator.
+def insolation_kang(gamma1, planet, runtime=False):
+    period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
+
+    t0 = time.perf_counter()
+    gamma1 = np.atleast_1d(np.asarray(gamma1, dtype=float))
+    d, a, R_star = R, r1, r2
+
+    theta_f = np.arccos((a + R_star) / d)                                   # (A1) end of the fully illuminated zone
+    theta_d = np.arccos((a - R_star) / d)                                   # (A2) start of complete darkness
+    rho = np.sqrt(d ** 2 + a ** 2 - 2 * d * a * np.cos(gamma1))             # below (A3): distance P -> stellar centre
+    alpha = np.arccos((d * np.cos(gamma1) - a) / rho)                       # (A5) zenith angle of the stellar centre
+    phi = np.arcsin(R_star / rho)                                           # (A6) angular radius of the star
+    t = rho * np.cos(phi)                                                   # below (A7): radius of the horizon circle
+    l, s = t * np.sin(phi), t * np.sin(phi) * np.cos(alpha)                 # (A7) semi-axes of the projected disk
+    beta = np.pi / 2 - alpha                                                # below (A12): elevation of the stellar centre
+
+    J_f = np.pi * l * s / (np.pi * t ** 2)                                  # (A8) = sin^2(phi) cos(alpha)
+    with np.errstate(invalid="ignore"):                                     # (A11)/(A12) are NaN outside the penumbra (masked below)
+        delta1 = np.arccos(np.cos(phi) / np.cos(beta))                      # (A11)
+        delta2 = np.arccos(np.tan(beta) / np.tan(phi))                      # (A12)
+        J_p = l * s / (np.pi * t ** 2) * (np.pi - delta2 + np.sin(delta2) * np.cos(delta2)) \
+              + t ** 2 / (np.pi * t ** 2) * (delta1 - np.sin(delta1) * np.cos(delta1))   # (A10)
+
+    J = np.select([gamma1 < theta_f, gamma1 < theta_d], [J_f, J_p], default=0.)
+    result = sigma * T2_eff ** 4 * J                                        # (A9): F = sigma T_star^4 J
+    if runtime: print(f"insolation_kang runtime: {time.perf_counter() - t0:.4f} s")
+    return result # incident flux on planet (W/m^2)
