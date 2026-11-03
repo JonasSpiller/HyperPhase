@@ -55,7 +55,7 @@ def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", **mo
     axr.set_xlabel("orbital phase");
     axr.set_ylabel("resid / $\\sigma$");
     axr.set_ylim(-3.5, 3.5)
-    plt.show()
+    return fig, (ax, axr)
 
     # Numerical Checks
     chi2 = np.sum(r ** 2)
@@ -93,7 +93,7 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
     truth = dict(A_B=float(A_B_true), insolation_model=insolation_model, offset=float(offset), seed=int(seed), noise=bool(noise))
     data = {"t": t, "y_obs": y_obs, "sigma":sigma, "truth": truth}
 
-    if plotting: plot_simulated_data(cfg, A_B_true, data, insolation_model=insolation_model, **{k: v for k, v in model_kw.items() if k == "F"})
+    if plotting: plot_simulated_data(cfg, A_B_true, data, insolation_model=insolation_model, **{k: v for k, v in model_kw.items() if k == "F"}); plt.show()   # plot_simulated_data returns the figure and no longer shows it itself
 
     return data
 

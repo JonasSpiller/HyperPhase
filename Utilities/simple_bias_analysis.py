@@ -581,7 +581,7 @@ def plot_joint_bias_vs_true_AB(A_B_grid, sweep, i0, target_label, title):
         a_.set_xlabel(r"true Bond albedo $A_B$"); a_.set_ylabel(ylab); a_.set_title(ttl); a_.legend()
     fig.suptitle(title, y=1.02)
     fig.tight_layout()
-    plt.show()
+    return fig, axs
 
 
 # One measurability panel: |bias| / sigma^Fisher on a log axis for each (y, style, label) curve, with the 1-sigma and 0.3-sigma reference lines.
@@ -615,7 +615,7 @@ def plot_joint_measurability(A_B_grid, sweep, i0, cfg, target_label, title):
                         i0, cfg, target_label, r"$F_{\rm fit}\,/\,\sigma_F^{\rm Fisher}$", r"Measurability of the spurious $F$")
     fig.suptitle(title + r"  ($n_{\rm orbits}$=%d, $\sigma_{1\rm min}$=%.0f ppm/min)" % (cfg.n_orbits, cfg.sigma_1min), y=1.02)
     fig.tight_layout()
-    plt.show()
+    return fig, axs
 
 
 # The hyperillumination truth next to the best point-source fits of fit_truth (A_B-only and, if present, joint; baselines refitted) with one mock noise realisation at sigma_bin, and the
@@ -801,7 +801,6 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
     fig.suptitle(title or f"Biases from neglecting hyperillumination ($A_B$ = {A_B_true:.2f}, $i$ = {incl:g}°)")
     fig.tight_layout()
     fig.legend(*axs[0].get_legend_handles_labels(), loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=legend_fontsize, framealpha=.9)
-    plt.show()
 
     ok = ~no_occultation & np.isfinite(bias_map)
     line = (f"{'occulting, ' if F_map is not None else ''}non-railed cells: {ok.sum()} of {ok.size};  Delta A_B in [{bias_map[ok].min():+.3f}, {bias_map[ok].max():+.3f}]"
@@ -810,6 +809,7 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
         line += f",  F in [{F_map[ok].min():.4f}, {F_map[ok].max():.4f}]"
     print(line)
     print(f"railed: {(~no_occultation & ~np.isfinite(bias_map)).sum()}" + (f",  without occultation: {no_occultation.sum()}" if F_map is not None else ""))
+    return fig, axs
 
 
 # The Roche frontier on an (a/Rs, T_eff) map, for main-sequence hosts: a_R/Rs(T_eff) = C_ROCHE [rho_star(T_eff) / rho_p]^(1/3) per composition of rho_p_cases ({label: rho_p [g/cm^3]}),
@@ -882,7 +882,6 @@ def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=9
     fig.colorbar(im, ax=ax, label=rf"$\sigma_{{1\,\rm min,\,crit}}$ [ppm/min] for a {z:g}$\sigma$ detection of $F > 0$")
     fig.tight_layout()
     fig.legend(*ax.get_legend_handles_labels(), loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=8, framealpha=.9)
-    plt.show()
 
     print(f"occulting, non-railed cells: {ok.sum()} of {ok.size};  sigma_1min,crit ({z:g} sigma, {cfg.n_orbits} orbits) in [{sig_crit[ok].min():.1f}, {sig_crit[ok].max():.1f}] ppm/min;  "
           f"sqrt(dchi2_F) at sigma_1min = {cfg.sigma_1min:g} ppm/min in [{np.sqrt(dchi2_map[ok]).min():.2f}, {np.sqrt(dchi2_map[ok]).max():.2f}] sigma")
