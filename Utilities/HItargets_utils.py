@@ -440,38 +440,33 @@ def run_pandexo(planet_name, instrument, verbose=True, **overrides):
 
 
 
+# PandExo's transit-depth error (jwst.py, var_tot) from the in/out-of-transit electron counts N and their variances V; t_ratio = on-source time out / in of transit.
+def pandexo_depth_error(N_in, N_out, V_in, V_out, t_ratio):
+    return t_ratio * np.sqrt(V_in / N_out**2 + N_in**2 * V_out / N_out**4)
+
+
+# White-light transit-depth precision [ppm] of the band (lam_start, lam_end) [micron] from a PandExo result run with R = None (run_pandexo): sum the electrons and variances of the
+# band's pixels, then apply PandExo's depth error to the sums. This is how PandExo's own engine bins when R is set, and the noise of the photon-weighted band depth SPIDERMAN computes.
+# Saturated pixels are left out. Not sqrt(sum sigma_i^2) / N: that is the error of an equal-weight mean of the pixel depths, 1.4-1.6 times larger on MIRI/LRS.
 def binning(lam_start, lam_end, result, visualize=True):
-    # out_NIRSpec = pk.load(open(f'{output_file}', 'rb'))
+    raw, spec, timing = result["RawData"], result["FinalSpectrum"], result["timing"]
+    wave, error = np.asarray(raw["wave"]), np.asarray(spec["error_w_floor"])
+    N_in, N_out, V_in, V_out = (np.asarray(raw[k], float) for k in ("electrons_in", "electrons_out", "var_in", "var_out"))
+    t_ratio = timing["On Source Time Out of Transit"] / timing["On Source Time In Transit"]
 
-    # Calculate the average value of the array
-    average_value = np.median(result['FinalSpectrum']['error_w_floor'])
-    # print(result['FinalSpectrum']['wave'])
-    mask1 = result['FinalSpectrum']['error_w_floor'] > 10 * average_value
-    # print(mask1)
-    mask2 = (lam_start < result['FinalSpectrum']['wave']) & (result['FinalSpectrum']['wave'] < lam_end)
-    # print(mask2)
-    # mask10 = (5.0974<result['FinalSpectrum']['wave'])&( result['FinalSpectrum']['wave'] <5.10)
-    # print(mask10)
+    # self-check: the formula must reproduce PandExo's own per-pixel errors (fails e.g. with a noise floor, which PandExo applies per binned point and this sum would drop)
+    if not np.allclose(pandexo_depth_error(N_in, N_out, V_in, V_out, t_ratio), error, rtol=1e-6):
+        raise ValueError("binning(): the summed-electron error does not reproduce PandExo's per-pixel errors (noise floor set?)")
 
-    mask = ~mask1 & mask2  # & ~mask10
+    use = (lam_start < wave) & (wave < lam_end) & ~np.asarray(spec.get("full_saturation_mask", np.zeros(wave.size)), bool)
+    if not use.any(): raise ValueError(f"no usable PandExo pixels in {lam_start:g}-{lam_end:g} um")
+    rms_transit = 1e6 * pandexo_depth_error(N_in[use].sum(), N_out[use].sum(), V_in[use].sum(), V_out[use].sum(), t_ratio)
 
     if visualize:
-        fig, ax = plt.subplots(figsize=(10, 6))
-        plt.errorbar(result['FinalSpectrum']['wave'], result['FinalSpectrum']['spectrum'],
-                     yerr=result['FinalSpectrum']['error_w_floor'], fmt='.')
-        plt.errorbar(result['FinalSpectrum']['wave'][mask], result['FinalSpectrum']['spectrum'][mask],
-                     yerr=result['FinalSpectrum']['error_w_floor'][mask], fmt='.')
-        # plt.ylim(rprs**2-0.002, rprs**2+0.002)
-        # .xlim(5,12)
-        # plt.axvline(5.25)
-        plt.xlabel('wavelengths (micron)')
-        plt.ylabel('tansit depth')
+        plt.errorbar(wave, spec["spectrum"], yerr=error, fmt=".", color="0.7", label="PandExo pixels")
+        plt.errorbar(wave[use], np.asarray(spec["spectrum"])[use], yerr=error[use], fmt=".", label=f"band, white light: {rms_transit:.2f} ppm")
+        plt.xlabel("wavelength [micron]"); plt.ylabel("transit depth"); plt.legend()
         plt.show()
-
-    errs = result['FinalSpectrum']['error_w_floor']
-    errs_masked = errs[mask]
-    rms_transit = np.sqrt(np.sum(errs_masked ** 2)) / len(errs_masked) * 1e6
-    # print(rms_transit)
     return rms_transit
 
 

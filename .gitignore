@@ -67,6 +67,7 @@ ENV/
 /Hyperillumination/Bias Analysis/
 /NASAExoplanetArchive/NASAExoArchive_*_aggregate.csv
 /NASAExoplanetArchive/pscomppars_*
+NASAExoplanetArchive/ExoArchive_analysis.ipynb
 /Hyperillumination/Supplements/
 /Stellar Model/Pandexo/*
 /Stellar Model/NewEra/
