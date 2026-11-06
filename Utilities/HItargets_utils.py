@@ -36,7 +36,7 @@ AU_IN_R_SUN = float(const.au / const.R_sun)
 
 # entire planet with custom parameters
 CUSTOM = {
-    "K2-141 b": PlanetParams(name="K2-141 b", period=0.2803244, incl=86.3, ecc=0.0, w=90.0, r1=0.02037, r2=1.0, R=2.292, T2_eff=4599.0, a_AU=0.00747, T14=0.94), # Malavolta et al. 2018, Barragán et al. 2018
+    "K2-141 b": PlanetParams(name="K2-141 b", period=0.2803244, incl=86.3, ecc=0.0, w=90.0, r1=0.02037, r2=1.0, R=2.292, T2_eff=4599.0, a_AU=0.00747, T14=0.94, logg=4.62, feh=-0.06), # Malavolta et al. 2018 (logg, [Fe/H]: their Table 2), Barragán et al. 2018
 }
 
 
@@ -71,8 +71,45 @@ CUSTOM_N = {_normalise(k): v for k, v in CUSTOM.items()}
 OVERRIDES_N = {_normalise(k): v for k, v in OVERRIDES.items()}
 
 
+_NOTED = set()   # (planet, note) pairs already printed, so each stellar-parameter fallback is reported once per session
+
+def _note_once(name, msg):
+    if (name, msg) not in _NOTED:
+        _NOTED.add((name, msg)); print(f"{name}: {msg}")
+
+# log g and [Fe/H] of the host from an archive row (only the stellar SED uses them, astro_utils.stellar_spectrum), with fallbacks that are reported instead of silent:
+# - no st_logg: log g = log10(G M / R^2) with M the main-sequence mass at st_teff (astro_utils.main_sequence_M_star) and R = st_rad (the main-sequence radius where st_rad is missing too);
+#   the archive has no stellar-mass column. Where st_logg IS known this reproduces it to +0.003 dex (median; 16-84 %: +-0.04, M dwarfs +-0.06-0.09), while a fixed 4.5 is off by -0.28 dex for
+#   M dwarfs (log g 4.5 instead of 5.0 shifts the LRS stellar flux by ~6 % at 2600 K). Without st_teff, 4.5 (such a host has no stellar spectrum anyway).
+# - no st_met: solar [Fe/H] = 0, the standard assumption (k changes by <= 0.8 % per 0.1 dex; Stellar Model/build_newera.ipynb).
+# Keys in `skip` (values given in OVERRIDES) are neither derived nor reported.
+def _stellar_logg_feh(row, skip=()):
+    name, out = row["pl_name"], {}
+    if "logg" not in skip:
+        logg = row["st_logg"]
+        if pd.isna(logg):
+            from astro_utils import main_sequence_M_star, main_sequence_R_star   # imported here: astro_utils imports this module
+            T, R = row["st_teff"], row["st_rad"]
+            if pd.notna(T):
+                src = "st_rad" if pd.notna(R) else "the main-sequence radius"
+                R = R if pd.notna(R) else float(main_sequence_R_star(T))
+                logg = float(np.log10(const.G.cgs.value * float(main_sequence_M_star(T)) * const.M_sun.cgs.value / (R * const.R_sun.cgs.value) ** 2))
+                _note_once(name, f"no st_logg in the archive; log g = {logg:.2f} from the main-sequence mass at T_eff = {T:.0f} K and {src}")
+            else:
+                logg = 4.5
+                _note_once(name, "no st_logg and no st_teff in the archive; log g = 4.5 assumed")
+        out["logg"] = float(logg)
+    if "feh" not in skip:
+        feh = row["st_met"]
+        if pd.isna(feh):
+            feh = 0.0
+            _note_once(name, "no st_met in the archive; solar [Fe/H] = 0 assumed for the stellar spectrum")
+        out["feh"] = float(feh)
+    return out
+
 def _params_from_row(row):
     """One PlanetParams from an archive row, with r1, r2, R in stellar radii and OVERRIDES applied."""
+    overrides = OVERRIDES_N.get(row["_key"], {})   # row["_key"] is the normalised pl_name
     fields = dict(
         name=row["pl_name"],
         period=row["pl_orbper"],                        # days
@@ -82,12 +119,13 @@ def _params_from_row(row):
         r1=row["pl_ratror"],                            # stellar radii
         r2=1.0,                                         # stellar radii, by construction
         R=row["a_over_r2"],                             # stellar radii
-        T2_eff=row["st_teff"],                          # K
+        T2_eff=row["st_teff"],  # K
+        **_stellar_logg_feh(row, skip=overrides),  # logg [log cgs], feh [dex]: archive values, or reported fallbacks
         # a_AU only feeds the light-travel-time correction, so reconstruct it from R and the stellar radius where pl_orbsmax is missing.
         a_AU=row["pl_orbsmax"] if pd.notna(row["pl_orbsmax"]) else row["a_over_r2"] * row["st_rad"] / AU_IN_R_SUN,
         T14=row["pl_trandur"],                   # hours
     )
-    fields.update(OVERRIDES_N.get(row["_key"], {}))   # row["_key"] is the normalised pl_name
+    fields.update(overrides)
     return PlanetParams(**fields)
 
 

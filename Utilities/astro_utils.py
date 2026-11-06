@@ -4,6 +4,9 @@ from scipy.integrate import quad
 from astropy import constants as const
 from HItargets_utils import load_filter
 from scipy.optimize import brentq
+from functools import lru_cache
+import warnings
+import newera_utils
 
 au = const.au.value
 R_sun = const.R_sun.value
@@ -12,6 +15,9 @@ C_LIGHT = const.c.value
 K_BOLTZ = const.k_B.value
 b = 2.897771955e-3 # Wien
 STEFAN_BOLTZMANN = (2.0 * np.pi**5 * K_BOLTZ**4) / (15.0 * H_PLANCK**3 * C_LIGHT**2) # Stefan-Boltzmann constant
+
+STELLAR_MODEL = "newera"    # repo-wide stellar SED: "newera" (newera_utils cube), an stsynphot grid ("phoenix", "ck04models", "k93models") or "blackbody". Read as a default argument at import, so change it here, not at runtime
+SED_FLUX_TOL = 0.02         # max |pi int(I dlambda) / (sigma T_eff^4) - 1| accepted from a model spectrum (catches wrong units and a truncated wavelength range)
 
 
 # --------------------------------------------------------------------------
@@ -151,12 +157,21 @@ def main_sequence_R_star(T_eff):
     return np.interp(T_eff, _MS_T, _MS_R)
 
 
-# calculate Brightness Temperature (use occultation depth for dayside brightness temperature)
-def T_bright(thermal_depth, planet, lambda_range, filter_path=None, **kw):
-    # thermal_depth in ppm
-    rp = planet.r1 / planet.r2
-    tgt = 1e-6*thermal_depth * band_avg_planck(planet.T2_eff, lambda_range, filter_path, **kw) / rp**2
-    return brentq(lambda T: band_avg_planck(T, lambda_range, filter_path, **kw) - tgt, 10., 9000.)
+def main_sequence_M_star(T_eff):
+    """Mass [M_sun] of a main-sequence star of this T_eff [K]."""
+    return np.interp(T_eff, _MS_T, np.array([v[1] for v in MAIN_SEQUENCE.values()], dtype=float)[::-1])
+
+
+# Brightness temperature [K] of a thermal depth [ppm] (the occultation depth gives the dayside value): solves (r1/r2)^2 S_planet(T) = depth * S_star, where S_star is SPIDERMAN's own stellar
+# normalisation (its cubic spline through stellar_spidergrid at T2_eff, hpu.spidergrid_value) and S_planet the same band integral of a blackbody (hpu.band_planck: same samples, response and sum_flux).
+# So T_bright inverts SPIDERMAN's depths exactly whatever the stellar model and band weighting (a top-hat is energy-weighted there, like SPIDERMAN's filter=False); the remaining ~0.15 K of a
+# round trip is SPIDERMAN's own planet quadrature. Raises (check_teff_nodes) outside the T_eff nodes and ValueError (brentq) for a depth below the band flux at 10 K.
+def T_bright(thermal_depth, planet, lambda_range, filter_path=None, stellar_model=STELLAR_MODEL):
+    import hyperillumination_phasecurve_utils as hpu   # imported here: hpu imports this module
+    grid = hpu.stellar_spidergrid(lambda_range, filter_path, planet.logg, planet.feh, stellar_model=stellar_model)
+    hpu.check_teff_nodes(grid, planet.T2_eff)
+    tgt = 1e-6 * thermal_depth * hpu.spidergrid_value(grid, planet.T2_eff) / (planet.r1 / planet.r2) ** 2
+    return brentq(lambda T: hpu.band_planck(lambda_range, filter_path, T) - tgt, 10., 9000.)
 
 
 # --------------------------------------------------------------------------
@@ -205,14 +220,55 @@ def planck_fraction_below(T, lambda_cutoff):
 # Throughput-weighted mean spectral radiance [W m^-2 sr^-1 m^-1] of a blackbody at temperature T, averaged across the band.
 def band_avg_planck(T, lambda_range, filter_path=None, n=300):
     """
-    filter_path=None  -> tophat over lambda_range   (matches SPIDERMAN's no-filter mode)
+    filter_path=None  -> tophat over lambda_range, photon-weighted (SPIDERMAN's filter=False is energy-weighted, so this does NOT match it; T_bright no longer uses this function)
     filter_path given -> real throughput on the file's own grid
     """
     lam, w = load_filter(lambda_range, filter_path=filter_path, n=n)
 
-    # R [counts/photon] -> [counts/energy], so that weighting B_lambda (an energy spectral radiance) below yields a photon-integrated band average. Same convention as fspiderman.get_filter (fork README, patch 6), so T_bright inverts exactly the band integral SPIDERMAN's depths are computed with.
+    # R [counts/photon] -> [counts/energy], so that weighting B_lambda (an energy spectral radiance) below yields a photon-integrated band average. Same convention as fspiderman.get_filter (fork README, patch 6). Unused by the pipeline: T_bright integrates through hpu.band_planck.
     w =  w * lam / (H_PLANCK * C_LIGHT)
 
     B_lambda = planck_spectrum(lam, T)
 
     return np.trapezoid(B_lambda * w, lam) / np.trapezoid(w, lam)
+
+
+# --------------------------------------------------------------------------
+# Stellar SED
+# --------------------------------------------------------------------------
+
+# Model spectrum on its native grid: wavelength [m], surface intensity F_lambda/pi [W m^-2 sr^-1 m^-1] (what B_lambda is for a blackbody). The same stsynphot catalog PandExo uses ($PYSYN_CDBS/grid/<stellar_model>).
+# grid_to_spec interpolates linearly between the 8 bracketing models (logg, then [Fe/H], then T_eff) and raises ParameterOutOfBounds outside the grid or on a neighbour without data.
+# Checked against sigma T_eff^4, which fails on wrong units or a truncated wavelength range. Cached: treat the arrays as read-only.
+@lru_cache(maxsize=None)
+def stellar_spectrum(T_eff, logg, feh, stellar_model=STELLAR_MODEL):
+    if stellar_model == "newera":   # no sigma T^4 check: the JWST product starts at 0.6 um; validated against full-range models in Stellar Model/build_newera.ipynb
+        wave, I = newera_utils.newera_spectrum(float(T_eff), float(logg), float(feh))
+    else:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")   # stsynphot warns about optional reference files it cannot find on import; imported only here, as it needs $PYSYN_CDBS
+            import stsynphot
+            from synphot import units as syn_units
+        s = stsynphot.grid_to_spec(stellar_model, float(T_eff), float(feh), float(logg))   # argument order: (gridname, t_eff, metallicity, log_g)
+        w = s.waveset                                                    # the model's own wavelengths [A]
+        wave, I = w.to_value("m"), s(w, flux_unit=syn_units.FLAM).value * 1e7 / np.pi   # A -> m; FLAM [erg s^-1 cm^-2 A^-1] -> W m^-3; /pi: surface flux -> surface intensity
+        ratio = np.pi * np.trapezoid(I, wave) / (STEFAN_BOLTZMANN * T_eff**4)
+        if abs(ratio - 1.) > SED_FLUX_TOL: raise ValueError(f"{stellar_model} (T_eff={T_eff:.0f} K, logg={logg:.2f}, [Fe/H]={feh:+.2f}): pi int(I dlambda) / sigma T_eff^4 = {ratio:.4f}")
+    for a in (wave, I): a.setflags(write=False)   # cached and shared by every caller
+    return wave, I
+
+
+# Surface intensity [W m^-2 sr^-1 m^-1] of the star on lam [m]: planck_spectrum for "blackbody", else the model spectrum interpolated.
+def stellar_intensity(lam, T_eff, logg, feh, stellar_model=STELLAR_MODEL):
+    if stellar_model == "blackbody": return planck_spectrum(lam, T_eff)
+    wave, I = stellar_spectrum(T_eff, logg, feh, stellar_model)
+    if wave[0] > np.min(lam) or wave[-1] < np.max(lam): raise ValueError(f"{stellar_model} spectrum covers {wave[0]*1e6:.2f}-{wave[-1]*1e6:.2f} um, band needs {np.min(lam)*1e6:.2f}-{np.max(lam)*1e6:.2f} um")
+    return np.interp(lam, wave, I)
+
+
+# lam [m] refined with the model's own samples inside [min(lam), max(lam)], so interpolating the star onto it loses no spectral structure (the catalog grid can be coarser or finer than a filter file). Unchanged for "blackbody".
+def band_wavelengths(lam, T_eff, logg, feh, stellar_model=STELLAR_MODEL):
+    lam = np.asarray(lam, float)
+    if stellar_model == "blackbody": return lam
+    wave = stellar_spectrum(T_eff, logg, feh, stellar_model)[0]
+    return np.union1d(lam, wave[(wave > lam.min()) & (wave < lam.max())])

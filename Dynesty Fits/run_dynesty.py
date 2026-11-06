@@ -60,8 +60,7 @@ sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10,
 # Everything below spawns the dynesty pool. multiprocessing uses SPAWN here, so each worker re-imports this file - without the guard it would re-run the whole script (PandExo, the fit, ...) in every worker.
 if __name__ == "__main__":
 
-    OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "more runs/OLD_before_Tfloor_removal/dynesty_results")
+    OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dynesty_results")
 
     lrs_range = filter_lambda(instrument)
     l1, l2 = lrs_range
@@ -69,10 +68,9 @@ if __name__ == "__main__":
 
     # Noise level, straight from PandExo
     sigma_1min = sigma_1min_scaling * rms_1min(planet, instrument, lrs_range)
-    stellar_grid = sp.stellar_grid.gen_grid(l1, l2, logg=4.5, response=filter_path)
 
     # context for simulating data functions
-    cfg = FittingConfig(planet=planet, stellar_grid=stellar_grid, filter_path=filter_path, l1=l1, l2=l2, A_=A_model,
+    cfg = FittingConfig(planet=planet, filter_path=filter_path, l1=l1, l2=l2, A_=A_model,
                         sigma_1min=sigma_1min, n_orbits=n_orbits, n_bins=n_bins, reflected=True, u_B=u_B, u=u)
 
     print(f"\n{planet.name}  [{instrument}, {l1*1e6:.2f}-{l2*1e6:.2f} um]   a/Rs = {planet.R/planet.r2:.3f}, Rp/Rs = {planet.r1/planet.r2:.4f}, T_eff = {planet.T2_eff:.0f} K")

@@ -35,7 +35,9 @@ class PlanetParams:
     R:      float       # semi-major axis [consistent units]
     T2_eff: float       # stellar Teff [K]
     a_AU: float         # semi-major axis [AU] (for light travel time correction)
-    T14: float          # Transit Duration [h]
+    T14: float  # Transit Duration [h]
+    logg: float = 4.5  # stellar surface gravity [log10 cgs]; only the stellar SED uses it (astro_utils.stellar_spectrum)
+    feh: float = 0.0  # stellar metallicity [Fe/H] [dex]; only the stellar SED uses it
 
     @property
     def args(self):
@@ -325,7 +327,9 @@ def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=
 
 
 # unit="flux": re-radiated (bolometric) flux normalized to the substellar point - the insolation itself, except for "naive_redist" (needs F for both units)
-def plot_insolmap(phase, planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_tab=3000, gp_table=None):
+# incl [deg]: orbital inclination of the view (90 = edge-on, the default; pass planet.incl for the view as observed). The map is symmetric about the star-planet axis,
+# so only the angle between the line of sight and the substellar direction matters, cos = sin(incl) cos(2 pi phase): quadrature looks the same at every inclination.
+def plot_insolmap(phase, planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_tab=3000, gp_table=None, incl=90.):
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
@@ -334,10 +338,11 @@ def plot_insolmap(phase, planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None
     mycmap = plt.cm.inferno   # same colormap spiderman's plot_planet defaults to
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
 
-    # equatorial (edge-on) view: sub-observer direction lies in the orbital plane, at
-    # longitude `phase` from the substellar direction (1,0,0); "up" in the image is the spin axis
-    z_obs = np.array([np.cos(2*np.pi*phase), -np.sin(2*np.pi*phase), 0.])   # direction toward the observer
-    y_obs = np.array([0., 0., 1.])  # spin axis -- already unit and perp to z_obs
+    # body frame: x = substellar direction, z = spin axis (= orbit normal). The sub-observer direction lies at longitude `phase` from the substellar
+    # direction and 90 - incl above the orbital plane (incl = 90: the equatorial, edge-on view); "up" in the image is the spin axis projected onto the sky
+    sin_i, cos_i = np.sin(np.radians(incl)), np.cos(np.radians(incl))
+    z_obs = np.array([sin_i * np.cos(2*np.pi*phase), -sin_i * np.sin(2*np.pi*phase), cos_i])    # direction toward the observer
+    y_obs = np.array([-cos_i * np.cos(2*np.pi*phase), cos_i * np.sin(2*np.pi*phase), sin_i])    # projected spin axis -- unit and perp to z_obs
     x_obs = np.cross(y_obs, z_obs)
 
     xg = np.linspace(-1., 1., n_grid)
@@ -377,7 +382,8 @@ def plot_insolmap(phase, planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None
     if show_penumbra not in (None, False, "both", "inner", "outer"):
         raise ValueError("show_penumbra must be one of None, False, 'both', 'inner', 'outer'")
 
-    if (terminator or show_penumbra) and not np.isclose(phase % 1.0, 0.) and not np.isclose(phase % 1.0, 0.5):
+    on_axis = np.isclose(sin_i, 1.) and (np.isclose(phase % 1.0, 0.) or np.isclose(phase % 1.0, 0.5))   # edge-on occultation / transit: no lines, as before
+    if (terminator or show_penumbra) and not on_axis:
         if terminator:
             _plot_iso_gamma1_line(ax, np.pi / 2., x_obs, y_obs, z_obs, color="grey")
         if show_penumbra in ("both", "inner"):
@@ -404,7 +410,7 @@ def plot_insolmap(phase, planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None
 
 def plot_quad_insolmap(planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, max_temp=None, n_grid=500,
                        theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None,
-                       insolation_model="hyperillum", F=None, unit="flux", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000):
+                       insolation_model="hyperillum", F=None, unit="flux", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000, incl=90.):
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
@@ -428,7 +434,7 @@ def plot_quad_insolmap(planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, 
     for ax, phase in zip(axs.ravel(), [phase1, phase2, phase3, phase4]):
         plot_insolmap(phase, planet, u_B=u_B, A_B = A_B, emissivity=emissivity, min_temp=min_temp, max_temp=max_temp,
                       n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table)
+                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table, incl=incl)
 
     if show_cax:
         im = axs[0, 0].images[0]
@@ -447,7 +453,7 @@ def plot_quad_insolmap(planet, u_B=0., A_B = 0.1, emissivity=1., min_temp=None, 
 # HypotheticalExtremePlanet.ipynb). Each column has its own temperature scale, 0 to 1.1 x its substellar temperature (the same in every model: there is no substellar boost), so the
 # panels of one planet are comparable; the colour bar of the last column labels the rows. The terminator is drawn in grey, the penumbra borders in green on the hyperillum panels only.
 # planets: {name: PlanetParams} or a list. F is passed to "naive_redist" only. Returns fig, axs (shape (len(models), len(planets))).
-def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_B=0., A_B=0.1, emissivity=1., F=None, n_grid=400, theme="black", terminator=True, show_penumbra="both", title=None):
+def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_B=0., A_B=0.1, emissivity=1., F=None, n_grid=400, theme="black", terminator=True, show_penumbra="both", title=None, incl=90.):
     planets = list(planets.values()) if isinstance(planets, dict) else list(planets)
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
     fig, axs = plt.subplots(len(models), len(planets), figsize=(4.3 * len(planets), 4.3 * len(models)), facecolor=bg, squeeze=False)
@@ -455,7 +461,7 @@ def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_
         T_hot = float(np.atleast_1d(surface_temperature(np.array([0.]), pl, "naive", A_B=A_B, emissivity=emissivity))[0])
         for i, model in enumerate(models):
             plot_insolmap(phase, pl, u_B=u_B, A_B=A_B, emissivity=emissivity, min_temp=0., max_temp=1.1 * T_hot, n_grid=n_grid, ax=axs[i, j], theme=theme, show_cax=(j == len(planets) - 1),
-                          terminator=terminator, show_penumbra=show_penumbra if model == "hyperillum" else None, insolation_model=model, F=F if model == "naive_redist" else None, unit="temperature")
+                          terminator=terminator, show_penumbra=show_penumbra if model == "hyperillum" else None, insolation_model=model, F=F if model == "naive_redist" else None, unit="temperature", incl=incl)
             axs[i, j].set_title((f"{pl.name}\n" if i == 0 else "") + rf"{model}, $a/R_\star$ = {pl.R / pl.r2:.2f}, $T_{{\rm eff}}$ = {pl.T2_eff:.0f} K", color=tc, fontsize=9)
     fig.suptitle(title or rf"Surface temperature at phase {phase:g}  ($A_B$ = {A_B:.2f}, $u_B$ = {u_B:g})", color=tc)
     fig.tight_layout()
@@ -464,7 +470,7 @@ def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_
 
 
 def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", u_B=0., min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
-                       show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_frames=1000, fps=50, phase_start=0., phase_end=1., n_tab=3000):
+                       show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_frames=1000, fps=50, phase_start=0., phase_end=1., n_tab=3000, incl=90.):
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
@@ -496,7 +502,7 @@ def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", 
 
     plot_insolmap(phases[0], planet, u_B=u_B, A_B = A_B, emissivity=emissivity, min_temp=min_temp, max_temp=max_temp,
                   n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                  terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table)
+                  terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table, incl=incl)
     if show_cax:
         cbar = fig.colorbar(ax.images[0], ax=ax)
         cbar.ax.tick_params(colors=tc)
@@ -523,7 +529,7 @@ def animation_insolmap(planet, A_B = 0.1, emissivity=1., filename="output_map", 
         ax.clear()
         plot_insolmap(phase, planet, u_B=u_B, A_B = A_B, emissivity=emissivity, min_temp=min_temp, max_temp=max_temp,
                       n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
-                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table)
+                      terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table, incl=incl)
         capture_frame()
 
     plt.close(fig)

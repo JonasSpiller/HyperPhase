@@ -757,7 +757,7 @@ def brightness_temperature(depth_th, cfg, quantiles=(0.16, 0.5, 0.84)):
     """Dayside brightness temperature [K] at the given quantiles of the THERMAL occultation depth.
     T_bright is monotone in the depth, so transforming the quantiles is exact - and it keeps the brentq/band_avg_planck cost at three calls instead of one per draw."""
     q = np.quantile(np.asarray(depth_th, float), list(quantiles))
-    return np.array([astro_utils.T_bright(d, cfg.planet, (cfg.l1, cfg.l2), cfg.filter_path) for d in q])
+    return np.array([astro_utils.T_bright(d, cfg.planet, (cfg.l1, cfg.l2), cfg.filter_path, stellar_model=cfg.stellar_model) for d in q])
 
 
 ###########################################################################################################################

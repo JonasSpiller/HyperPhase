@@ -446,6 +446,7 @@ def target_marker(ax, planet, ykey, AGG=None, **kw):
 # Units: r2 = 1 (stellar radii), so r1 = Rp/Rs and R = a/Rs. period and R_star_Rsun are placeholders: the phase curve is binned per orbit,
 # so the period drops out of the bias, and the stellar radius only sets a_AU for the (tiny) light-travel-time correction.
 # T14 is NaN: it is only needed by PandExo, which never runs on the reference geometry.
+# The star keeps PlanetParams' default log g = 4.5 and [Fe/H] = 0 for every T_eff (a hypothetical star; see swept_planet for what that does at M-dwarf T_eff).
 def reference_planet(a_rs=2.5, rp_rs=0.015, T_eff=4000., incl=90., period=0.3, R_star_Rsun=0.6, name="reference geometry"):
     return PlanetParams(name=name, period=period, incl=incl, ecc=0., w=90., r1=rp_rs, r2=1., R=a_rs, T2_eff=T_eff,
                         a_AU=a_rs * R_star_Rsun * float(const.R_sun / const.au), T14=np.nan)
@@ -454,6 +455,7 @@ def reference_planet(a_rs=2.5, rp_rs=0.015, T_eff=4000., incl=90., period=0.3, R
 # A synthetic planet of mean density rho_p [g/cm^3] exactly at the Roche limit of a main-sequence host with rho_star = rho_ratio * rho_p: a/Rs = c rho_ratio^(1/3) and the period follow from
 # (rho_ratio, rho_p, c) alone (roche_limit_a_rs / roche_limit_period_h), T_eff and R_star from the main-sequence table (astro_utils.MAIN_SEQUENCE). Units as reference_planet (r2 = 1, so r1 = Rp/Rs);
 # T14 is NaN, only PandExo needs it and it never runs on a hypothetical planet. The name carries rho_ratio, so a set of them is told apart in tables and tick labels.
+# log g and [Fe/H] keep PlanetParams' defaults (4.5, 0); a main-sequence M dwarf has log g ~ 5, ~2 % in the mid-IR stellar flux at 3000 K (see swept_planet).
 def roche_planet(rho_ratio, rho_p, c=C_ROCHE, rp_rs=0.015, incl=90., name=None):
     T_eff = float(main_sequence_T_eff(rho_ratio * rho_p))
     a_rs = float(roche_limit_a_rs(rho_ratio, c))
@@ -461,12 +463,15 @@ def roche_planet(rho_ratio, rho_p, c=C_ROCHE, rp_rs=0.015, incl=90., name=None):
                         a_AU=a_rs * float(main_sequence_R_star(T_eff)) * float(const.R_sun / const.au), T14=np.nan)
 
 
-def map_grid(lo, hi, n, include=None, pad=0.1):
+def map_grid(lo, hi, n, include=None, pad=0.1, bounds=None):
     """Linear grid over [lo, hi], widened (by `pad` of the original span) so that `include` - typically the target's own
-    a/Rs or Rp/Rs - falls inside it. A planet outside the default box would otherwise simply be missing from its own map."""
+    a/Rs or Rp/Rs - falls inside it. A planet outside the default box would otherwise simply be missing from its own map.
+    bounds = (min, max): limits the widened grid may not cross, e.g. (TEFF_NODES[0], TEFF_NODES[-1]) for a T_s axis, where a cell off the stellar grid's
+    nodes would raise inside the worker pool and lose the whole map."""
     if include is not None and np.isfinite(include):
         span = hi - lo
         lo, hi = min(lo, include - pad * span), max(hi, include + pad * span)
+    if bounds is not None: lo, hi = max(lo, bounds[0]), min(hi, bounds[1])
     return np.linspace(lo, hi, n)
 
 
@@ -890,8 +895,25 @@ def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=9
 
 
 # One row of planet_bias_table: the planet's own geometry and its own sigma_1min, everything else inherited from cfg.
+# The planets of a per-planet table whose host the stellar model can represent. A host outside the NewEra cube (T_eff, log g or [Fe/H], newera_utils.CUBE_*) or off the stellar grid's
+# T_eff nodes would raise inside the worker pool and abort the whole table, so such planets are left out with a note instead. Checked here in the parent process, where building a
+# planet's stellar grid takes ~0.02 s. A band-less template cfg (l1 = l2 = nan) has no grid to check, so it keeps every planet.
+def drop_unsupported_hosts(cfg, pls):
+    keep, dropped = [], []
+    for pl in pls:
+        try:
+            c = replace(cfg, planet=pl)
+            if c.stellar_grid is not None: check_teff_nodes(c.stellar_grid, pl.T2_eff)
+            keep.append(pl)
+        except ValueError as e:
+            dropped.append(f"{pl.name} ({e})")
+    if dropped: print(f"no stellar spectrum for {len(dropped)} of {len(pls)} planets, left out of the table:\n  " + "\n  ".join(dropped))
+    if not keep: raise ValueError("the stellar model covers none of the planets' hosts, so there is nothing to tabulate")
+    return keep
+
+
 def _planet_bias_row(cfg, A_B_true, pl, s1, redist, bounds, F_bounds, kw):
-    c = replace(cfg, planet=pl, sigma_1min=float(s1))   # stellar_grid / filter / A_ / n_bins / n_orbits are instrument-level, not per planet
+    c = replace(cfg, planet=pl, sigma_1min=float(s1))   # filter / A_ / n_bins / n_orbits are instrument-level; the stellar grid is per star and rebuilt by __post_init__
     model = "naive_redist" if redist else "naive"
     fit = fit_truth(c, A_B_true, models=(model,), free_offset=True, bounds=bounds, F_bounds=F_bounds, fisher=True, **kw)[model]
     return dict(name=pl.name, a_rs=pl.R / pl.r2, period=pl.period, T_eff=pl.T2_eff, bias_A_B=fit["bias_A_B"], sigma_A_B=fit["sigma_A_B"],
@@ -920,6 +942,7 @@ def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity
         pls = [pl for pl in pls if pl.name in sigma_1min]
     bad = [pl.name for pl in pls if not np.isfinite(sigma_1min[pl.name])]
     if bad: raise ValueError(f"non-finite sigma_1min for {bad}: {[sigma_1min[nm] for nm in bad]}")
+    pls = drop_unsupported_hosts(cfg, pls)
 
     rows = pmap(_planet_bias_row, [(cfg, A_B_true, pl, sigma_1min[pl.name], redist, bounds, F_bounds, kw) for pl in pls], n_jobs)
     tab = pd.DataFrame(rows).sort_values("a_rs").reset_index(drop=True)
@@ -985,6 +1008,7 @@ def planet_false_F_table(cfg, A_B_true, planets, sigma_1min, z=2., bounds=(0.0, 
         pls = [pl for pl in pls if pl.name in sigma_1min]
     bad = [pl.name for pl in pls if not np.isfinite(sigma_1min[pl.name])]
     if bad: raise ValueError(f"non-finite sigma_1min for {bad}: {[sigma_1min[nm] for nm in bad]}")
+    pls = drop_unsupported_hosts(cfg, pls)
     rows = pmap(_planet_false_F_row, [(cfg, A_B_true, pl, sigma_1min[pl.name], bounds, F_bounds, kw) for pl in pls], n_jobs)
     tab = pd.DataFrame(rows).sort_values("a_rs").reset_index(drop=True)
     tab["esm"] = [planet_esm(AGG, nm) for nm in tab["name"]] if AGG is not None else np.nan
@@ -1060,14 +1084,11 @@ def plot_false_F_bars(tab, title=None, figsize=None, ax=None):
     return fig, ax
 
 
-# cfg rebuilt for another instrument: its filter, band and stellar grid; everything else (albedo model, n_bins, n_orbits, limb darkening, ...) is kept.
+# cfg rebuilt for another instrument: its filter and band, the stellar grid follows (FittingConfig.__post_init__); everything else (albedo model, n_bins, n_orbits, limb darkening, ...) is kept.
 def instrument_cfg(cfg, instrument):
     from HItargets_utils import filter_loc, filter_lambda
-    with contextlib.redirect_stdout(io.StringIO()):   # mute "no spidermanrc file detected" / "using blackbody approximation"
-        import fspiderman as _sp
-        l1, l2 = filter_lambda(instrument)
-        grid = _sp.stellar_grid.gen_grid(l1, l2, logg=4.5, response=filter_loc(instrument))
-    return replace(cfg, stellar_grid=grid, filter_path=filter_loc(instrument), l1=l1, l2=l2)
+    l1, l2 = filter_lambda(instrument)
+    return replace(cfg, filter_path=filter_loc(instrument), l1=l1, l2=l2)
 
 
 # Several detectors fitted jointly (a detector set, see is_detector_set) are one "instrument" of instrument_retrievals: given as a tuple/list of FILTER_LAMBDA_UM keys, carried in the
