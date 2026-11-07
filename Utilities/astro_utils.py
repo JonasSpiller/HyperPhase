@@ -2,7 +2,7 @@ import numpy as np
 from scipy.optimize import newton
 from scipy.integrate import quad
 from astropy import constants as const
-from HItargets_utils import load_filter
+from HItargets_utils import load_filter, full_lambda, filter_lambda, filter_loc
 from scipy.optimize import brentq
 from functools import lru_cache
 import warnings
@@ -272,3 +272,59 @@ def band_wavelengths(lam, T_eff, logg, feh, stellar_model=STELLAR_MODEL):
     if stellar_model == "blackbody": return lam
     wave = stellar_spectrum(T_eff, logg, feh, stellar_model)[0]
     return np.union1d(lam, wave[(wave > lam.min()) & (wave < lam.max())])
+
+
+# --------------------------------------------------------------------------
+# Limb darkening (ExoTiC-LD)
+# --------------------------------------------------------------------------
+
+# Quadratic limb darkening of the transit, fitted with ExoTiC-LD (Grant & Wakeford 2024) to the specific intensities I(mu) of its stellar grids and band-weighted with the
+# throughput files of the forward model (ExoTiC-LD intensities are photon rates, the throughputs electrons per photon: the fspiderman weighting). The NewEra cube cannot do this,
+# it has no angular dependence. Model files are downloaded on first use into LD_DATA. exotic_ld is imported inside quad_ld, so the rest of astro_utils does not depend on it.
+# Used by Stellar Model/LimbDarkening.ipynb.
+LD_DATA = str(newera_utils.NEWERA_DIR.parent / "ExoTiC-LD")   # Stellar Model/ExoTiC-LD (gitignored, like NewEra/): model cache, filled on first use
+LD_GRID_TEFF_MIN = {"phoenix": 2300., "mps1": 3500., "mps2": 3500., "kurucz": 3500., "stagger": 4000.}   # [K] lower T_eff edge of each ExoTiC-LD grid; below it ExoTiC-LD silently falls back to the nearest model
+LD_MU_MIN = 0.1     # ExoTiC-LD default; the steep drop of spherical models at the very limb is not fitted
+A_PER_M = 1e10      # ExoTiC-LD takes wavelengths in Angstrom
+
+# Quadratic (u1, u2) of one host star (PlanetParams: T2_eff, logg, feh) per band (instrument keys of HItargets_utils), and the model I(mu)/I(1) each fit was made to.
+# Returns (rows, profiles): one dict per band (ld_model, planet, T_eff, logg, feh, band, u1, u2, in_grid, covered) and {band: (mu, I_mu)}.
+# in_grid = False: T_eff below the grid (nearest-model fallback). covered = False: the band extends beyond the wavelength range of the stellar model (ExoTiC-LD then integrates
+# only the overlap; no overlap gives NaN and a printed note).
+def quad_ld(planet, bands, ld_model, interpolate_type="nearest", mu_min=LD_MU_MIN, ld_data_path=LD_DATA):
+    from exotic_ld import StellarLimbDarkening
+    sld = StellarLimbDarkening(M_H=planet.feh, Teff=planet.T2_eff, logg=planet.logg, ld_model=ld_model,
+                               ld_data_path=ld_data_path, interpolate_type=interpolate_type, verbose=0)
+    wl_model = sld.stellar_wavelengths.min(), sld.stellar_wavelengths.max()
+    rows, profiles = [], {}
+    for band in bands:
+        lam, T = load_filter(full_lambda(band), filter_loc(band))          # [m], electrons per photon, as in the forward model
+        wl_band = filter_lambda(band) * A_PER_M
+        try:
+            u1, u2 = sld.compute_quadratic_ld_coeffs(wl_band, "custom", custom_wavelengths=lam * A_PER_M, custom_throughput=T, mu_min=mu_min)
+            profiles[band] = (sld.mus.copy(), sld.I_mu.copy())              # I_mu is set by the call above
+        except ValueError as err:                                           # no overlap with the model's wavelength range
+            print(f"{ld_model}, {planet.name}, {band}: {err}")
+            u1 = u2 = np.nan
+        rows.append(dict(ld_model=ld_model, planet=planet.name, T_eff=planet.T2_eff, logg=planet.logg, feh=planet.feh, band=band, u1=u1, u2=u2,
+                         in_grid=planet.T2_eff >= LD_GRID_TEFF_MIN[ld_model], covered=wl_model[0] <= wl_band[0] and wl_band[1] <= wl_model[1]))
+    return rows, profiles
+
+
+# Bolometric intensity profile I_bol(mu)/I_bol(1) of one host star (PlanetParams: T2_eff, logg, feh) from an ExoTiC-LD grid, to compare with the linear law of u_B (the irradiance).
+# ExoTiC-LD intensities are photon rates per Angstrom, so the energy weight is 1/lambda (constants cancel in the normalisation); integrated over the whole wavelength range of
+# the grid on its own samples. Returns (mu ascending, I_bol(mu)/I_bol(1), u_lin, f_out): u_lin is the least-squares linear coefficient over mu >= mu_min, f_out the fraction
+# of a blackbody's sigma T_eff^4 outside the grid's wavelength range (what the profile misses; PHOENIX stops at 5.5 um, MPS-ATLAS reaches 160 um).
+def bolometric_ld_profile(planet, ld_model, interpolate_type="nearest", mu_min=LD_MU_MIN, ld_data_path=LD_DATA):
+    from exotic_ld import StellarLimbDarkening
+    sld = StellarLimbDarkening(M_H=planet.feh, Teff=planet.T2_eff, logg=planet.logg, ld_model=ld_model,
+                               ld_data_path=ld_data_path, interpolate_type=interpolate_type, verbose=0)
+    wl, mu = sld.stellar_wavelengths, sld.mus                                                 # [A]
+    I_bol = np.trapezoid(sld.stellar_intensities / wl[:, None], wl, axis=0)                   # photons -> energy
+    o = np.argsort(mu)
+    mu, I_bol = mu[o], I_bol[o] / I_bol[o][-1]
+    x = -(1. - mu[mu >= mu_min])
+    u_lin = np.dot(x, I_bol[mu >= mu_min] - 1.) / np.dot(x, x)
+    T = planet.T2_eff
+    f_out = 1. - (planck_fraction_below(T, wl.max() / A_PER_M) - planck_fraction_below(T, wl.min() / A_PER_M)) / 100.
+    return mu, I_bol, u_lin, f_out

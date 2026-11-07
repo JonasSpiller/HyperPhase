@@ -3,6 +3,7 @@ from scipy.optimize import minimize_scalar
 from scipy.interpolate import RegularGridInterpolator
 from hyperillumination_phasecurve_utils import *
 from astro_utils import C_ROCHE, roche_limit_a_rs, roche_limit_period_h, kepler_period_days, rho_star, main_sequence_T_eff, main_sequence_R_star
+from HItargets_utils import ROCKY_MAX_RADE
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -476,9 +477,9 @@ def map_grid(lo, hi, n, include=None, pad=0.1, bounds=None):
 
 
 # The archive planets that fall inside a bias map (x = a/Rs = `a_over_r2`, y = `ykey`), restricted to ROCKY planets, Rp < `max_rade` Earth radii.
-# The cut must be on the ABSOLUTE radius `pl_rade`, not on Rp/Rs: a giant around an evolved star has a small ratio (Kepler-91 b, Rp/Rs = 0.022 but 15.3 R_Earth) and would otherwise sneak in.
+# The cut must be on the ABSOLUTE radius `pl_rade`, not on Rp/Rs (see HItargets_utils.ROCKY_MAX_RADE, the shared default, also used by best_hi_planets).
 # Factored out of overlay_planets so the maps and the per-planet bar figures select from exactly one sample definition; `exclude` takes loose spellings.
-def rocky_sample(AGG, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=1.7, exclude=None):
+def rocky_sample(AGG, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=ROCKY_MAX_RADE, exclude=None):
     _exo = pd.read_csv(AGG)
     drop = [exclude] if isinstance(exclude, str) else list(exclude or [])
     keep = ~_exo.pl_name.map(_norm_name).isin({_norm_name(n) for n in drop})
@@ -491,7 +492,7 @@ def rocky_sample(AGG, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=1.7, exclude=Non
                  & (_phys[ykey] >= ylim[0]) & (_phys[ykey] <= ylim[1])]
 
 
-def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10, max_rade=1.7, target=None, exclude=None, mark_target=True):
+def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), n_highlight=10, max_rade=ROCKY_MAX_RADE, target=None, exclude=None, mark_target=True):
     """Overplot the rocky_sample planets that fall inside the current bias map (x = a/Rs = `a_over_r2`, y = `ykey`).
     The `n_highlight` planets with the smallest a/Rs get individual colours + legend labels (name, a/Rs, ESM); the rest are faint background dots.
 
@@ -794,7 +795,7 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
             for sign in (-1., 1.):
                 ax.plot((1. + sign * rp_rs_of(y_line)) / cos_i, y_line, color=INK, ls="--", lw=1.2, label=r"grazing occultation ($b = 1 \mp R_p/R_\star$)" if sign > 0 else None)
         if overlay is not None: overlay(ax)
-        # known ROCKY planets (NASA Exoplanet Archive, Rp < 1.7 R_Earth), labelled with a/Rs and ESM; a target is drawn as the green star
+        # known ROCKY planets (NASA Exoplanet Archive, Rp < ROCKY_MAX_RADE R_Earth), labelled with a/Rs and ESM; a target is drawn as the green star
         overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target)
         ax.set_facecolor("0.85")
         ax.grid(False)

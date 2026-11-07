@@ -25,6 +25,11 @@ INPUT_GLOB = "NASAExoArchive_*_aggregate_short.csv"
 # Reject companions comparable in size to their star (white dwarf systems, unconverged grazing fits).
 MAX_R1_OVER_R2 = 0.3
 
+# Rocky planets: Rp < ROCKY_MAX_RADE Earth radii. The cut is on the ABSOLUTE radius pl_rade, not on Rp/Rs: a giant around an evolved star has a small ratio
+# (Kepler-91 b, Rp/Rs = 0.022 but 15.3 R_Earth) and would otherwise pass. A planet without pl_rade is dropped, as it cannot be confirmed rocky.
+# Single definition, shared by best_hi_planets and simple_bias_analysis.rocky_sample / overlay_planets.
+ROCKY_MAX_RADE = 1.7
+
 # Argument of periastron where the archive has none. 90 deg is the transit convention and is irrelevant at e = 0.
 DEFAULT_W_DEG = 90.0
 
@@ -133,10 +138,13 @@ def _params_from_row(row):
 # Planet Parameter Functions
 # --------------------------------------------------------------------------
 
-def best_hi_planets(n_planets):
-    """The n_planets archive planets most suitable for hyper-illumination, as {name: PlanetParams}, ordered strongest first."""
+def best_hi_planets(n_planets, max_rade=ROCKY_MAX_RADE):
+    """The n_planets ROCKY archive planets (pl_rade < max_rade Earth radii) most suitable for hyper-illumination, as {name: PlanetParams}, ordered strongest first.
+    max_rade=None drops the radius cut (giant planets included)."""
     df = _archive()
-    selected = df[df["hyperillum_valid"]].nsmallest(n_planets, "hyperillum_metric")
+    ok = df["hyperillum_valid"]
+    if max_rade is not None: ok = ok & (df["pl_rade"] < max_rade)   # NaN radius -> False: cannot be confirmed rocky
+    selected = df[ok].nsmallest(n_planets, "hyperillum_metric")
     return {row["pl_name"]: CUSTOM.get(row["pl_name"], _params_from_row(row)) for _, row in selected.iterrows()}
 
 def _archive_row(name):
@@ -164,9 +172,9 @@ def hi_planets_by_name(names):
             out[row["pl_name"]] = _params_from_row(row)
     return out
 
-def best_hi_planets_df(n_planets):
-    """Returns df of n_planets most suitable planets for hyper-illumination, including simple metrics."""
-    planets = best_hi_planets(n_planets)
+def best_hi_planets_df(n_planets, max_rade=ROCKY_MAX_RADE):
+    """Returns df of n_planets most suitable (rocky, see best_hi_planets) planets for hyper-illumination, including simple metrics."""
+    planets = best_hi_planets(n_planets, max_rade=max_rade)
     df = pd.DataFrame([[name, *params.args, params.T14, params.terminator_penumbra(unit="deg"), params.terminator_nightside(unit="deg"), params.fraction_illuminated()*100, params.substellar_boost()*100] for name, params in planets.items()],
                         columns=["Name", "Period [d]", "Incl [°]", "Ecc", "w [°]", "Rp/Rs", "Rs/Rs", "a/Rs", "Ts_eff [K]", "a [AU]", "T14 [h]", "gamma_f [°]", "gamma_t [°]", "f_illum [%]", "sub_boost [%]"])
     return df[["Name", "Period [d]", "Incl [°]", "Ecc", "w [°]", "Rp/Rs", "Rs/Rs", "a/Rs", "a [AU]", "Ts_eff [K]", "T14 [h]", "gamma_f [°]", "gamma_t [°]", "f_illum [%]", "sub_boost [%]"]]

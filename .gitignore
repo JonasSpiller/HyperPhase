@@ -69,8 +69,7 @@ ENV/
 /NASAExoplanetArchive/pscomppars_*
 NASAExoplanetArchive/ExoArchive_analysis.ipynb
 /Hyperillumination/Supplements/
-/Stellar Model/Pandexo/*
-/Stellar Model/NewEra/
+/Stellar Model/ExoTiC-LD/
 /Dynesty Fits/more runs/OLD_before_midpoint_binning/dynesty_results/
 /Dynesty Fits/more runs/
 /Hyperillumination/Plots TOI-2431b/
@@ -78,4 +77,6 @@ NASAExoplanetArchive/ExoArchive_analysis.ipynb
 /Dynesty Fits/more runs/OLD_before_Tfloor_removal/dynesty_results/
 *.pptx
 /InstellCa_Comparison/outfiles/
-/Stellar Model/compare_stellar_models.ipynb
+/Stellar Model/NewEra/raw/
+/Stellar Model/NewEra/newera_cube_axes.npz
+/Stellar Model/NewEra/newera_cube_flux.npy
