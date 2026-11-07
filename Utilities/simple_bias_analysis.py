@@ -3,7 +3,7 @@ from scipy.optimize import minimize_scalar
 from scipy.interpolate import RegularGridInterpolator
 from hyperillumination_phasecurve_utils import *
 from astro_utils import C_ROCHE, roche_limit_a_rs, roche_limit_period_h, kepler_period_days, rho_star, main_sequence_T_eff, main_sequence_R_star
-from HItargets_utils import ROCKY_MAX_RADE
+from HItargets_utils import ROCKY_MAX_RADE, A_B_BOUNDS, F_BOUNDS
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -97,8 +97,8 @@ def _chi2_problem(cfg, truth, insolation_model, free_offset=True, refl_unit=None
     return resid, cost, sigma
 
 
-# Best-fit naive albedo A (= A_B) against a hyperillumination-generated truth, returning (A_fit, chi2, resid_rms).
-def fit_naive(cfg, truth, free_offset=True, bounds=(0.0, 0.6), xatol=1e-4, **kw):
+# Best-fit naive Bond albedo A_B against a hyperillumination-generated truth, returning (A_fit, chi2, resid_rms); the band albedo A follows from cfg.A_.
+def fit_naive(cfg, truth, free_offset=True, bounds=A_B_BOUNDS, xatol=1e-4, **kw):
     resid, cost, _ = _chi2_problem(cfg, truth, "naive", free_offset=free_offset, **kw)
     res = minimize_scalar(cost, bounds=bounds, method="bounded", options={"xatol": xatol})
     r = resid(res.x)
@@ -116,7 +116,7 @@ F_SCAN_FRAC = np.array([0., 0.004, 0.01, 0.02, 0.04, 0.08, 0.15, 0.3, 0.6, 1.])
 # Why not a 2-D local optimizer: the K&L nightside is T ∝ F^(1/4), so the model's response to F switches on extremely flat at F = 0 (residual change ∝ F^~1.5; measured, MIRI/LRS, a/Rs = 2.42, T_eff = 4000 K).
 # The F = 0 edge is then a near-stationary trap: the former Nelder-Mead fit, started on it, collapsed onto F = 0 in about half the bias-map cells (chi2 0.445 instead of 0.226 there), and gradient methods see ~zero dchi2/dF.
 # Profiling also makes the outer problem insensitive to the inner tolerance (the profile error is second order in the A_B error). ~250 model evaluations per fit.
-def fit_redist(cfg, truth, free_offset=True, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), xatol=1e-5, F_xatol=1e-5, **kw):
+def fit_redist(cfg, truth, free_offset=True, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, xatol=1e-5, F_xatol=1e-5, **kw):
     resid, cost, _ = _chi2_problem(cfg, truth, "naive_redist", free_offset=free_offset, **kw)
 
     def profile(F):   # (chi2, A_B) at the best A_B for fixed F
@@ -170,7 +170,7 @@ def chi2_region(d_chi2, AB_grid, F_grid, level=2.30):
 # The truth has F = 0, so F_fit is itself the bias in F. The two fits are independent (fit_redist needs no start).
 # fisher=True adds the Fisher sigmas, evaluated at the FITS, where the misspecified model's posterior sits.
 # cfg may be a detector set (see is_detector_set): one truth per detector, shared (A_B, F), a baseline per detector.
-def fit_truth(cfg, A_B_true, models=("naive",), free_offset=True, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), fisher=False, **kw):
+def fit_truth(cfg, A_B_true, models=("naive",), free_offset=True, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, fisher=False, **kw):
     truth = [model_pcurve(c, "hyperillum", A_B_true, **kw)[1] for c in cfg] if is_detector_set(cfg) else model_pcurve(cfg, "hyperillum", A_B_true, **kw)[1]   # noiseless data
     out = {}
     if "naive" in models:
@@ -218,7 +218,7 @@ def _fit_truth_at(cfg, A_B_true, models, bounds, kw):
 
 # Refit the models at every TRUE Bond albedo in A_B_grid (single target geometry, free baseline), in parallel.
 # Returns {model: {name: array}} with the keys of fit_truth (fisher=True): "naive" always, "naive_redist" with redist=True.
-def bias_vs_true_AB(cfg, A_B_grid, redist=True, bounds=(0., 1.), n_jobs=-1, **kw):
+def bias_vs_true_AB(cfg, A_B_grid, redist=True, bounds=A_B_BOUNDS, n_jobs=-1, **kw):
     models = ("naive", "naive_redist") if redist else ("naive",)
     rows = pmap(_fit_truth_at, [(cfg, a, models, bounds, kw) for a in A_B_grid], n_jobs)
     return {m: {k: np.array([r[m][k] for r in rows]) for k in rows[0][m]} for m in models}
@@ -231,7 +231,7 @@ def _bounded_diff(fn, x, h, bounds):
 
 # Fisher covariance of (A_B) or (A_B, F), the baseline(s) marginalised (free_offset removes the mean from each detector's residual): C = (J' W J)^-1, W = diag(1 / sigma^2).
 # Its diagonal gives fisher_sigma; the off-diagonal is the A_B-F correlation that a DERIVED quantity (e.g. the occultation depth, fisher_depth) needs. cfg may be a detector set.
-def fisher_covariance(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A=1e-3, h_F=1e-3, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), refl_unit=None, **kw):
+def fisher_covariance(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A=1e-3, h_F=1e-3, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, refl_unit=None, **kw):
     # truth=None: the residual is (truth - model), so any constant truth cancels in a central difference
     resid, _, sigma = _chi2_problem(cfg, None, insolation_model, free_offset=free_offset, refl_unit=refl_unit, **kw)
 
@@ -272,7 +272,7 @@ def model_depth(cfg, insolation_model, A_B_, F=None, n_layers=DEPTH_N_LAYERS, **
 # Fisher sigma of the occultation depth of a fit, propagated from the parameter covariance: sigma_d^2 = g' C g with g = d(depth)/d(A_B, F) (same steps and bounds as fisher_covariance).
 # Exact to first order: the depth is a smooth function of (A_B, F). Returns (depth, sigma_depth) [ppm].
 # For a detector set, C comes from the joint fit and the depth is that of `depth_cfg`, one of its detectors (the depth is a per-band quantity; default: the first detector).
-def fisher_depth(cfg, insolation_model, A_B_, F=None, h_A=1e-3, h_F=1e-3, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), n_layers=DEPTH_N_LAYERS, depth_cfg=None, **kw):
+def fisher_depth(cfg, insolation_model, A_B_, F=None, h_A=1e-3, h_F=1e-3, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, n_layers=DEPTH_N_LAYERS, depth_cfg=None, **kw):
     C = fisher_covariance(cfg, insolation_model, A_B_, F=F, h_A=h_A, h_F=h_F, bounds=bounds, F_bounds=F_bounds, **kw)
     if depth_cfg is None: depth_cfg = cfg[0] if is_detector_set(cfg) else cfg
     depth = lambda a, f: model_depth(depth_cfg, insolation_model, a, F=f, n_layers=n_layers, **kw)
@@ -299,7 +299,7 @@ def is_railed(x, bounds, rail_tol=RAIL_TOL):
     x = np.asarray(x, dtype=float)
     return ((x - bounds[0]) < rail_tol) | ((bounds[1] - x) < rail_tol)
 
-def fit_railed(fit, bounds, F_bounds=(0.0, 0.5), rail_tol=RAIL_TOL):
+def fit_railed(fit, bounds, F_bounds=F_BOUNDS, rail_tol=RAIL_TOL):
     """Rail test of one model's fit_truth result: A_B on either bound, or (joint fit) F on its upper bound."""
     return bool(is_railed(fit["A_B_fit"], bounds, rail_tol)) or ("F_fit" in fit and (F_bounds[1] - fit["F_fit"]) < rail_tol)
 
@@ -307,7 +307,7 @@ def fit_railed(fit, bounds, F_bounds=(0.0, 0.5), rail_tol=RAIL_TOL):
 # One grid cell of a bias map: generate the hyperillumination truth, fit the naive model, return the recovered-A_B bias.
 # NaN if the fit railed against a bound, i.e. the naive model cannot reproduce the truth at ANY albedo.
 # redist=True fits naive_redist (A_B and F) instead and returns (A_B bias, F_fit); the truth has no redistribution, so F_fit is itself the bias in F.
-def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, temp_bias=False, bounds=(0.0, 0.6), redist=False, F_bounds=(0.0, 0.5), **kw):
+def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, temp_bias=False, bounds=A_B_BOUNDS, redist=False, F_bounds=F_BOUNDS, **kw):
     """Recovered-A_B bias for one map cell. NaN if the fit railed against a bound,
     i.e. the naive model cannot reproduce the truth at ANY albedo.
     With redist=True: (A_B bias, F_fit), both NaN on a rail. F_fit = 0 is a valid fit, only F's upper bound counts as a rail."""
@@ -334,7 +334,7 @@ def bias_map_grid(cfg, A_B_true, a_rs_grid, y_grid, y_param, redist=False, n_job
 
 
 # The 1-D counterpart of bias_map_grid along a/Rs alone (the limit curve of HypotheticalExtremePlanet.ipynb): both fits with their Fisher sigmas at every a/Rs, one DataFrame row per point.
-# bounds=(0, 1) by default, the physical range, so `railed` means the model cannot reproduce the truth at any albedo (fit_railed); the fitted values are kept, so the caller decides what to do with them.
+# bounds=A_B_BOUNDS by default, the physical range, so `railed` means the model cannot reproduce the truth at any albedo (fit_railed); the fitted values are kept, so the caller decides what to do with them.
 # rho_star [g/cm^3]: with it each point gets the period a circular orbit at that a/Rs has around a star of that mean density (kepler_period_days). The period never enters the bias,
 # only sigma_bin, so the Fisher sigmas and chi2 then belong to a physically consistent orbit; None keeps cfg.planet.period at every point.
 # Columns: a_rs, period_h, sigma_bin; A_B_fit, bias, sigma, chi2, railed (A_B-only fit); A_B_fit_J, bias_J, sigma_J, F_fit, sigma_F, chi2_J, railed_J (joint fit); each model's block only if it is in `models`.
@@ -351,7 +351,7 @@ def _bias_vs_a_rs_point(cfg, A_B_true, a_rs, rho_star, models, bounds, F_bounds,
     return row
 
 
-def bias_vs_a_rs(cfg, A_B_true, a_rs_grid, rho_star=None, models=("naive", "naive_redist"), bounds=(0., 1.), F_bounds=(0., 0.5), n_jobs=-1, **kw):
+def bias_vs_a_rs(cfg, A_B_true, a_rs_grid, rho_star=None, models=("naive", "naive_redist"), bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
     """fit_truth (both models, Fisher sigmas) at every a/Rs of a_rs_grid, points in parallel, as a DataFrame; see the comment above for the columns and the rho_star / bounds conventions."""
     return pd.DataFrame(pmap(_bias_vs_a_rs_point, [(cfg, A_B_true, float(a), rho_star, models, bounds, F_bounds, kw) for a in a_rs_grid], n_jobs))
 
@@ -370,14 +370,14 @@ def sweep_geometry(cfg, a_rs_grid):
 # NOT F_fit / sigma_F: the Fisher sigma_F is the slope AT F_fit, but the model responds ∝ F^~1.5 near 0, so the quadratic extrapolation to F = 0 overstates the significance (by ~1.4x
 # on TOI-2431 b / NRS1), and it ignores the boundary. dchi2_F ∝ n_orbits / sigma_1min^2 exactly (the fits do not depend on the noise scale), see critical_sigma_1min.
 # One map cell: (dchi2_F, F_fit); NaN on a rail, as in bias_cell. dchi2_F >= 0 since the A_B-only model is the F = 0 member of the joint one; tiny negative values from the tolerances are clipped.
-def false_F_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), **kw):
+def false_F_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, **kw):
     d = false_F_fit(cfg, A_B_true, free_offset=free_offset, rail_tol=rail_tol, bounds=bounds, F_bounds=F_bounds, **kw)
     return d["dchi2_F"], d["F_fit"]
 
 
 # Both fits and the statistic as a dict (the row of the false-positive tables): A_B_fit_naive, chi2_naive, A_B_fit, F_fit, chi2_joint, dchi2_F (NaN on a rail) and T_night_fit, the nightside
 # temperature [K] that the fitted (A_B, F) imply (Kreidberg & Loeb eq. 1): what the false positive would be reported as. cfg may be a detector set.
-def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=(0.0, 0.6), F_bounds=(0.0, 0.5), **kw):
+def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, **kw):
     from hyperillumination_utils import surface_temperature
     fit = fit_truth(cfg, A_B_true, models=("naive", "naive_redist"), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)
     n, r = fit["naive"], fit["naive_redist"]
@@ -931,7 +931,7 @@ def _planet_bias_row(cfg, A_B_true, pl, s1, redist, bounds, F_bounds, kw):
 # sigma_1min_crit = sigma_1min * |bias| / sigma is exact rather than an extrapolation: the bias does not depend on the noise, and the Fisher sigma is strictly proportional to sigma_1min.
 # verdict (bias_verdict): "needs hyperillum" / "naive OK" / "unconstrained" — the last where sigma >= the flat-prior std of `bounds` (A_B) or `F_bounds` (F), i.e. where the fit does not measure the quantity at all.
 # AGG: archive aggregate path; with it the table carries each planet's ESM (`esm`, NaN where the archive has none) for the figure's tick labels.
-def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity=None, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), AGG=None, n_jobs=-1, **kw):
+def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity=None, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, AGG=None, n_jobs=-1, **kw):
     quantity = quantity or "A_B"
     if quantity not in ("A_B", "F"): raise ValueError(f'quantity must be "A_B" or "F", got {quantity!r}')
     if quantity == "F" and not redist: raise ValueError('quantity="F" needs redist=True (only the joint fit has an F)')
@@ -962,7 +962,7 @@ def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity
 
 
 # The planets of a planet_bias_table whose A_B fit railed (A_B_fit = bias_A_B + A_B_true on a bound of the fit's `bounds`): the table keeps their fitted values, so this is the list to print next to it.
-def railed_names(tab, A_B_true, bounds=(0.0, 1.0)):
+def railed_names(tab, A_B_true, bounds=A_B_BOUNDS):
     return list(tab.loc[is_railed(tab["bias_A_B"] + A_B_true, bounds), "name"])
 
 
@@ -1000,7 +1000,7 @@ def _planet_false_F_row(cfg, A_B_true, pl, s1, bounds, F_bounds, kw):
 
 # False-positive F for a SAMPLE of planets on one instrument, each at its own geometry and noise (the counterpart of planet_bias_table; same inputs, same handling of planets without a noise
 # level). Sorted by a/Rs. z: the significance the decision refers to.
-def planet_false_F_table(cfg, A_B_true, planets, sigma_1min, z=2., bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), AGG=None, n_jobs=-1, **kw):
+def planet_false_F_table(cfg, A_B_true, planets, sigma_1min, z=2., bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, AGG=None, n_jobs=-1, **kw):
     pls = list(planets.values()) if isinstance(planets, dict) else list(planets)
     missing = [pl.name for pl in pls if pl.name not in sigma_1min]
     if len(missing) == len(pls): raise ValueError(f"no planet has a sigma_1min entry (planets: {missing}; sigma_1min has {sorted(sigma_1min)}), so there is nothing to tabulate")
@@ -1026,7 +1026,7 @@ def _instrument_false_F_row(cfg, A_B_true, pl, instrument, sigma_1min, bounds, F
 
 # False-positive F for one planet on several instruments (the counterpart of instrument_retrievals: same `instruments` entries incl. tuples for a joint fit of several detectors, same
 # sigma_1min handling). A joint fit's sigma_1min_crit is NaN; its noise_margin applies to all its detectors alike.
-def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), n_jobs=-1, **kw):
+def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
     from HItargets_utils import rms_1min, NoNoiseLevelError
     instruments = [instrument_key(ins) for ins in instruments]
     dets = list(dict.fromkeys(d for ins in instruments for d in detectors(ins)))
@@ -1125,7 +1125,7 @@ def _instrument_row(cfg, A_B_true, pl, instrument, sigma_1min, redist, bounds, F
 # sigma_1min: {detector: ppm/min}; by default HItargets_utils.rms_1min per detector (PandExo, or CUSTOM_SIGMA_1MIN where PandExo has no mode). PandExo is not cached, so pass the
 # returned table's attrs["sigma_1min"] back in to refit without rerunning it. Instruments with a detector without a noise level are left out with a note.
 # Returns a DataFrame in the order of `instruments`, with the verdict of each fit (bias_verdict on A_B, at the flat-prior std of `bounds`).
-def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigma_1min=None, bounds=(0.0, 1.0), F_bounds=(0.0, 0.5), n_jobs=-1, **kw):
+def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigma_1min=None, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
     from HItargets_utils import rms_1min, NoNoiseLevelError
     instruments = [instrument_key(ins) for ins in instruments]
     dets = list(dict.fromkeys(d for ins in instruments for d in detectors(ins)))

@@ -9,7 +9,7 @@ import dynesty
 from dynesty.pool import Pool
 from joblib import Parallel, delayed
 import contextlib
-from hyperillumination_phasecurve_utils import model_pcurve, reflected_unit, insolation_cache, pcurve_params, occultation_depth, custom_temperature_grid, swept_planet  # forward model, its geometry-only caches, and the pieces the derived quantities need
+from hyperillumination_phasecurve_utils import DEFAULT_N_LO, DEFAULT_N_LA, model_pcurve, reflected_unit, insolation_cache, pcurve_params, occultation_depth, custom_temperature_grid, swept_planet  # forward model, its geometry-only caches, and the pieces the derived quantities need
 import astro_utils   # T_bright
 from dynesty import utils as dyfunc
 from scipy.ndimage import gaussian_filter
@@ -1041,7 +1041,7 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     if y_floor is not None:
         if verbose:
             print(f"\nnumerical floor: {insolation_truth} at the injected theta vs its own truth curve, chi2 = {chi2_tr(y_floor):.3f}   max |diff| = {np.abs(y_floor - y_true).max():.2f} ppm = {np.abs(y_floor - y_true).max() / s_bin:.2f} sigma_bin")
-            print(f"   the likelihood runs model_pcurve at its DEFAULTS (n_t=50*n_bins, n_lo=300, n_la=150), the truth at {truth_kw} - anything here is grid resolution, not model bias")
+            print(f"   the likelihood runs model_pcurve at its DEFAULTS (n_t=50*n_bins, n_lo={DEFAULT_N_LO}, n_la={DEFAULT_N_LA}), the truth at {truth_kw} - anything here is grid resolution, not model bias")
         r = out["bias_over_floor"]
         print(f"   bias / floor = {chi2_naive0:.3f} / {out['chi2_floor']:.3f} = {r:.1f}x   ->   " + ("bias resolved" if r >= 10. else "NOT RESOLVED - refine model_kw (n_lo, n_la, n_layers, n_t) before quoting any bias from this run"))
     return fig, (ax, axr), out

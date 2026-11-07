@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.p
 import contextlib, io
 with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
     import fspiderman as sp
-from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, run_pandexo, rms_1min
+from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, run_pandexo, rms_1min, DEFAULT_A_B, DEFAULT_A, DEFAULT_U_B, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS
 from hyperillumination_phasecurve_utils import FittingConfig, ConstantBandAlbedo, ScaledBandAlbedo
 from dynesty_utils import *
 
@@ -18,14 +18,11 @@ from dynesty_utils import *
 # Planet data
 planet = hi_planets_by_name("TOI-2431 b") # "TOI-2431 b", "K2-141 b", "TOI-2260 b", "K2-157 b", KOI-1843.03
 
-u = [0.15, 0.08]  # Band-integrated (MIR) quadratic stellar limb darkening coefficients [u1, u2] (placeholders from grey Eddington atmosphere, not from target data, will be set by theoretical stellar atmosphere models)
-u_B = 0.6  # Bolometric linear stellar limb darkening coefficient (placeholder, from Sadh_Gavassino_2026)
+u, u_B = DEFAULT_U, DEFAULT_U_B   # transit and irradiance limb darkening (baseline settings, HItargets_utils.py)
 
-A_B_true = 3/2 * 0.28 # 0.42 (Ag = 0.28 geometric albedo in the optical from Zieba 2022, placeholder)
+A_B_true = DEFAULT_A_B   # injected Bond albedo (baseline settings, HItargets_utils.py)
 
-# ASSUMPTION (!): Model for band-integrated albedo in the observing band
-A_model = ConstantBandAlbedo(.1) # Band-integrated albedo of rocky surface fixed to A=0.1 (small reflected part) in MIR
-# A_model = ScaledBandAlbedo(1.)
+A_model = ConstantBandAlbedo(DEFAULT_A)   # band-integrated albedo A of the reflected light, independent of A_B
 
 # Filter to be used
 instrument = "JWST_NIRSpec.G395H_NRS1" # "MIRI/LRS" #  "MIRI/F1280W" (no PandExo mode: rms_1min takes sigma_1min from CUSTOM_SIGMA_1MIN in HItargets_utils.py)
@@ -35,8 +32,8 @@ MODELS = ("hyperillum", "naive", "naive_redist") # ("hyperillum", "naive", "naiv
 
 seed = 42
 
-n_bins = 27 # number of bins in one orbit
-n_orbits = 3 # number of orbits observed (3 orbits has been done)
+n_bins = DEFAULT_N_BINS # number of bins in one orbit
+n_orbits = DEFAULT_N_ORBITS # number of orbits observed
 
 sigma_1min_scaling = 1. # scale the noise level
 

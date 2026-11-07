@@ -1,6 +1,7 @@
 import batman
 import numpy as np
 from astro_utils import *
+from HItargets_utils import DEFAULT_U   # baseline transit limb darkening
 from astropy import constants as const
 
 c = const.c.value # m/s
@@ -39,8 +40,8 @@ def flux_occultation(planet, fp, t, t0=0.):
     params_occultation.ecc = ecc  # eccentricity
     params_occultation.w = w  # longitude of periastron (in degrees)
 
-    params_occultation.limb_dark = "quadratic"  # placeholder, limb darkening not needed for occultation
-    params_occultation.u = [0.1, 0.3]  # placeholder, limb darkening not needed for occultation
+    params_occultation.limb_dark = "quadratic"  # required by batman, irrelevant for the occultation
+    params_occultation.u = DEFAULT_U
 
     params_occultation.fp = fp  # planet-to-star flux ratio (occultation depth)
     params_occultation.t_secondary = occultation_time(period, ecc, w, t0=t0)  # time of occultation center
@@ -50,10 +51,10 @@ def flux_occultation(planet, fp, t, t0=0.):
     return m_occultation.light_curve(params_occultation)
 
 
-def flux_transit(planet, t, t0=0., u=[0.1, 0.3]):
+def flux_transit(planet, t, t0=0., u=DEFAULT_U):
     """
     Returns the primary transit light curve (normalized flux array) computed via batman.
-    Limb darkening is nonlinear with coefficients [0.5, 0.1, 0.1, -0.1].
+    Quadratic stellar limb darkening with coefficients u = [u1, u2].
     """
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
@@ -67,15 +68,15 @@ def flux_transit(planet, t, t0=0., u=[0.1, 0.3]):
     params_transit.ecc = ecc  # eccentricity
     params_transit.w = w  # longitude of periastron (in degrees)
 
-    params_transit.limb_dark = "quadratic"  # limb darkening model (assumed "quadratic", consistent with Hyperillumination model)
-    params_transit.u = u  # limb darkening coefficients [u1, u2] (placeholders, not from K2-141 data)
+    params_transit.limb_dark = "quadratic"  # limb darkening model
+    params_transit.u = u  # limb darkening coefficients [u1, u2]
 
     m_transit = batman.TransitModel(params_transit, t, max_err=0.001)  # initializes model
 
     return m_transit.light_curve(params_transit)
 
 
-def Cosine_PhaseCurve(planet, fp, offset=0, t=None, t0=0., Amp=1., u=[0.1, 0.3]):
+def Cosine_PhaseCurve(planet, fp, offset=0, t=None, t0=0., Amp=1., u=DEFAULT_U):
     """
     Returns (t, flux): timestamps and the full phase curve combining transit, secondary eclipse / occultation, and sinusoidal phase modulation.
     Phase modulation is computed from the true anomaly (correct for eccentric orbits); offset shifts the atmospheric hotspot in degrees.

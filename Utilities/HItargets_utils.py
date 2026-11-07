@@ -4,9 +4,47 @@ import numpy as np
 import pandas as pd
 from astropy import constants as const
 import matplotlib.pyplot as plt
-from hyperillumination_utils import PlanetParams
 import warnings
 warnings.filterwarnings('ignore')
+
+###########################################################################################################################
+#####
+#####   Baseline Settings
+#####
+###########################################################################################################################
+
+# The one set of model settings of the repo: the default of every function argument and FittingConfig field, and what every notebook imports.
+# Only sweeps and comparisons with other codes deviate from them, on purpose.
+
+# Bond albedo A_B, which sets the temperature map: a bare-rock value at the upper end of what airless rocky planets show.
+# Those literature values neglect hyperillumination, so for the lava planets they are likely somewhat low.
+DEFAULT_A_B = 0.2
+
+# Band-integrated albedo A of the reflected light (not a geometric albedo), independent of A_B: molten and glassy silicates reflect weakly (Essack et al. 2020).
+DEFAULT_A = 0.1
+
+# Bolometric linear limb darkening u_B of the irradiance: a model-atmosphere value instead of the grey Eddington value of 0.6.
+# For TOI-2431 b, the primary target, the bolometric profile gives 0.49 (PHOENIX) and 0.50 (MPS-ATLAS) (Stellar Model/LimbDarkening.ipynb).
+DEFAULT_U_B = 0.5
+
+# Quadratic limb darkening (u1, u2) of the batman transit. The transit is identical in both irradiation models and cancels exactly in every comparison,
+# so the value only needs to be plausible: the median of ExoTiC-LD fits over the hosts of PAPER_PLANETS, in the band throughputs of the forward model (Stellar Model/LimbDarkening.ipynb).
+DEFAULT_U = (0.09, 0.14)
+
+# Orbits observed and phase-folded. The periods are only 4-7 h, so five orbits are roughly 1-1.5 days of JWST time (about 27 h for TOI-2431 b, 34 h for K2-141 b):
+# ambitious, but within the range of a large program.
+DEFAULT_N_ORBITS = 5
+
+# Bins per orbit of the phase-folded light curve: 12 min for TOI-2431 b, 15 min for K2-141 b. The width is derived from the period, so the bins tile the orbit exactly.
+DEFAULT_N_BINS = 27
+
+# Fit ranges of the point-source fits (simple_bias_analysis): the physical ranges of A_B and of the Kreidberg & Loeb (2016) redistribution F,
+# so a fit at a bound ("railed") means the model cannot reproduce the truth with any allowed value.
+A_B_BOUNDS = (0., 1.)
+F_BOUNDS = (0., 0.5)
+
+# Imported only AFTER the baseline settings: hyperillumination_utils imports them from here.
+from hyperillumination_utils import PlanetParams
 
 ###########################################################################################################################
 #####
@@ -29,6 +67,10 @@ MAX_R1_OVER_R2 = 0.3
 # (Kepler-91 b, Rp/Rs = 0.022 but 15.3 R_Earth) and would otherwise pass. A planet without pl_rade is dropped, as it cannot be confirmed rocky.
 # Single definition, shared by best_hi_planets and simple_bias_analysis.rocky_sample / overlay_planets.
 ROCKY_MAX_RADE = 1.7
+
+# The planets of the paper (tab:targets): the twelve rocky archive planets with the smallest a/R* (aggregate of 2026-08-21), in that order. Hard-coded so that the
+# sample does not move with archive updates. best_hi_planets(12) is NOT this set: it ranks by (1 - Rp/R*)/(a/R*), which puts K2-223 b (tiny Rp/R*) ahead of TOI-561 b (no. 12 in a/R*).
+PAPER_PLANETS = ("TOI-2431 b", "TOI-2260 b", "Kepler-1340 b", "K2-141 b", "KOI-1843.03", "K2-157 b", "Kepler-990 c", "K2-183 b", "Kepler-78 b", "EPIC 206042996 c", "K2-131 b", "TOI-561 b")
 
 # Argument of periastron where the archive has none. 90 deg is the transit convention and is irrelevant at e = 0.
 DEFAULT_W_DEG = 90.0
@@ -266,6 +308,13 @@ PANDEXO_MODES = {
     "JWST_NIRSpec.G395H_NRS2": "NIRSpec G395H"  # rms_1min_pandexo then bins to the array's filter_lambda range
 }
 
+
+# The JWST bands of the paper, by band centre, and the fit list of the per-instrument analyses: every band singly plus one joint fit of the two NIRSpec/G395H arrays
+# (a tuple inside the list = one joint fit of those detectors: shared A_B / F, a baseline per detector). Lists, not tuples, so a tuple always means a joint fit.
+JWST_BANDS = ["JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2", "MIRI/LRS", "MIRI/F1280W", "MIRI/F1500W", "MIRI/F1800W"]
+JWST_RETRIEVALS = JWST_BANDS[:2] + [tuple(JWST_BANDS[:2])] + JWST_BANDS[2:]
+_bad = set(JWST_BANDS) - set(FILTER_LAMBDA_UM)
+if _bad: raise KeyError(f"JWST_BANDS uses unknown instrument(s) {sorted(_bad)}; valid keys are {list(FILTER_LAMBDA_UM)}")
 
 # Converted once at import
 FILTER_LAMBDA_M = {name: 1e-6 * np.array(r) for name, r in FILTER_LAMBDA_UM.items()}
