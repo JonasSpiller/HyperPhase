@@ -551,8 +551,8 @@ def rms_1min(planet, instrument, lrs_range=None, **overrides):
 # sigma_1min [ppm] for a whole sample of archive planets on ONE instrument: rms_1min per target, keyed by PlanetParams.name.
 # PandExo is NOT cached and takes seconds per planet, so call this once and keep the dict. A target the archive cannot supply (no T14, no magnitude) or that PandExo
 # fails on raises (KeyError / ValueError from pandexo_params, or PandExo's own error) rather than yielding NaN: a NaN sigma_1min would silently corrupt the fits downstream (planet_bias_table).
-# Only planets with no noise level at all (instrument without a PandExo mode and no CUSTOM_SIGMA_1MIN entry) are left out of the dict, with a note; planet_bias_table then drops them.
-# If that leaves no planet, NoNoiseLevelError.
+# Only planets with no noise level at all (instrument without a PandExo mode and no CUSTOM_SIGMA_1MIN entry) are left out of the dict, with a note (possibly all of them: then {}).
+# planet_bias_table fits them without a noise level (no Fisher sigma); the false-positive tables, which need one, leave them out.
 def rms_1min_pandexo_sample(names, instrument, verbose=False, **overrides):
     out, missing = {}, []
     for nm in names:
@@ -561,8 +561,6 @@ def rms_1min_pandexo_sample(names, instrument, verbose=False, **overrides):
             out[pl.name] = rms_1min(pl, instrument, verbose=verbose, **overrides)
         except NoNoiseLevelError:
             missing.append(pl.name)
-    if not out:
-        raise NoNoiseLevelError(f"no planet of the sample has a noise level on {instrument!r}: PandExo has no mode for it and CUSTOM_SIGMA_1MIN (HItargets_utils.py) has no entry for any of {missing}.")
     if missing:
-        print(f"no noise level on {instrument} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry) for {len(missing)} of {len(missing) + len(out)} planets, left out: {', '.join(missing)}")
+        print(f"no noise level on {instrument} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry) for {len(missing)} of {len(missing) + len(out)} planets: {', '.join(missing)}")
     return out

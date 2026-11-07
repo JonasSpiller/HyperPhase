@@ -81,7 +81,7 @@ def reflected_lightcurve(epsilon, planet, u_B=DEFAULT_U_B, unit="normalized", la
     n_tab: resolution of the gamma1-grid used to tabulate F_fi/F_pen
     """
     #TODO: When passing a filter T(λ) one can calculate lambda_band_ratio = ∫T(λ)B_λ(T_eff)dλ / σT_eff⁴
-    #TODO: For reflected light insolation_penumbra_hyperillum() should actually take u (MIR band), not u_B. For simplicity (since quadratic limb darkening is not implemented in the hyperillum model) we pass the bolometric u_B and assume the impact to be negligible for now.
+    #TODO: For reflected light insolation_penumbra_hyperillum() should actually take u (MIR band), not u_B. For simplicity (since quadratic limb darkening is not implemented in the hyperillum model) we pass the bolometric u_B and assume the impact to be negligible for now (reflected light only minor contribution).
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     t0 = time.perf_counter()
