@@ -1,9 +1,10 @@
 import contextlib, io
+import textwrap
 from scipy.optimize import minimize_scalar
 from scipy.interpolate import RegularGridInterpolator
 from hyperillumination_phasecurve_utils import *
-from astro_utils import C_ROCHE, roche_limit_a_rs, roche_limit_period_h, kepler_period_days, rho_star, main_sequence_T_eff, main_sequence_R_star
-from HItargets_utils import ROCKY_MAX_RADE, A_B_BOUNDS, F_BOUNDS, ROCHE_RHO_P, hi_planets_by_name
+from astro_utils import roche_period_h, roche_proximity, rocky_mean_density, kepler_period_days, kepler_a_rs, rho_star
+from HItargets_utils import ROCKY_MAX_RADE, A_B_BOUNDS, F_BOUNDS, ROCHE_CASES, ROCHE_R_P, hi_planets_by_name
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -378,7 +379,7 @@ def false_F_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_
     return d["dchi2_F"], d["F_fit"]
 
 
-# Both fits and the statistic as a dict (the row of the false-positive tables): A_B_fit_naive, chi2_naive, A_B_fit, F_fit, chi2_joint, dchi2_F (NaN on a rail) and T_night_fit, the nightside
+# Both fits and the statistic as a dict (the row of the false-positive tables): A_B_fit_naive, chi2_naive, A_B_fit, F_fit, chi2_joint, dchi2_F (NaN on a rail), railed and T_night_fit (NaN on a rail), the nightside
 # temperature [K] that the fitted (A_B, F) imply (Kreidberg & Loeb eq. 1): what the false positive would be reported as. cfg may be a detector set.
 def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, **kw):
     from hyperillumination_utils import surface_temperature
@@ -387,8 +388,8 @@ def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_B
     railed = fit_railed(n, bounds, F_bounds, rail_tol) or fit_railed(r, bounds, F_bounds, rail_tol)
     c0 = cfg[0] if is_detector_set(cfg) else cfg
     return dict(A_B_fit_naive=n["A_B_fit"], chi2_naive=n["chi2"], A_B_fit=r["A_B_fit"], F_fit=np.nan if railed else r["F_fit"], chi2_joint=r["chi2"],
-                dchi2_F=np.nan if railed else max(n["chi2"] - r["chi2"], 0.),
-                T_night_fit=float(surface_temperature(np.pi, c0.planet, "naive_redist", A_B=r["A_B_fit"], emissivity_B=c0.emissivity_B, F=r["F_fit"])))
+                dchi2_F=np.nan if railed else max(n["chi2"] - r["chi2"], 0.), railed=bool(railed),
+                T_night_fit=np.nan if railed else float(surface_temperature(np.pi, c0.planet, "naive_redist", A_B=r["A_B_fit"], emissivity_B=c0.emissivity_B, F=r["F_fit"])))
 
 
 def _false_F_cell_at(cfg, A_B_true, a_rs, y_param, y, kw):
@@ -421,7 +422,7 @@ def _norm_name(name):
 
 # A planet list as the per-planet plots (their required `planets`) and tables take it: names in any loose spelling (e.g. HItargets_utils.PAPER_PLANETS), PlanetParams,
 # or {name: PlanetParams}. planet_list returns PlanetParams (names looked up with hi_planets_by_name); planet_names only the names, without a lookup, so it also takes
-# hypothetical planets that are not in the archive (roche_planet, reference_planet).
+# hypothetical planets that are not in the archive (moved_planet, reference_planet).
 def _planet_items(planets):
     if isinstance(planets, (str, PlanetParams)): raise TypeError(f"planets must be a list of planets, not a single one ({planets!r}): wrap it in a list")
     return list(planets.values()) if isinstance(planets, dict) else list(planets)
@@ -486,15 +487,14 @@ def reference_planet(a_rs=2.5, rp_rs=0.015, T_eff=4000., incl=90., period=0.3, R
                         a_AU=a_rs * R_star_Rsun * float(const.R_sun / const.au), T14=np.nan)
 
 
-# A synthetic planet of mean density rho_p [g/cm^3] exactly at the Roche limit of a main-sequence host with rho_star = rho_ratio * rho_p: a/Rs = c rho_ratio^(1/3) and the period follow from
-# (rho_ratio, rho_p, c) alone (roche_limit_a_rs / roche_limit_period_h), T_eff and R_star from the main-sequence table (astro_utils.MAIN_SEQUENCE). Units as reference_planet (r2 = 1, so r1 = Rp/Rs);
-# T14 is NaN, only PandExo needs it and it never runs on a hypothetical planet. The name carries rho_ratio, so a set of them is told apart in tables and tick labels.
-# log g and [Fe/H] keep PlanetParams' defaults (4.5, 0); a main-sequence M dwarf has log g ~ 5, ~2 % in the mid-IR stellar flux at 3000 K (see swept_planet).
-def roche_planet(rho_ratio, rho_p, c=C_ROCHE, rp_rs=0.015, incl=90., name=None):
-    T_eff = float(main_sequence_T_eff(rho_ratio * rho_p))
-    a_rs = float(roche_limit_a_rs(rho_ratio, c))
-    return PlanetParams(name=name or f"Roche-limit planet ({rho_ratio:g})", period=float(roche_limit_period_h(rho_p, c)) / 24., incl=incl, ecc=0., w=90., r1=rp_rs, r2=1., R=a_rs, T2_eff=T_eff,
-                        a_AU=a_rs * float(main_sequence_R_star(T_eff)) * float(const.R_sun / const.au), T14=np.nan)
+# A real planet moved to another period on a circular orbit around its own host: a/R* = (a/R*)_0 (P / P_0)^(2/3) (Kepler III at the host's density), a_AU likewise. Rp/R*, the inclination
+# (so the impact parameter shrinks with a/R*), the star and its log g / [Fe/H] are kept. With period_h = the planet's Roche period (roche_periods) it is the most extreme version of a known
+# system: the same planet and star at the Roche limit of that composition. T14 is NaN (only PandExo needs it; give the moved planet its parent's sigma_1min). Raises if the planet would
+# touch the star (a/R* <= 1 + Rp/R*: SPIDERMAN aborts there).
+def moved_planet(pl, period_h, name=None):
+    s = (period_h / 24. / pl.period) ** (2. / 3.)
+    if pl.R * s <= pl.r1 + pl.r2: raise ValueError(f"{pl.name} at P = {period_h:.2f} h would touch its star (a/R* = {pl.R * s / pl.r2:.3f})")
+    return replace(pl, name=name or f"{pl.name} at {period_h:.2f} h", period=period_h / 24., R=pl.R * s, a_AU=pl.a_AU * s, T14=np.nan)
 
 
 def map_grid(lo, hi, n, include=None, pad=0.1, bounds=None):
@@ -703,13 +703,12 @@ def plot_fit_vs_truth(cfg, A_B_true, fit, seed=43, title=None, **kw):
     return fig, ax
 
 
-# Vertical marks of the limit curve, on one axes: the contact limit (hatched), the Roche limit per density ratio, the anchor planets (grey dashed).
-# Returns the legend handles (one per ratio, one per anchor, the contact span).
-def _mark_limits(ax, contact, ratios, anchors):
+# Vertical marks of the limit curve, on one axes: the contact limit (hatched), the Roche limits roche_a_rs ({label: a/R*}, e.g. kepler_a_rs(P_R / 24, rho_star) of roche_periods for the
+# sweep's host), the anchor planets (grey dashed). Returns the legend handles (one per Roche limit, one per anchor, the contact span).
+def _mark_limits(ax, contact, roche_a_rs, anchors):
     handles = [ax.axvspan(ax.get_xlim()[0], contact, facecolor="0.85", edgecolor="0.5", hatch="///", lw=0, zorder=0, label=r"inside the star ($a/R_\star < 1 + R_p/R_\star$)")]
-    for k, r in enumerate(ratios):
-        col = F_COLORS[k % len(F_COLORS)]
-        handles.append(ax.axvline(roche_limit_a_rs(r), color=col, lw=1.2, label=rf"Roche limit, $\rho_\star/\rho_p$ = {r:g}"))
+    for col, (lab, a_R) in zip(_ROCHE_COLORS, roche_a_rs.items()):
+        handles.append(ax.axvline(a_R, color=col, lw=1.2, label=rf"Roche limit, {lab}  ($a/R_\star$ = {a_R:.2f})"))
     for nm, pl in anchors.items():
         handles.append(ax.axvline(pl.R / pl.r2, color=MUTED, lw=1., ls="--", label=rf"{nm}  ($a/R_\star$ = {pl.R / pl.r2:.2f})"))
     return handles
@@ -718,14 +717,14 @@ def _mark_limits(ax, contact, ratios, anchors):
 # The limit curve: a bias_vs_a_rs sweep (both models) on a log a/Rs axis, three stacked panels - the geometry of sweep_geometry (area fractions, stellar angular radius on the right axis),
 # the biases (Delta A_B of both fits, the spurious F on the right axis, hollow markers where a fit railed, and sweep_uB0's A_B-only bias as the limb-darkening sensitivity, if given)
 # and the measurability (|Delta A_B| / sigma of both fits, sqrt(dchi2_F) of the spurious F, sqrt(chi2) of the best A_B-only fit; all four scale as 1 / sigma_1min and as sqrt(n_orbits), so
-# another noise level is a vertical shift of every curve on the log axis). _mark_limits on every panel; ratios are the rho_star / rho_p of the Roche lines, anchors {name: PlanetParams} the planets marked.
+# another noise level is a vertical shift of every curve on the log axis). _mark_limits on every panel; roche_a_rs {label: a/R*} are the Roche lines, anchors {name: PlanetParams} the planets marked.
 # cfg: the sweep's config (sigma_1min, n_orbits, n_bins for the labels and the right axis); rp_rs: the sweep's Rp/Rs (the contact limit). titles: (geometry, bias, measurability) panel titles.
-def plot_limit_curve(sweep, geo, cfg, rp_rs, ratios, anchors, sweep_uB0=None, u_B=None, titles=(None, None, None), suptitle=None):
+def plot_limit_curve(sweep, geo, cfg, rp_rs, roche_a_rs, anchors, sweep_uB0=None, u_B=None, titles=(None, None, None), suptitle=None):
     contact = 1. + rp_rs
     bad, badJ = sweep["railed"], sweep["railed_J"]
     fig, axs = plt.subplots(3, 1, figsize=(13, 15), sharex=True)
     for a_ in axs: a_.set_xscale("log"); a_.set_xlim(sweep["a_rs"].iloc[0], sweep["a_rs"].iloc[-1])
-    limit_handles = [_mark_limits(a_, contact, ratios, anchors) for a_ in axs][0]
+    limit_handles = [_mark_limits(a_, contact, roche_a_rs, anchors) for a_ in axs][0]
 
     a0 = axs[0]
     h = [a0.plot(geo["a_rs"], geo["fully_illuminated"], color=C_HI, lw=1.5, label="fully illuminated fraction")[0],
@@ -778,8 +777,8 @@ def plot_limit_curve(sweep, geo, cfg, rp_rs, ratios, anchors, sweep_uB0=None, u_
     return fig, axs
 
 
-# The printed summary of a limit curve: the rail boundaries, the largest non-railed biases, the u_B sensitivity (if sweep_uB0 is given) and the sweep read off at each ratio's Roche limit.
-def print_limit_curve(sweep, A_B_true, ratios, sweep_uB0=None, u_B=None):
+# The printed summary of a limit curve: the rail boundaries, the largest non-railed biases, the u_B sensitivity (if sweep_uB0 is given) and the sweep read off at each Roche limit of roche_a_rs.
+def print_limit_curve(sweep, A_B_true, roche_a_rs, sweep_uB0=None, u_B=None):
     ok, okJ = ~sweep["railed"], ~sweep["railed_J"]
     print(f"A_B-only fit railed at {int((~ok).sum())} of {len(sweep)} points" + (f" (a/Rs <= {sweep.loc[~ok, 'a_rs'].max():.3f})" if (~ok).any() else "")
           + f";  joint fit railed at {int((~okJ).sum())}" + (f" (a/Rs <= {sweep.loc[~okJ, 'a_rs'].max():.3f})" if (~okJ).any() else ""))
@@ -792,10 +791,9 @@ def print_limit_curve(sweep, A_B_true, ratios, sweep_uB0=None, u_B=None):
     if sweep_uB0 is not None:
         both = ok & ~sweep_uB0["railed"]
         print(f"u_B sensitivity: max |bias(u_B = {u_B:g}) - bias(u_B = 0)| = {np.max(np.abs(sweep.loc[both, 'bias'] - sweep_uB0.loc[both, 'bias'])):.4f} over the {int(both.sum())} points where neither fit railed" if both.any() else "u_B sensitivity: no point where neither fit railed")
-    for r in ratios:   # linear interpolation of the sweep at each ratio's Roche limit (NaN outside the sweep range)
-        a_R = float(roche_limit_a_rs(r))
+    for lab, a_R in roche_a_rs.items():   # linear interpolation of the sweep at each Roche limit (NaN outside the sweep range)
         at = lambda col: np.interp(a_R, sweep["a_rs"], sweep[col], left=np.nan, right=np.nan)
-        print(f"at the Roche limit of rho_star/rho_p = {r:<4g} (a/Rs = {a_R:.2f}): Delta A_B = {at('bias'):+.3f} (A_B-only), {at('bias_J'):+.3f} (joint), F = {at('F_fit'):.4f}, misfit {np.sqrt(at('chi2')):.2f} sigma")
+        print(f"at the Roche limit, {lab} (a/Rs = {a_R:.2f}): Delta A_B = {at('bias'):+.3f} (A_B-only), {at('bias_J'):+.3f} (joint), F = {at('F_fit'):.4f}, misfit {np.sqrt(at('chi2')):.2f} sigma")
 
 
 # Stacked bias maps on a shared a/R* axis: |Delta A_B| (top), the relative bias |Delta A_B|/A_B (middle) and, if F_map is given, the fitted F of the joint fit (bottom).
@@ -808,7 +806,7 @@ def print_limit_curve(sweep, A_B_true, ratios, sweep_uB0=None, u_B=None):
 # rp_rs_of(y) is Rp/R* at the map's y values; incl [deg] is the inclination the map was computed at (cfg.planet.incl).
 # The maps are planet-agnostic: target=None highlights no planet; a PlanetParams there is drawn as the green star (and dropped from the archive scatter). title overrides the suptitle.
 # planets (required): the labelled archive planets (overlay_planets), e.g. HItargets_utils.PAPER_PLANETS; those outside the map box are listed in a note.
-# roche: the Roche frontier (draw_roche_frontier) on every panel of an (a/R*, T_eff) map - True: the compositions of HItargets_utils.ROCHE_RHO_P, a {label: rho_p [g/cm^3]} dict:
+# roche: the Roche frontier (draw_roche_frontier) on every panel of an (a/R*, T_eff) map - True: roche_periods() (HItargets_utils.ROCHE_CASES at ROCHE_R_P), a {label: P_R [h]} dict:
 # those, False: none. Only a T_eff axis fixes the host density (main sequence), so other maps never show it.
 def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl=90., F_map=None, F_levels=(0.01, 0.02, 0.05),
                    show_absolute=True, show_relative=False, show_F=False, target=None, title=None, roche=True, legend_fontsize=12, *, planets):
@@ -865,44 +863,53 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
     return fig, axs
 
 
-# The Roche frontier on an (a/Rs, T_eff) map, for main-sequence hosts: a_R/Rs(T_eff) = C_ROCHE [rho_star(T_eff) / rho_p]^(1/3) per composition of rho_p_cases ({label: rho_p [g/cm^3]}),
-# the region left of the most permissive curve (densest composition) hatched - inside the Roche limit for every density shown, under the main-sequence and rho_p assumptions - and the
-# contact limit a/Rs = 1 + Rp/Rs (rp_rs_of, as in plot_bias_maps) as a dashed line where it reaches into the map. Legend entries only for what lies inside the map.
-# plot_bias_maps / plot_false_F_map draw it (roche=...); roche_allowed_masks gives the cell masks the statistics need ({composition: bool array of the map's shape,
-# True where a/Rs is beyond that composition's limit}).
+# Roche periods [h] of the compositions in `cases` ({label: (iron mass fraction, rho_0 / rho_mean)}, default HItargets_utils.ROCHE_CASES) for a rock/iron planet of radius R_p [R_E]
+# (default ROCHE_R_P): mean density from astro_utils.rocky_mean_density (Fortney et al. 2007), P_R from astro_utils.roche_period_h (Rappaport et al. 2013 eq. 5). The labels carry R_p.
+# This is what roche=True draws on the maps; in period the limits hold for any host.
+def roche_periods(cases=None, R_p=ROCHE_R_P):
+    cases = ROCHE_CASES if cases is None else cases
+    return {f"{lab}, {R_p:g} $R_\\oplus$": float(roche_period_h(rocky_mean_density(R_p, fe), q)) for lab, (fe, q) in cases.items()}
+
+# The Roche frontier on an (a/Rs, T_eff) map, for main-sequence hosts: a_R/Rs(T_eff) = kepler_a_rs(P_R, rho_star(T_eff)) per Roche period of `periods` ({label: P_R [h]}, roche_periods),
+# the region left of the innermost curve (shortest P_R) hatched - inside every Roche limit shown, under the main-sequence assumption - and the contact limit a/Rs = 1 + Rp/Rs (rp_rs_of,
+# as in plot_bias_maps) as a dashed line where it reaches into the map. Legend entries only for what lies inside the map. The line is a main-sequence reference, not a planet's own limit:
+# the host densities of real planets scatter around rho_star(T_eff) (by 0.6-1.6x for PAPER_PLANETS), so a planet's own distance from its limit is roche_proximity(P, P_R), not its
+# position relative to the line. plot_bias_maps / plot_false_F_map draw it (roche=...); roche_allowed_masks gives the cell masks the statistics need ({label: bool array of the map's
+# shape, True where a/Rs is beyond that limit}).
 _ROCHE_COLORS = (C_HI, C_REDIST, F_COLORS[-1])
-ROCHE_HATCH_LABEL = r"inside the Roche limit for all $\rho_p$ shown (main-sequence host)"
+ROCHE_HATCH_LABEL = r"inside every Roche limit shown (main-sequence host)"
 
 def _roche_cases(roche):
-    """The {label: rho_p} of a roche= argument: True -> ROCHE_RHO_P, a dict -> itself, False / None -> None."""
-    return ROCHE_RHO_P if roche is True else (roche or None)
+    """The {label: P_R [h]} of a roche= argument: True -> roche_periods(), a dict -> itself, False / None -> None."""
+    return roche_periods() if roche is True else (roche or None)
 
-def roche_frontier_a_rs(T_eff, rho_p):
-    """a_R/Rs along a T_eff axis for main-sequence hosts."""
-    return roche_limit_a_rs(rho_star(T_eff) / rho_p)
+def roche_frontier_a_rs(T_eff, P_R_h):
+    """a_R/Rs along a T_eff axis for main-sequence hosts, for a Roche period P_R_h [h]."""
+    return kepler_a_rs(P_R_h / 24., rho_star(T_eff))
 
-def draw_roche_frontier(ax, xg, yg, rho_p_cases, rp_rs_of):
+def draw_roche_frontier(ax, xg, yg, periods, rp_rs_of):
     y_line = np.linspace(yg[0], yg[-1], 200)
     visible = lambda x: bool(np.any((x > xg[0]) & (x < xg[-1])))
-    for color, (comp, rho_p) in zip(_ROCHE_COLORS, rho_p_cases.items()):
-        x = roche_frontier_a_rs(y_line, rho_p)
-        ax.plot(x, y_line, color=color, lw=1.8, label=rf"Roche limit for $\rho_p$ = {rho_p:g} g cm$^{{-3}}$ ({comp})" if visible(x) else None)
-    x_min = roche_frontier_a_rs(y_line, max(rho_p_cases.values()))
+    for color, (lab, P_R) in zip(_ROCHE_COLORS, periods.items()):
+        x = roche_frontier_a_rs(y_line, P_R)
+        ax.plot(x, y_line, color=color, lw=1.8, label=rf"Roche limit, {lab} ($P_{{\rm R}}$ = {P_R:.1g} h)" if visible(x) else None)
+    x_min = roche_frontier_a_rs(y_line, min(periods.values()))
     ax.fill_betweenx(y_line, xg[0], np.maximum(x_min, xg[0]), facecolor="none", edgecolor=INK, hatch="///", lw=0, label=ROCHE_HATCH_LABEL if np.any(x_min > xg[0]) else None)
     x_contact = 1. + rp_rs_of(y_line)
     if visible(x_contact): ax.plot(x_contact, y_line, color=INK, lw=1.2, ls="--", label=r"contact ($a/R_\star = 1 + R_p/R_\star$)")
 
-def roche_allowed_masks(xg, yg, rho_p_cases):
+def roche_allowed_masks(xg, yg, periods):
     X, Y = np.meshgrid(xg, yg)
-    return {comp: X >= roche_frontier_a_rs(Y, rho_p) for comp, rho_p in rho_p_cases.items()}
+    return {lab: X >= roche_frontier_a_rs(Y, P_R) for lab, P_R in periods.items()}
 
-# The largest |bias| a map reaches inside each allowed region of roche_allowed_masks, one line per composition of rho_p_cases (the same labels as the map legend): the physically
-# reachable extreme instead of the box's corner.
-def print_allowed_extremes(xg, yg, bias_map, A_B_true, allowed, rho_p_cases):
+# The largest |bias| a map reaches inside each allowed region of roche_allowed_masks, one line per Roche limit of `periods` (the same labels as the map legend): the physically
+# reachable extreme (for main-sequence hosts) instead of the box's corner.
+def print_allowed_extremes(xg, yg, bias_map, A_B_true, allowed, periods):
     fin = np.isfinite(bias_map)
     print(f"non-railed cells: {fin.sum()} of {fin.size};  largest |Delta A_B| on the whole box: {np.nanmax(np.abs(bias_map)):.3f}")
     for comp, m in allowed.items():
-        label = f"Roche limit for rho_p = {rho_p_cases[comp]:g} g/cm^3 ({comp})"
+        txt = comp.replace("$R_\\oplus$", "R_E")   # plain-text label for print
+        label = f"Roche limit, {txt} (P_R = {periods[comp]:.2f} h)"
         sel = m & fin
         if not sel.any():
             print(f"  beyond the {label}: no allowed non-railed cell"); continue
@@ -1128,11 +1135,13 @@ def _false_F_bars(tab, title, figsize, ax):
     colors = [C_HI if v == FALSE_POSITIVE else (MUTED if v == "-" else C_NAIVE) for v in tab["verdict"]]
     bars = ax.bar(x, tab["z_F"].fillna(0.), color=colors, width=.6, zorder=3)
     _bar_values(ax, bars, "{:.2f}", values=tab["z_F"])
+    for xi, rl in zip(x, tab["railed"] if "railed" in tab else np.zeros(len(tab), bool)):   # no bar on a rail (dchi2_F undefined): say why
+        if rl: ax.annotate("railed:\n$A_B$ fit on\na bound", (xi, 0.), textcoords="offset points", xytext=(0, 4), ha="center", va="bottom", fontsize=8, color=MUTED)
     ax.axhline(z, color=INK, ls="--", lw=1.2)
     ax.set_ylim(0., max(1.2 * np.nanmax(tab["z_F"]), 1.3 * z))
     ax.set_ylabel(r"$\sqrt{\Delta\chi^2_F}$ [$\sigma$]")
     if by_planet:
-        ax.set_xticks(x, [f"{nm}\n$a/R_\star$ = {ar:.2f}" for nm, ar in zip(tab["name"], tab["a_rs"])], fontsize=8)
+        ax.set_xticks(x, [f"{_tick_name(nm)}\n$a/R_\\star$ = {ar:.2f}" for nm, ar in zip(tab["name"], tab["a_rs"])], fontsize=8)
     else:
         ax.set_xticks(x, [instrument_label(ins) for ins in tab["instrument"]], fontsize=8)
     ax.set_xlim(-0.6, len(tab) - 0.4)
@@ -1270,6 +1279,11 @@ def map_vs_planet_bias(tab, planets, a_rs_grid, y_grid, bias_map, y_param="T_eff
 
 
 # The exact value written at the end of each bar; below the bar for negative values, skipped where the value is NaN.
+def _tick_name(name, width=18):
+    """A planet name wrapped at spaces onto lines of <= width characters, for the tick labels of the per-planet plots (long hypothetical names collide otherwise)."""
+    return textwrap.fill(str(name), width, break_on_hyphens=False, break_long_words=False)
+
+
 def _bar_values(ax, bars, fmt, values=None, fontsize=8):
     values = [b.get_height() for b in bars] if values is None else list(values)   # `values` prints a different number than the bar height, e.g. the SIGNED bias on an |bias| bar
     for b, v in zip(bars, values):
@@ -1503,6 +1517,10 @@ def _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize
             if r.get("verdict") == VERDICT_NO_NOISE:   # no noise level: the fitted value alone, half-filled, no error bar
                 ax.plot(x, r[col], markers[k % len(markers)], ms=8, color=c, fillstyle="left", markerfacecoloralt="#fcfcfb", mew=1.6, zorder=4)
                 continue
+            if quantity == "A_B" and bool(is_railed(r[col], first.attrs.get("bounds", A_B_BOUNDS))):   # A_B on a bound: no albedo reproduces the truth, a Fisher sigma there means nothing
+                ax.plot(x, r[col], markers[k % len(markers)], ms=8, color=c, mfc="#fcfcfb", mew=1.6, zorder=4)
+                ax.annotate("railed", (x, r[col]), textcoords="offset points", xytext=(0, 8), ha="center", va="bottom", fontsize=7, color=MUTED, rotation=90)
+                continue
             for lev, alpha in zip(sorted(sigma_levels, reverse=True), np.linspace(.3, 1., len(sigma_levels))):   # widest bar first (lightest), the 1 sigma bar on top
                 ax.errorbar(x, r[col], yerr=lev * r[sig], fmt="none", ecolor=c, alpha=alpha, elinewidth=1.8, capsize=3.5, capthick=1.5, zorder=3)
             hollow = (r["verdict"] == VERDICT_UNCONSTRAINED) if quantity != "F" else (not np.isfinite(r[sig]) or r[sig] >= sigma_prior_F)
@@ -1519,7 +1537,7 @@ def _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize
         ax.set_xticklabels([instrument_label(ins) for ins in instruments], fontsize=9)
     else:   # one planet per position: its name and a/Rs (from the first table that has it)
         a_rs = {ins: next(g.loc[g[xcol] == ins, "a_rs"].iloc[0] for _, g in groups if (g[xcol] == ins).any()) for ins in instruments} if "a_rs" in first else {}
-        ax.set_xticklabels([f"{ins}\n$a/R_\\star$ = {a_rs[ins]:.2f}" if ins in a_rs else str(ins) for ins in instruments], fontsize=8)
+        ax.set_xticklabels([f"{_tick_name(ins)}\n$a/R_\\star$ = {a_rs[ins]:.2f}" if ins in a_rs else _tick_name(ins) for ins in instruments], fontsize=8)
     ax.set_xlim(-0.6, len(instruments) - 0.4)
     if ylim is not None: ax.set_ylim(*ylim)
     ax.set_ylabel(ylabel)
