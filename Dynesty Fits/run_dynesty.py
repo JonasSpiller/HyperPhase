@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.p
 import contextlib, io
 with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
     import fspiderman as sp
-from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, run_pandexo, rms_1min, DEFAULT_A_B, DEFAULT_A, DEFAULT_U_B, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS
+from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, run_pandexo, rms_1min, DEFAULT_A_B, DEFAULT_A, DEFAULT_U_B, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS, A_B_BOUNDS, F_BOUNDS, OFFSET_BOUNDS
 from hyperillumination_phasecurve_utils import FittingConfig, ConstantBandAlbedo, ScaledBandAlbedo
 from dynesty_utils import *
 
@@ -28,7 +28,7 @@ A_model = ConstantBandAlbedo(DEFAULT_A)   # band-integrated albedo A of the refl
 instrument = "JWST_NIRSpec.G395H_NRS1" # "MIRI/LRS" #  "MIRI/F1280W" (no PandExo mode: rms_1min takes sigma_1min from CUSTOM_SIGMA_1MIN in HItargets_utils.py)
 
 INSOL_TRUTH = "hyperillum"   # insolation model the simulated data are drawn from (F = 0 in the truth: any fitted F is bias)
-MODELS = ("hyperillum", "naive", "naive_redist") # ("hyperillum", "naive", "naive_redist")   # insolation models fitted to those data; each one is sampled with its OWN pset (see PSETS)
+MODELS = ("hyperillum", "naive", "naive_redist")  # insolation models fitted to those data; each one is sampled with its OWN pset (see PSETS)
 
 seed = 42
 
@@ -37,10 +37,10 @@ n_orbits = DEFAULT_N_ORBITS # number of orbits observed
 
 sigma_1min_scaling = 1. # scale the noise level
 
-# Priors (uniform); ParameterSet fixes the column order of theta and of res.samples.
-_A_B    = Parameter("A_B",    Uniform(0.0, 0.8), r"$A_B$")
-_OFFSET = Parameter("offset", Uniform(-50., 50.), "offset [ppm]")
-_F      = Parameter("F",      Uniform(0.0, 0.5), r"$F$")
+# Priors (uniform, the shared ranges of HItargets_utils); ParameterSet fixes the column order of theta and of res.samples.
+_A_B    = Parameter("A_B",    Uniform(*A_B_BOUNDS), r"$A_B$")
+_OFFSET = Parameter("offset", Uniform(*OFFSET_BOUNDS), "offset [ppm]")
+_F      = Parameter("F",      Uniform(*F_BOUNDS), r"$F$")
 PSETS = {"hyperillum":   ParameterSet((_A_B, _OFFSET)),
          "naive":        ParameterSet((_A_B, _OFFSET)),
          "naive_redist": ParameterSet((_A_B, _OFFSET, _F))}

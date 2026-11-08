@@ -51,10 +51,18 @@ DEFAULT_N_ORBITS = 5
 # Bins per orbit of the phase-folded light curve: 12 min for TOI-2431 b, 15 min for K2-141 b. The width is derived from the period, so the bins tile the orbit exactly.
 DEFAULT_N_BINS = 27
 
-# Fit ranges of the point-source fits (simple_bias_analysis): the physical ranges of A_B and of the Kreidberg & Loeb (2016) redistribution F,
-# so a fit at a bound ("railed") means the model cannot reproduce the truth with any allowed value.
+# Parameter ranges, shared by the least-squares bias analysis (simple_bias_analysis) and the nested sampling (dynesty_utils, run_dynesty.py).
+# A_B_BOUNDS, F_BOUNDS: the physical ranges of A_B and of the Kreidberg & Loeb (2016) redistribution F. They are the uniform priors of every dynesty fit, and their flat-prior std
+# defines an "unconstrained" fit (a Fisher sigma at or above it: the data add nothing to the physical range). F_BOUNDS is also the least-squares range of F.
 A_B_BOUNDS = (0., 1.)
 F_BOUNDS = (0., 0.5)
+# A_B_FIT_BOUNDS: the least-squares range of A_B, the default of every fit in simple_bias_analysis. It extends below 0 so that the bias of the point-source model stays defined where
+# it needs more absorbed energy than the star delivers to a point (A_B,fit < 0, which an observer's physical prior would cut off at 0). Only (1-A_B) enters the temperature, so a
+# negative A_B is a valid model evaluation. The lower end is never reached in practice (the deepest fit found is about -1.2: true A_B = 0 near the contact limit); a fit there,
+# or at A_B = 1, still counts as railed. Pass bounds=A_B_BOUNDS to fit within the physical range instead (railed at A_B = 0, as before 2026-11-08).
+A_B_FIT_BOUNDS = (-2., 1.)
+# Uniform prior of the free baseline offset of the dynesty fits [ppm]; the least-squares fits profile the offset out analytically.
+OFFSET_BOUNDS = (-50., 50.)
 
 # Imported only AFTER the baseline settings: hyperillumination_utils imports them from here.
 from hyperillumination_utils import PlanetParams
