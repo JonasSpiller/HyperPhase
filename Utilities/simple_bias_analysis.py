@@ -264,7 +264,7 @@ DEPTH_N_LAYERS = 200
 def model_depth(cfg, insolation_model, A_B_, F=None, n_layers=DEPTH_N_LAYERS, **kw):
     geom = {k: kw[k] for k in ("a_rs", "T_s", "rp_rs") if k in kw}
     p = pcurve_params(cfg, insolation_model, A_B_, F=F, n_layers=n_layers, **geom, **{k: kw[k] for k in ("n_lo", "n_la", "insol") if k in kw})
-    depth = occultation_depth(p, stellar_grid=cfg.stellar_grid)
+    depth = occultation_depth(p, stellar_grid=cfg.stellar_grid, emissivity=cfg.emissivity)
     if cfg.reflected:
         planet = swept_planet(cfg, **geom)
         eps_occultation = np.arccos(np.sin(np.radians(planet.incl)))   # epsilon at full phase, as in reflected_PhaseCurve
@@ -385,10 +385,10 @@ def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_B
     fit = fit_truth(cfg, A_B_true, models=("naive", "naive_redist"), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)
     n, r = fit["naive"], fit["naive_redist"]
     railed = fit_railed(n, bounds, F_bounds, rail_tol) or fit_railed(r, bounds, F_bounds, rail_tol)
-    pl = (cfg[0] if is_detector_set(cfg) else cfg).planet
+    c0 = cfg[0] if is_detector_set(cfg) else cfg
     return dict(A_B_fit_naive=n["A_B_fit"], chi2_naive=n["chi2"], A_B_fit=r["A_B_fit"], F_fit=np.nan if railed else r["F_fit"], chi2_joint=r["chi2"],
                 dchi2_F=np.nan if railed else max(n["chi2"] - r["chi2"], 0.),
-                T_night_fit=float(surface_temperature(np.pi, pl, "naive_redist", A_B=r["A_B_fit"], F=r["F_fit"])))
+                T_night_fit=float(surface_temperature(np.pi, c0.planet, "naive_redist", A_B=r["A_B_fit"], emissivity_B=c0.emissivity_B, F=r["F_fit"])))
 
 
 def _false_F_cell_at(cfg, A_B_true, a_rs, y_param, y, kw):

@@ -23,6 +23,16 @@ DEFAULT_A_B = 0.2
 # Band-integrated albedo A of the reflected light (not a geometric albedo), independent of A_B: molten and glassy silicates reflect weakly (Essack et al. 2020).
 DEFAULT_A = 0.1
 
+# Bolometric emissivity emissivity_B of the thermal emission, which sets the temperature map together with A_B: emissivity_B sigma T^4 = (1-A_B) S.
+# Only (1-A_B)/emissivity_B enters, so emissivity_B is exactly degenerate with A_B: with emissivity_B fixed to 1, A_B is really the effective albedo 1 - (1-A_B)/emissivity_B.
+# A_B (weighted by the stellar spectrum) and emissivity_B (weighted by the planet's thermal spectrum) sample different wavelengths and are independent; 1 assumes a surface that is black in the thermal infrared.
+DEFAULT_EMISSIVITY_B = 1.
+
+# Band-integrated emissivity of the thermal emission in the observing band (the thermal counterpart of A): the thermal planet flux is linear in it.
+# Deliberately independent of A, although Kirchhoff's law ties them in the same band (emissivity = 1 - A for an opaque surface): A is a free phenomenological reflectance.
+# Coupling the two (and emissivity_B) through spectral emissivity data of hot silicates is a possible extension.
+DEFAULT_EMISSIVITY = 1.
+
 # Bolometric linear limb darkening u_B of the irradiance: a model-atmosphere value instead of the grey Eddington value of 0.6.
 # For TOI-2431 b, the primary target, the bolometric profile gives 0.49 (PHOENIX) and 0.50 (MPS-ATLAS) (Stellar Model/LimbDarkening.ipynb).
 DEFAULT_U_B = 0.5

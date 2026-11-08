@@ -733,12 +733,12 @@ def derived_samples(logl, thetas, n_jobs=-1):
         geom = {k: p_[k] for k in _GEOMETRY if k in p_}
         A_B_, F_ = p_["A_B"], p_.get("F")
 
-        lo, la, Tg = custom_temperature_grid(swept_planet(cfg, **geom), u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=m, F=F_, A_B=A_B_, insol=logl.insol)
+        lo, la, Tg = custom_temperature_grid(swept_planet(cfg, **geom), u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=m, F=F_, A_B=A_B_, emissivity_B=cfg.emissivity_B, insol=logl.insol)
         eq = int(np.argmin(np.abs(la)))   # equator row; Tg has shape (n_la, n_lo)
         T = list(np.interp([0., 90., 180.], lo, Tg[eq]))   # interpolated, not nearest-cell: T falls steeply through the terminator, so the nearest grid longitude is off by hundreds of K there
 
         pp = pcurve_params(cfg, m, A_B_, F=F_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=logl.insol)
-        d_th = float(occultation_depth(pp, stellar_grid=cfg.stellar_grid))
+        d_th = float(occultation_depth(pp, stellar_grid=cfg.stellar_grid, emissivity=cfg.emissivity))
 
         # Reflected part: linear in A, and its maximum over the orbit is the last point before ingress - within ~1% of the full-phase value, since reflected_unit itself carries the occultation.
         ru = logl.refl_unit if logl.refl_unit is not None else (reflected_unit(cfg, m, n_t=logl.model_kw.get("n_t"), **geom) if cfg.reflected else None)
@@ -754,7 +754,7 @@ def derived_samples(logl, thetas, n_jobs=-1):
 
 
 def brightness_temperature(depth_th, cfg, quantiles=(0.16, 0.5, 0.84)):
-    """Dayside brightness temperature [K] at the given quantiles of the THERMAL occultation depth.
+    """Dayside brightness temperature [K] at the given quantiles of the THERMAL occultation depth (a blackbody brightness temperature: below the surface temperature for cfg.emissivity < 1).
     T_bright is monotone in the depth, so transforming the quantiles is exact - and it keeps the brentq/band_avg_planck cost at three calls instead of one per draw."""
     q = np.quantile(np.asarray(depth_th, float), list(quantiles))
     return np.array([astro_utils.T_bright(d, cfg.planet, (cfg.l1, cfg.l2), cfg.filter_path, stellar_model=cfg.stellar_model) for d in q])

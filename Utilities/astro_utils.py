@@ -162,7 +162,7 @@ def main_sequence_M_star(T_eff):
     return np.interp(T_eff, _MS_T, np.array([v[1] for v in MAIN_SEQUENCE.values()], dtype=float)[::-1])
 
 
-# Brightness temperature [K] of a thermal depth [ppm] (the occultation depth gives the dayside value): solves (r1/r2)^2 S_planet(T) = depth * S_star, where S_star is SPIDERMAN's own stellar
+# Brightness temperature [K] of a thermal depth [ppm] (the occultation depth gives the dayside value; a blackbody temperature, below the surface temperature for emissivity < 1): solves (r1/r2)^2 S_planet(T) = depth * S_star, where S_star is SPIDERMAN's own stellar
 # normalisation (its cubic spline through stellar_spidergrid at T2_eff, hpu.spidergrid_value) and S_planet the same band integral of a blackbody (hpu.band_planck: same samples, response and sum_flux).
 # So T_bright inverts SPIDERMAN's depths exactly whatever the stellar model and band weighting (a top-hat is energy-weighted there, like SPIDERMAN's filter=False); the remaining ~0.15 K of a
 # round trip is SPIDERMAN's own planet quadrature. Raises (check_teff_nodes) outside the T_eff nodes and ValueError (brentq) for a depth below the band flux at 10 K.

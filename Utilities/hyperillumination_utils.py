@@ -65,22 +65,25 @@ class PlanetParams:
         if insolation: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self)) - 1
         else: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self))**0.25 - 1
 
-    # Approximate (naive) occultation depth [ppm] for blackbody planet and star: delta_occ = (r1/r2)^2 * <B_l(T1_day)> / <B_l(T2_eff)>  +  A_g * (r1/R)^2
+    # Approximate (naive) occultation depth [ppm] for a grey planet and a blackbody star: delta_occ = emissivity * (r1/r2)^2 * <B_l(T1_day)> / <B_l(T2_eff)>  +  A_g * (r1/R)^2
     # (<.> is the bandpass average weighted by stellar photon flux (B_l * l).)
-    def approx_occ_depth(planet, eff_wavelength_range, A_B=None, f=2/3, emissivity=1.0, A_g=0.0, n_wl=400):
+    def approx_occ_depth(planet, eff_wavelength_range, A_B=None, f=2/3, emissivity_B=None, emissivity=None, A_g=0.0, n_wl=400):
         # f is Cowan & Agol (2011) redistribution parameter: 1/4 full redistribution, 1/2 uniform dayside, 2/3 no redistribution (disk-integrated), 1 substellar.
-        if A_B is None: A_B = DEFAULT_A_B   # resolved here, not in the signature: the baseline settings are imported only after this class (see below)
+        # resolved here, not in the signature: the baseline settings are imported only after this class (see below)
+        if A_B is None: A_B = DEFAULT_A_B
+        if emissivity_B is None: emissivity_B = DEFAULT_EMISSIVITY_B
+        if emissivity is None: emissivity = DEFAULT_EMISSIVITY
 
         wl_min, wl_max = eff_wavelength_range # [m]
 
         # Point-source value ignoring hyper-illumination.
-        T1_day = planet.T2_eff * np.sqrt(planet.r2 / planet.R) * (f * (1.0 - A_B) / emissivity) ** 0.25
+        T1_day = planet.T2_eff * np.sqrt(planet.r2 / planet.R) * (f * (1.0 - A_B) / emissivity_B) ** 0.25
 
         wl = np.linspace(wl_min, wl_max, n_wl)
         B = lambda T: (2 * h * c ** 2 / wl ** 5) / np.expm1(h * c / (wl * kB * T))
 
         contrast = np.trapezoid(wl * B(T1_day), wl) / np.trapezoid(wl * B(planet.T2_eff), wl)
-        return 1e6 * ((planet.r1 / planet.r2) ** 2 * contrast + A_g * (planet.r1 / planet.R) ** 2)
+        return 1e6 * (emissivity * (planet.r1 / planet.r2) ** 2 * contrast + A_g * (planet.r1 / planet.R) ** 2)
 
     def summary(self, print_params=False, eff_wavelength_range=None):
         print(f"=== {self.name} ===")
@@ -102,7 +105,7 @@ class PlanetParams:
 # Baseline settings (HItargets_utils.py). Imported here, after PlanetParams, because HItargets_utils imports PlanetParams from this module and defines the
 # settings before doing so: whichever of the two modules is imported first, the other then finds what it needs already defined. PlanetParams itself therefore
 # cannot use them as argument defaults and resolves them at call time.
-from HItargets_utils import DEFAULT_A_B, DEFAULT_U_B
+from HItargets_utils import DEFAULT_A_B, DEFAULT_U_B, DEFAULT_EMISSIVITY_B, DEFAULT_EMISSIVITY
 
 
 ###########################################################################################################################
@@ -123,10 +126,10 @@ def alpha_(gamma1, R, r1):
     cos_alpha = (R * np.cos(gamma1) - r1) / rho  # corrected eq. (23): r1, not r2
     return np.arccos(np.clip(cos_alpha, -1, 1)), rho
 
-def BBtemp_from_insolation(insol, A_B=DEFAULT_A_B, emissivity=1.):
-    # A_B is always bond albedo (even for lambda-band measurements)
-    # spiderman model (in thermal_PhaseCurve assumes emissivity=1 during emission, so emissivity=1 should be kept here as well for consistency)
-    return ((1-A_B) * insol / (emissivity * sigma))**0.25
+# Local radiative equilibrium emissivity_B sigma T^4 = (1-A_B) insol. A_B is always the Bond albedo (even for lambda-band measurements), emissivity_B the bolometric emissivity.
+# Only (1-A_B)/emissivity_B enters, so emissivity_B is exactly degenerate with A_B: with emissivity_B fixed to 1, A_B is really the effective albedo 1 - (1-A_B)/emissivity_B.
+def BBtemp_from_insolation(insol, A_B=DEFAULT_A_B, emissivity_B=DEFAULT_EMISSIVITY_B):
+    return ((1-A_B) * insol / (emissivity_B * sigma))**0.25
 
 
 # tabulates insolation(gamma1) on a 1D grid once, so 2D pixel grids
@@ -293,15 +296,15 @@ def effective_insolation(insol, planet, insolation_model, F=None):
     return (1. - 2. * F) * insol + F * S / 2.
 
 
-# Surface temperature from an insolation map of the given insolation_model (local radiative equilibrium, redistributed for "naive_redist")
-def temperature_from_insolation(insol, planet, insolation_model, A_B=DEFAULT_A_B, emissivity=1., F=None):
-    if insolation_model == "naive_redist": emissivity = 1.  # fixed to 1 for now: the Louden model behind its phase curve has no emissivity (see TODO in Louden_PhaseCurve)
-    return BBtemp_from_insolation(effective_insolation(insol, planet, insolation_model, F=F), A_B = A_B, emissivity=emissivity)
+# Surface temperature from an insolation map of the given insolation_model (local radiative equilibrium, redistributed for "naive_redist").
+# emissivity_B is degenerate with A_B (see BBtemp_from_insolation): with emissivity_B = 1, A_B is an effective albedo.
+def temperature_from_insolation(insol, planet, insolation_model, A_B=DEFAULT_A_B, emissivity_B=DEFAULT_EMISSIVITY_B, F=None):
+    return BBtemp_from_insolation(effective_insolation(insol, planet, insolation_model, F=F), A_B = A_B, emissivity_B=emissivity_B)
 
 
 # T(gamma1): surface temperature at an angular distance gamma1 from the substellar point (the T(z) profile of Kreidberg & Loeb 2016 for "naive_redist")
-def surface_temperature(gamma1, planet, insolation_model, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity=1., F=None):
-    return temperature_from_insolation(insolation(gamma1, planet, insolation_model, u_B=u_B), planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
+def surface_temperature(gamma1, planet, insolation_model, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity_B=DEFAULT_EMISSIVITY_B, F=None):
+    return temperature_from_insolation(insolation(gamma1, planet, insolation_model, u_B=u_B), planet, insolation_model, A_B = A_B, emissivity_B=emissivity_B, F=F)
 
 
 
@@ -336,7 +339,7 @@ def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=
 # unit="flux": re-radiated (bolometric) flux normalized to the substellar point - the insolation itself, except for "naive_redist" (needs F for both units)
 # incl [deg]: orbital inclination of the view (90 = edge-on, the default; pass planet.incl for the view as observed). The map is symmetric about the star-planet axis,
 # so only the angle between the line of sight and the substellar direction matters, cos = sin(incl) cos(2 pi phase): quadrature looks the same at every inclination.
-def plot_insolmap(phase, planet, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity=1., min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_tab=3000, gp_table=None, incl=90.):
+def plot_insolmap(phase, planet, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity_B=DEFAULT_EMISSIVITY_B, min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_tab=3000, gp_table=None, incl=90.):
 
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
@@ -367,13 +370,13 @@ def plot_insolmap(phase, planet, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity=1.
     F_interp = np.interp(gamma1[disk], gp_grid, F_grid)
     mapval = np.full_like(X, np.nan)
     if unit == "temperature":
-        mapval[disk] = temperature_from_insolation(F_interp, planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
+        mapval[disk] = temperature_from_insolation(F_interp, planet, insolation_model, A_B = A_B, emissivity_B=emissivity_B, F=F)
     else:   # flux, normalized to 1 at the substellar point (gp_grid[0] == 0)
         mapval[disk] = effective_insolation(F_interp, planet, insolation_model, F=F) / effective_insolation(F_grid[0], planet, insolation_model, F=F)
 
     if min_temp is None or max_temp is None:
         if unit == "temperature":
-            t_hot = temperature_from_insolation(F_grid[0], planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
+            t_hot = temperature_from_insolation(F_grid[0], planet, insolation_model, A_B = A_B, emissivity_B=emissivity_B, F=F)
             if min_temp is None: min_temp = -t_hot*0.1
             if max_temp is None: max_temp = 1.1 * t_hot
         else:   # flux, normalized to 1 at the substellar point
@@ -415,7 +418,7 @@ def plot_insolmap(phase, planet, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity=1.
     return ax
 
 
-def plot_quad_insolmap(planet, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity=1., min_temp=None, max_temp=None, n_grid=500,
+def plot_quad_insolmap(planet, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity_B=DEFAULT_EMISSIVITY_B, min_temp=None, max_temp=None, n_grid=500,
                        theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None,
                        insolation_model="hyperillum", F=None, unit="flux", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000, incl=90.):
 
@@ -429,7 +432,7 @@ def plot_quad_insolmap(planet, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity=1., 
 
     if min_temp is None or max_temp is None:
         if unit == "temperature":
-            t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
+            t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity_B=emissivity_B, F=F)
             if min_temp is None: min_temp = -t_hot*0.1
             if max_temp is None: max_temp = 1.1 * t_hot
         else:   # flux, normalized to 1 at the substellar point
@@ -439,7 +442,7 @@ def plot_quad_insolmap(planet, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity=1., 
     fig, axs = plt.subplots(2, 2, figsize=(8 / 0.865, 8), facecolor=bg)
 
     for ax, phase in zip(axs.ravel(), [phase1, phase2, phase3, phase4]):
-        plot_insolmap(phase, planet, u_B=u_B, A_B = A_B, emissivity=emissivity, min_temp=min_temp, max_temp=max_temp,
+        plot_insolmap(phase, planet, u_B=u_B, A_B = A_B, emissivity_B=emissivity_B, min_temp=min_temp, max_temp=max_temp,
                       n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
                       terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table, incl=incl)
 
@@ -460,14 +463,14 @@ def plot_quad_insolmap(planet, u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity=1., 
 # HypotheticalExtremePlanet.ipynb). Each column has its own temperature scale, 0 to 1.1 x its substellar temperature (the same in every model: there is no substellar boost), so the
 # panels of one planet are comparable; the colour bar of the last column labels the rows. The terminator is drawn in grey, the penumbra borders in green on the hyperillum panels only.
 # planets: {name: PlanetParams} or a list. F is passed to "naive_redist" only. Returns fig, axs (shape (len(models), len(planets))).
-def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity=1., F=None, n_grid=400, theme="black", terminator=True, show_penumbra="both", title=None, incl=90.):
+def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity_B=DEFAULT_EMISSIVITY_B, F=None, n_grid=400, theme="black", terminator=True, show_penumbra="both", title=None, incl=90.):
     planets = list(planets.values()) if isinstance(planets, dict) else list(planets)
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
     fig, axs = plt.subplots(len(models), len(planets), figsize=(4.3 * len(planets), 4.3 * len(models)), facecolor=bg, squeeze=False)
     for j, pl in enumerate(planets):
-        T_hot = float(np.atleast_1d(surface_temperature(np.array([0.]), pl, "naive", A_B=A_B, emissivity=emissivity))[0])
+        T_hot = float(np.atleast_1d(surface_temperature(np.array([0.]), pl, "naive", A_B=A_B, emissivity_B=emissivity_B))[0])
         for i, model in enumerate(models):
-            plot_insolmap(phase, pl, u_B=u_B, A_B=A_B, emissivity=emissivity, min_temp=0., max_temp=1.1 * T_hot, n_grid=n_grid, ax=axs[i, j], theme=theme, show_cax=(j == len(planets) - 1),
+            plot_insolmap(phase, pl, u_B=u_B, A_B=A_B, emissivity_B=emissivity_B, min_temp=0., max_temp=1.1 * T_hot, n_grid=n_grid, ax=axs[i, j], theme=theme, show_cax=(j == len(planets) - 1),
                           terminator=terminator, show_penumbra=show_penumbra if model == "hyperillum" else None, insolation_model=model, F=F if model == "naive_redist" else None, unit="temperature", incl=incl)
             axs[i, j].set_title((f"{pl.name}\n" if i == 0 else "") + rf"{model}, $a/R_\star$ = {pl.R / pl.r2:.2f}, $T_{{\rm eff}}$ = {pl.T2_eff:.0f} K", color=tc, fontsize=9)
     fig.suptitle(title or rf"Surface temperature at phase {phase:g}  ($A_B$ = {A_B:.2f}, $u_B$ = {u_B:g})", color=tc)
@@ -476,7 +479,7 @@ def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_
 
 
 
-def animation_insolmap(planet, A_B=DEFAULT_A_B, emissivity=1., filename="output_map", u_B=DEFAULT_U_B, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
+def animation_insolmap(planet, A_B=DEFAULT_A_B, emissivity_B=DEFAULT_EMISSIVITY_B, filename="output_map", u_B=DEFAULT_U_B, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
                        show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_frames=1000, fps=50, phase_start=0., phase_end=1., n_tab=3000, incl=90.):
 
     if unit not in ("temperature", "flux"):
@@ -490,7 +493,7 @@ def animation_insolmap(planet, A_B=DEFAULT_A_B, emissivity=1., filename="output_
     gp_table = _tabulate_insolation(planet, u_B, insolation_model, n_tab=n_tab)
 
     if unit == "temperature":
-        t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity=emissivity, F=F)
+        t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity_B=emissivity_B, F=F)
         if min_temp is None: min_temp = -t_hot*0.1
         if max_temp is None: max_temp = 1.1 * t_hot
     else:   # flux, normalized to 1 at the substellar point
@@ -507,7 +510,7 @@ def animation_insolmap(planet, A_B=DEFAULT_A_B, emissivity=1., filename="output_
     fig, ax = plt.subplots(facecolor=bg)
     phases = np.linspace(phase_start, phase_end, n_frames, endpoint=False)
 
-    plot_insolmap(phases[0], planet, u_B=u_B, A_B = A_B, emissivity=emissivity, min_temp=min_temp, max_temp=max_temp,
+    plot_insolmap(phases[0], planet, u_B=u_B, A_B = A_B, emissivity_B=emissivity_B, min_temp=min_temp, max_temp=max_temp,
                   n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
                   terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table, incl=incl)
     if show_cax:
@@ -534,7 +537,7 @@ def animation_insolmap(planet, A_B=DEFAULT_A_B, emissivity=1., filename="output_
     capture_frame()
     for phase in phases[1:]:
         ax.clear()
-        plot_insolmap(phase, planet, u_B=u_B, A_B = A_B, emissivity=emissivity, min_temp=min_temp, max_temp=max_temp,
+        plot_insolmap(phase, planet, u_B=u_B, A_B = A_B, emissivity_B=emissivity_B, min_temp=min_temp, max_temp=max_temp,
                       n_grid=n_grid, ax=ax, theme=theme, show_cax=False, show_axes=show_axes,
                       terminator=terminator, show_penumbra=show_penumbra, insolation_model=insolation_model, F=F, unit=unit, gp_table=gp_table, incl=incl)
         capture_frame()
