@@ -84,6 +84,10 @@ ROCKY_MAX_RADE = 1.7
 # sample does not move with archive updates. best_hi_planets(12) is NOT this set: it ranks by (1 - Rp/R*)/(a/R*), which puts K2-223 b (tiny Rp/R*) ahead of TOI-561 b (no. 12 in a/R*).
 PAPER_PLANETS = ("TOI-2431 b", "TOI-2260 b", "Kepler-1340 b", "K2-141 b", "KOI-1843.03", "K2-157 b", "Kepler-990 c", "K2-183 b", "Kepler-78 b", "EPIC 206042996 c", "K2-131 b", "TOI-561 b")
 
+# Mean planet densities [g/cm^3] of the Roche limits drawn on every (a/R*, T_eff) bias map (simple_bias_analysis.draw_roche_frontier, for main-sequence hosts): Earth's bulk
+# density, and Earth composition compressed to ~1.5 Earth radii, which matches the archive densities of TOI-2431 b and K2-141 b (HypotheticalExtremePlanet.ipynb).
+ROCHE_RHO_P = {"Earth bulk density": 5.5, "Earth composition at 1.5 R⊕": 8.0}
+
 # Argument of periastron where the archive has none. 90 deg is the transit convention and is irrelevant at e = 0.
 DEFAULT_W_DEG = 90.0
 

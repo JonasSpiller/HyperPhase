@@ -3,7 +3,7 @@ from scipy.optimize import minimize_scalar
 from scipy.interpolate import RegularGridInterpolator
 from hyperillumination_phasecurve_utils import *
 from astro_utils import C_ROCHE, roche_limit_a_rs, roche_limit_period_h, kepler_period_days, rho_star, main_sequence_T_eff, main_sequence_R_star
-from HItargets_utils import ROCKY_MAX_RADE, A_B_BOUNDS, F_BOUNDS, hi_planets_by_name
+from HItargets_utils import ROCKY_MAX_RADE, A_B_BOUNDS, F_BOUNDS, ROCHE_RHO_P, hi_planets_by_name
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -808,9 +808,10 @@ def print_limit_curve(sweep, A_B_true, ratios, sweep_uB0=None, u_B=None):
 # rp_rs_of(y) is Rp/R* at the map's y values; incl [deg] is the inclination the map was computed at (cfg.planet.incl).
 # The maps are planet-agnostic: target=None highlights no planet; a PlanetParams there is drawn as the green star (and dropped from the archive scatter). title overrides the suptitle.
 # planets (required): the labelled archive planets (overlay_planets), e.g. HItargets_utils.PAPER_PLANETS; those outside the map box are listed in a note.
-# overlay: a callable overlay(ax) drawn on every panel under the archive planets, e.g. the Roche frontier (draw_roche_frontier); its labelled artists join the figure legend.
+# roche: the Roche frontier (draw_roche_frontier) on every panel of an (a/R*, T_eff) map - True: the compositions of HItargets_utils.ROCHE_RHO_P, a {label: rho_p [g/cm^3]} dict:
+# those, False: none. Only a T_eff axis fixes the host density (main sequence), so other maps never show it.
 def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl=90., F_map=None, F_levels=(0.01, 0.02, 0.05),
-                   show_absolute=True, show_relative=False, show_F=False, target=None, title=None, overlay=None, legend_fontsize=12, *, planets):
+                   show_absolute=True, show_relative=False, show_F=False, target=None, title=None, roche=True, legend_fontsize=12, *, planets):
     if show_F and F_map is None: raise ValueError("show_F=True needs F_map")
     if not (show_absolute or show_relative or show_F): raise ValueError("nothing to draw: set show_absolute, show_relative or show_F")
     cos_i = np.cos(np.radians(incl))
@@ -839,7 +840,7 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
         if grazing:
             for sign in (-1., 1.):
                 ax.plot((1. + sign * rp_rs_of(y_line)) / cos_i, y_line, color=INK, ls="--", lw=1.2, label=r"grazing occultation ($b = 1 \mp R_p/R_\star$)" if sign > 0 else None)
-        if overlay is not None: overlay(ax)
+        if _roche_cases(roche) and ykey == "st_teff": draw_roche_frontier(ax, xg, yg, _roche_cases(roche), rp_rs_of)
         # `planets` labelled with a/Rs and ESM, the other known ROCKY planets (NASA Exoplanet Archive, Rp < ROCKY_MAX_RADE R_Earth) as dots; a target is drawn as the green star
         outside = overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target, planets=planets)
         ax.set_facecolor("0.85")
@@ -865,22 +866,31 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
 
 
 # The Roche frontier on an (a/Rs, T_eff) map, for main-sequence hosts: a_R/Rs(T_eff) = C_ROCHE [rho_star(T_eff) / rho_p]^(1/3) per composition of rho_p_cases ({label: rho_p [g/cm^3]}),
-# the region left of the most permissive curve (densest composition) hatched - no rocky planet can sit there - and the contact limit 1 + Rp/Rs as a dashed line where it reaches into the map.
-# Made for plot_bias_maps(overlay=...): draw_roche_frontier draws on one axes, roche_allowed_masks gives the cell masks the statistics need ({composition: bool array of the map's shape,
+# the region left of the most permissive curve (densest composition) hatched - inside the Roche limit for every density shown, under the main-sequence and rho_p assumptions - and the
+# contact limit a/Rs = 1 + Rp/Rs (rp_rs_of, as in plot_bias_maps) as a dashed line where it reaches into the map. Legend entries only for what lies inside the map.
+# plot_bias_maps / plot_false_F_map draw it (roche=...); roche_allowed_masks gives the cell masks the statistics need ({composition: bool array of the map's shape,
 # True where a/Rs is beyond that composition's limit}).
 _ROCHE_COLORS = (C_HI, C_REDIST, F_COLORS[-1])
+ROCHE_HATCH_LABEL = r"inside the Roche limit for all $\rho_p$ shown (main-sequence host)"
+
+def _roche_cases(roche):
+    """The {label: rho_p} of a roche= argument: True -> ROCHE_RHO_P, a dict -> itself, False / None -> None."""
+    return ROCHE_RHO_P if roche is True else (roche or None)
 
 def roche_frontier_a_rs(T_eff, rho_p):
     """a_R/Rs along a T_eff axis for main-sequence hosts."""
     return roche_limit_a_rs(rho_star(T_eff) / rho_p)
 
-def draw_roche_frontier(ax, xg, yg, rho_p_cases, rp_rs):
+def draw_roche_frontier(ax, xg, yg, rho_p_cases, rp_rs_of):
     y_line = np.linspace(yg[0], yg[-1], 200)
+    visible = lambda x: bool(np.any((x > xg[0]) & (x < xg[-1])))
     for color, (comp, rho_p) in zip(_ROCHE_COLORS, rho_p_cases.items()):
-        ax.plot(roche_frontier_a_rs(y_line, rho_p), y_line, color=color, lw=1.8, label=rf"Roche limit for $\rho_p$ = {rho_p:g} g cm$^{{-3}}$ ({comp})")
+        x = roche_frontier_a_rs(y_line, rho_p)
+        ax.plot(x, y_line, color=color, lw=1.8, label=rf"Roche limit for $\rho_p$ = {rho_p:g} g cm$^{{-3}}$ ({comp})" if visible(x) else None)
     x_min = roche_frontier_a_rs(y_line, max(rho_p_cases.values()))
-    ax.fill_betweenx(y_line, xg[0], x_min, facecolor="none", edgecolor=INK, hatch="///", lw=0, label="forbidden for any rocky composition")
-    if xg[0] < 1. + rp_rs: ax.axvline(1. + rp_rs, color=INK, lw=1.2, ls="--", label=r"contact ($a/R_\star = 1 + R_p/R_\star$)")
+    ax.fill_betweenx(y_line, xg[0], np.maximum(x_min, xg[0]), facecolor="none", edgecolor=INK, hatch="///", lw=0, label=ROCHE_HATCH_LABEL if np.any(x_min > xg[0]) else None)
+    x_contact = 1. + rp_rs_of(y_line)
+    if visible(x_contact): ax.plot(x_contact, y_line, color=INK, lw=1.2, ls="--", label=r"contact ($a/R_\star = 1 + R_p/R_\star$)")
 
 def roche_allowed_masks(xg, yg, rho_p_cases):
     X, Y = np.meshgrid(xg, yg)
@@ -904,8 +914,9 @@ def print_allowed_extremes(xg, yg, bias_map, A_B_true, allowed, rho_p_cases):
 # as in plot_bias_maps. cfg: the map's config (its sigma_1min is the noise the dchi2 map was evaluated with, its n_orbits the number of orbits the critical noise refers to).
 # The map holds Rp/R* and i at the reference values: the phase-curve signal is ∝ (Rp/R*)^2, so dchi2_F ∝ (Rp/R*)^4 and sigma_crit ∝ (Rp/R*)^2 to a good approximation; planets with a
 # different Rp/R* must be rescaled (or fitted at their own geometry) before their noise level is compared with the map.
-# planets (required): the labelled archive planets, as in plot_bias_maps.
-def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=90., z=2., sigma_levels=(10., 20., 50., 100., 200., 500., 1000., 2000., 5000.), target=None, title=None, *, planets):
+# planets (required): the labelled archive planets, roche: the Roche frontier, both as in plot_bias_maps.
+def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=90., z=2., sigma_levels=(10., 20., 50., 100., 200., 500., 1000., 2000., 5000.), target=None, title=None,
+                     roche=True, *, planets):
     from matplotlib.colors import LogNorm
     cos_i = np.cos(np.radians(incl))
     X, Y = np.meshgrid(xg, yg)
@@ -926,6 +937,7 @@ def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=9
     if grazing:
         for sign in (-1., 1.):
             ax.plot((1. + sign * rp_rs_of(y_line)) / cos_i, y_line, color=INK, ls="--", lw=1.2, label=r"grazing occultation ($b = 1 \mp R_p/R_\star$)" if sign > 0 else None)
+    if _roche_cases(roche) and ykey == "st_teff": draw_roche_frontier(ax, xg, yg, _roche_cases(roche), rp_rs_of)
     outside = overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target, planets=planets)
     if outside: print(f"outside the map box, not drawn: {', '.join(outside)}")
     ax.set_facecolor("0.85")
