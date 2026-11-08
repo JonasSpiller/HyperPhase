@@ -312,30 +312,37 @@ def fit_railed(fit, bounds, F_bounds=F_BOUNDS, rail_tol=RAIL_TOL):
 # One grid cell of a bias map: generate the hyperillumination truth, fit the naive model, return the recovered-A_B bias.
 # NaN if the fit railed against a bound, i.e. the naive model cannot reproduce the truth at ANY albedo.
 # redist=True fits naive_redist (A_B and F) instead and returns (A_B bias, F_fit); the truth has no redistribution, so F_fit is itself the bias in F.
-def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, temp_bias=False, bounds=A_B_BOUNDS, redist=False, F_bounds=F_BOUNDS, **kw):
+# return_chi2=True appends the fit's chi2 (at cfg.sigma_1min), which false_F_map_grid(fits=...) turns into dchi2_F without refitting.
+def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, temp_bias=False, bounds=A_B_BOUNDS, redist=False, F_bounds=F_BOUNDS, return_chi2=False, **kw):
     """Recovered-A_B bias for one map cell. NaN if the fit railed against a bound,
     i.e. the naive model cannot reproduce the truth at ANY albedo.
-    With redist=True: (A_B bias, F_fit), both NaN on a rail. F_fit = 0 is a valid fit, only F's upper bound counts as a rail."""
+    With redist=True: (A_B bias, F_fit), both NaN on a rail. F_fit = 0 is a valid fit, only F's upper bound counts as a rail.
+    With return_chi2=True the fit's chi2 is appended (bias, chi2) / (bias, F_fit, chi2), also NaN on a rail."""
     model = "naive_redist" if redist else "naive"
     fit = fit_truth(cfg, A_B_true, models=(model,), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)[model]   # same bounds the rail check below uses
     A_B_fit, F_fit = fit["A_B_fit"], fit.get("F_fit", 0.)
-    if fit_railed(fit, bounds, F_bounds, rail_tol):
-        return (np.nan, np.nan) if redist else np.nan
-    A_B_bias = A_B_fit - A_B_true
-    out = temperature_bias(A_B_true, A_B_bias, F_fit) if temp_bias else A_B_bias
-    return (out, F_fit) if redist else out
+    railed = fit_railed(fit, bounds, F_bounds, rail_tol)
+    if railed:
+        out = (np.nan, np.nan) if redist else (np.nan,)
+    else:
+        A_B_bias = A_B_fit - A_B_true
+        out = (temperature_bias(A_B_true, A_B_bias, F_fit) if temp_bias else A_B_bias,) + ((F_fit,) if redist else ())
+    if return_chi2: out += (np.nan if railed else fit["chi2"],)
+    return out if len(out) > 1 else out[0]
 
 
-def _bias_cell_at(cfg, A_B_true, a_rs, y_param, y, redist, kw):
-    return bias_cell(cfg, A_B_true, a_rs=a_rs, redist=redist, **{y_param: y}, **kw)
+def _bias_cell_at(cfg, A_B_true, a_rs, y_param, y, redist, return_chi2, kw):
+    return bias_cell(cfg, A_B_true, a_rs=a_rs, redist=redist, return_chi2=return_chi2, **{y_param: y}, **kw)
 
 
 # A whole bias map over (a_rs_grid, y_grid), cells in parallel. y_param is the swept geometry keyword of model_pcurve ("T_s" or "rp_rs").
 # Returns the A_B-bias map, shape (len(y_grid), len(a_rs_grid)); with redist=True the pair (A_B-bias map, F map).
-def bias_map_grid(cfg, A_B_true, a_rs_grid, y_grid, y_param, redist=False, n_jobs=-1, **kw):
-    flat = pmap(_bias_cell_at, [(cfg, A_B_true, ar, y_param, y, redist, kw) for y in y_grid for ar in a_rs_grid], n_jobs)
-    out = np.array(flat).reshape(len(y_grid), len(a_rs_grid), *((2,) if redist else ()))
-    return tuple(np.moveaxis(out, -1, 0)) if redist else out
+# return_chi2=True appends the chi2 map of the fits (NaN on a rail): the two maps' chi2 give false_F_map_grid(fits=...) at no extra cost.
+def bias_map_grid(cfg, A_B_true, a_rs_grid, y_grid, y_param, redist=False, n_jobs=-1, return_chi2=False, **kw):
+    flat = pmap(_bias_cell_at, [(cfg, A_B_true, ar, y_param, y, redist, return_chi2, kw) for y in y_grid for ar in a_rs_grid], n_jobs)
+    n_out = 1 + int(redist) + int(return_chi2)
+    out = np.array(flat).reshape(len(y_grid), len(a_rs_grid), *((n_out,) if n_out > 1 else ()))
+    return tuple(np.moveaxis(out, -1, 0)) if n_out > 1 else out
 
 
 # The 1-D counterpart of bias_map_grid along a/Rs alone (the limit curve of HypotheticalExtremePlanet.ipynb): both fits with their Fisher sigmas at every a/Rs, one DataFrame row per point.
@@ -383,14 +390,19 @@ def false_F_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_
 # Both fits and the statistic as a dict (the row of the false-positive tables): A_B_fit_naive, chi2_naive, A_B_fit, F_fit, chi2_joint, dchi2_F (NaN on a rail), railed and T_night_fit (NaN on a rail), the nightside
 # temperature [K] that the fitted (A_B, F) imply (Kreidberg & Loeb eq. 1): what the false positive would be reported as. cfg may be a detector set.
 def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, **kw):
-    from hyperillumination_utils import surface_temperature
     fit = fit_truth(cfg, A_B_true, models=("naive", "naive_redist"), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)
-    n, r = fit["naive"], fit["naive_redist"]
-    railed = fit_railed(n, bounds, F_bounds, rail_tol) or fit_railed(r, bounds, F_bounds, rail_tol)
     c0 = cfg[0] if is_detector_set(cfg) else cfg
+    return _false_F_result(fit["naive"], fit["naive_redist"], c0.planet, c0.emissivity_B, bounds, F_bounds, rail_tol)
+
+
+# The dict of false_F_fit from its two fits n (A_B-only) and r (joint), given as fit_truth results (A_B_fit, chi2, and F_fit for r). Shared with the fits= path of the false-positive tables,
+# which takes the two fits from the bias tables instead of refitting. planet, emissivity_B: those of the fit's cfg (its first detector), for the implied nightside temperature.
+def _false_F_result(n, r, planet, emissivity_B, bounds, F_bounds, rail_tol=RAIL_TOL):
+    from hyperillumination_utils import surface_temperature
+    railed = fit_railed(n, bounds, F_bounds, rail_tol) or fit_railed(r, bounds, F_bounds, rail_tol)
     return dict(A_B_fit_naive=n["A_B_fit"], chi2_naive=n["chi2"], A_B_fit=r["A_B_fit"], F_fit=np.nan if railed else r["F_fit"], chi2_joint=r["chi2"],
                 dchi2_F=np.nan if railed else max(n["chi2"] - r["chi2"], 0.), railed=bool(railed),
-                T_night_fit=np.nan if railed else float(surface_temperature(np.pi, c0.planet, "naive_redist", A_B=r["A_B_fit"], emissivity_B=c0.emissivity_B, F=r["F_fit"])))
+                T_night_fit=np.nan if railed else float(surface_temperature(np.pi, planet, "naive_redist", A_B=r["A_B_fit"], emissivity_B=emissivity_B, F=r["F_fit"])))
 
 
 def _false_F_cell_at(cfg, A_B_true, a_rs, y_param, y, kw):
@@ -398,7 +410,16 @@ def _false_F_cell_at(cfg, A_B_true, a_rs, y_param, y, kw):
 
 
 # dchi2_F over a map (like bias_map_grid): returns (dchi2 map, F map), shape (len(y_grid), len(a_rs_grid)). The F map should agree with bias_map_grid(redist=True)'s.
-def false_F_map_grid(cfg, A_B_true, a_rs_grid, y_grid, y_param, n_jobs=-1, **kw):
+# fits=(chi2_map, chi2_map_J, F_map_J) builds both maps without refitting: chi2_map from bias_map_grid(..., return_chi2=True), chi2_map_J and F_map_J from bias_map_grid(..., redist=True,
+# return_chi2=True), on the same cfg, A_B_true, grids, y_param and **kw. Those are exactly the two fits false_F_cell makes per cell, so the result is identical. Only the shapes are checked.
+def false_F_map_grid(cfg, A_B_true, a_rs_grid, y_grid, y_param, n_jobs=-1, fits=None, **kw):
+    if fits is not None:
+        chi2, chi2_J, F_J = (np.asarray(m, dtype=float) for m in fits)
+        shape = (len(y_grid), len(a_rs_grid))
+        if not chi2.shape == chi2_J.shape == F_J.shape == shape:
+            raise ValueError(f"fits: three maps of shape (len(y_grid), len(a_rs_grid)) = {shape} expected, got {chi2.shape}, {chi2_J.shape}, {F_J.shape}")
+        railed = ~np.isfinite(chi2) | ~np.isfinite(chi2_J)   # the maps' chi2 is NaN where that fit railed; false_F_cell is NaN where either did
+        return np.where(railed, np.nan, np.maximum(chi2 - chi2_J, 0.)), np.where(railed, np.nan, F_J)
     flat = pmap(_false_F_cell_at, [(cfg, A_B_true, ar, y_param, y, kw) for y in y_grid for ar in a_rs_grid], n_jobs)
     out = np.array(flat).reshape(len(y_grid), len(a_rs_grid), 2)
     return out[..., 0], out[..., 1]
@@ -1012,7 +1033,9 @@ def _planet_bias_row(cfg, A_B_true, pl, s1, redist, bounds, F_bounds, kw):
     model = "naive_redist" if redist else "naive"
     fit = fit_truth(c, A_B_true, models=(model,), free_offset=True, bounds=bounds, F_bounds=F_bounds, fisher=has_noise, **kw)[model]
     return dict(name=pl.name, a_rs=pl.R / pl.r2, period=pl.period, T_eff=pl.T2_eff, bias_A_B=fit["bias_A_B"], sigma_A_B=fit.get("sigma_A_B", np.nan),
-                F_fit=fit.get("F_fit", np.nan), sigma_F=fit.get("sigma_F", np.nan), sigma_1min=float(s1))
+                F_fit=fit.get("F_fit", np.nan), sigma_F=fit.get("sigma_F", np.nan), sigma_1min=float(s1),
+                # for planet_false_F_table(fits=...): chi2 at the planet's own noise (none at the placeholder noise), and the fitted A_B itself, since the table's A_B_fit = bias_A_B + A_B_true can differ from it in the last bit
+                chi2=fit["chi2"] if has_noise else np.nan, A_B_fit_exact=fit["A_B_fit"])
 
 
 # Bias, Fisher sigma and critical noise for a SAMPLE of planets on one instrument, sorted by a/Rs.
@@ -1085,14 +1108,56 @@ def _false_F_decision(tab, z):
     return tab
 
 
+# fits= of the false-positive tables: (tab, tab_J), the A_B-only and the joint bias table of the same sample (planet_bias_table or instrument_retrievals, with redist=False and redist=True).
+# Their two fits per row are exactly those of false_F_fit (same truth, bounds and tolerances), so their chi2 columns give dchi2_F without refitting. The tables must come from this cfg and
+# **kw, which is not checked. Checked are the models, A_B_true, bounds, n_orbits and (by the callers) each row's noise level, since chi2 ∝ 1 / sigma_1min^2.
+def _bias_table_pair(fits, A_B_true, bounds, F_bounds, n_orbits):
+    if len(fits) != 2: raise ValueError("fits: (A_B-only table, joint table) expected")
+    want = (A_B_true, tuple(bounds), tuple(F_bounds), n_orbits)
+    for tab, model in zip(fits, ("naive", "naive_redist")):
+        a = tab.attrs
+        if a.get("model") != model: raise ValueError(f"fits: (A_B-only table, joint table) expected, got the models {[t.attrs.get('model') for t in fits]}")
+        got = (a["A_B_true"], tuple(a["bounds"]), tuple(a["F_bounds"]), a["n_orbits"])
+        if got != want: raise ValueError(f"fits: the {model} table has (A_B_true, bounds, F_bounds, n_orbits) = {got}, this call {want}")
+        if "chi2" not in tab: raise ValueError(f"fits: the {model} table has no chi2 column (made before it was stored): re-run it")
+    return fits
+
+
+# The fits (n, r) of false_F_fit for row `key` of a _bias_table_pair, as fit_truth-like dicts, and the two table rows (for the callers' noise check).
+# The fitted A_B is A_B_fit_exact where the table has it (planet_bias_table, whose A_B_fit is rebuilt from the bias), else A_B_fit (instrument_retrievals stores the fit itself), so the result is bit-identical to refitting.
+def _table_fit_pair(tabs, col, key):
+    rows = []
+    for tab in tabs:
+        sel = tab[tab[col] == key]
+        if len(sel) != 1: raise ValueError(f"fits: {key} is not in the {tab.attrs['model']} table")
+        rows.append(sel.iloc[0])
+    A = lambda row: float(row["A_B_fit_exact"] if "A_B_fit_exact" in row else row["A_B_fit"])
+    n, r = rows
+    return dict(A_B_fit=A(n), chi2=float(n["chi2"])), dict(A_B_fit=A(r), F_fit=float(r["F_fit"]), chi2=float(r["chi2"])), rows
+
+
+def _same_noise(a, b):
+    return bool(np.isclose(a, b, rtol=1e-9, atol=0.))
+
+
 def _planet_false_F_row(cfg, A_B_true, pl, s1, bounds, F_bounds, kw):
     c = replace(cfg, planet=pl, sigma_1min=float(s1))
     return dict(name=pl.name, a_rs=pl.R / pl.r2, period=pl.period, T_eff=pl.T2_eff, sigma_1min=float(s1), **false_F_fit(c, A_B_true, bounds=bounds, F_bounds=F_bounds, **kw))
 
 
+# The row of _planet_false_F_row from the fits of a _bias_table_pair (no refit).
+def _planet_false_F_row_from(tabs, cfg, pl, s1, bounds, F_bounds):
+    n, r, rows = _table_fit_pair(tabs, "name", pl.name)
+    for tab, row in zip(tabs, rows):
+        if not _same_noise(row["sigma_1min"], s1): raise ValueError(f"fits: {pl.name} was fitted at sigma_1min = {row['sigma_1min']} ppm/min in the {tab.attrs['model']} table, this call has {s1}")
+    return dict(name=pl.name, a_rs=pl.R / pl.r2, period=pl.period, T_eff=pl.T2_eff, sigma_1min=float(s1), **_false_F_result(n, r, pl, cfg.emissivity_B, bounds, F_bounds))
+
+
 # False-positive F for a SAMPLE of planets on one instrument, each at its own geometry and noise (the counterpart of planet_bias_table; same inputs, same handling of planets without a noise
 # level). Sorted by a/Rs. z: the significance the decision refers to.
-def planet_false_F_table(cfg, A_B_true, planets, sigma_1min, z=2., bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, AGG=None, n_jobs=-1, **kw):
+# fits=(tab, tab_J): the planet_bias_table of this sample with redist=False and redist=True (same cfg, A_B_true, sigma_1min, bounds and **kw), whose fits are reused instead of refitting
+# (see _bias_table_pair). Same result.
+def planet_false_F_table(cfg, A_B_true, planets, sigma_1min, z=2., bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, AGG=None, n_jobs=-1, fits=None, **kw):
     pls = planet_list(planets)
     missing = [pl.name for pl in pls if pl.name not in sigma_1min]
     if len(missing) == len(pls): raise ValueError(f"no planet has a sigma_1min entry (planets: {missing}; sigma_1min has {sorted(sigma_1min)}), so there is nothing to tabulate")
@@ -1102,7 +1167,11 @@ def planet_false_F_table(cfg, A_B_true, planets, sigma_1min, z=2., bounds=A_B_BO
     bad = [pl.name for pl in pls if not np.isfinite(sigma_1min[pl.name])]
     if bad: raise ValueError(f"non-finite sigma_1min for {bad}: {[sigma_1min[nm] for nm in bad]}")
     pls = drop_unsupported_hosts(cfg, pls)
-    rows = pmap(_planet_false_F_row, [(cfg, A_B_true, pl, sigma_1min[pl.name], bounds, F_bounds, kw) for pl in pls], n_jobs)
+    if fits is None:
+        rows = pmap(_planet_false_F_row, [(cfg, A_B_true, pl, sigma_1min[pl.name], bounds, F_bounds, kw) for pl in pls], n_jobs)
+    else:
+        tabs = _bias_table_pair(fits, A_B_true, bounds, F_bounds, cfg.n_orbits)
+        rows = [_planet_false_F_row_from(tabs, cfg, pl, sigma_1min[pl.name], bounds, F_bounds) for pl in pls]
     tab = pd.DataFrame(rows).sort_values("a_rs").reset_index(drop=True)
     tab["esm"] = [planet_esm(AGG, nm) for nm in tab["name"]] if AGG is not None else np.nan
     tab["t_obs"] = cfg.n_orbits * tab["period"] * 24.   # [h]
@@ -1116,9 +1185,23 @@ def _instrument_false_F_row(cfg, A_B_true, pl, instrument, sigma_1min, bounds, F
     return dict(instrument=instrument, sigma_1min=float(sigma_1min[dets[0]]) if len(dets) == 1 else np.nan, **false_F_fit(c, A_B_true, bounds=bounds, F_bounds=F_bounds, **kw))
 
 
+# The row of _instrument_false_F_row from the fits of a _bias_table_pair (no refit).
+def _instrument_false_F_row_from(tabs, cfg, pl, instrument, sigma_1min, bounds, F_bounds):
+    dets = detectors(instrument)
+    n, r, _ = _table_fit_pair(tabs, "instrument", instrument)
+    for tab in tabs:
+        if tab.attrs.get("planet") != pl.name: raise ValueError(f"fits: the {tab.attrs['model']} table is of {tab.attrs.get('planet')}, not {pl.name}")
+        for d in dets:
+            s_tab = tab.attrs["sigma_1min"].get(d, np.nan)
+            if not _same_noise(s_tab, sigma_1min[d]): raise ValueError(f"fits: {d} was fitted at sigma_1min = {s_tab} ppm/min in the {tab.attrs['model']} table, this call has {sigma_1min[d]}")
+    return dict(instrument=instrument, sigma_1min=float(sigma_1min[dets[0]]) if len(dets) == 1 else np.nan, **_false_F_result(n, r, pl, cfg.emissivity_B, bounds, F_bounds))
+
+
 # False-positive F for one planet on several instruments (the counterpart of instrument_retrievals: same `instruments` entries incl. tuples for a joint fit of several detectors, same
 # sigma_1min handling). A joint fit's sigma_1min_crit is NaN; its noise_margin applies to all its detectors alike.
-def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
+# fits=(tab, tab_J): the instrument_retrievals of this planet with redist=False and redist=True (same cfg, A_B_true, noise levels, bounds and **kw), whose fits are reused instead of
+# refitting (see _bias_table_pair). Same result.
+def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, fits=None, **kw):
     from HItargets_utils import rms_1min, NoNoiseLevelError
     instruments = [instrument_key(ins) for ins in instruments]
     dets = list(dict.fromkeys(d for ins in instruments for d in detectors(ins)))
@@ -1132,7 +1215,11 @@ def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None
         if missing: print(f"{planet.name}: no noise level on {', '.join(missing)} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry), left out")
     used = [ins for ins in instruments if all(d in sigma_1min for d in detectors(ins))]
     if not used: raise ValueError(f"{planet.name}: no noise level for any of {instruments}")
-    rows = pmap(_instrument_false_F_row, [(cfg, A_B_true, planet, ins, sigma_1min, bounds, F_bounds, kw) for ins in used], n_jobs)
+    if fits is None:
+        rows = pmap(_instrument_false_F_row, [(cfg, A_B_true, planet, ins, sigma_1min, bounds, F_bounds, kw) for ins in used], n_jobs)
+    else:
+        tabs = _bias_table_pair(fits, A_B_true, bounds, F_bounds, cfg.n_orbits)
+        rows = [_instrument_false_F_row_from(tabs, cfg, planet, ins, sigma_1min, bounds, F_bounds) for ins in used]
     tab = pd.DataFrame(rows)
     tab["t_obs"] = cfg.n_orbits * planet.period * 24.   # [h]
     tab.attrs.update(planet=planet.name, A_B_true=A_B_true, n_orbits=cfg.n_orbits, sigma_1min={d: float(sigma_1min[d]) for d in dets if d in sigma_1min})
@@ -1219,7 +1306,8 @@ def _instrument_row(cfg, A_B_true, pl, instrument, sigma_1min, redist, bounds, F
     model = "naive_redist" if redist else "naive"
     fit = fit_truth(c, A_B_true, models=(model,), free_offset=True, bounds=bounds, F_bounds=F_bounds, fisher=has_noise, **kw)[model]
     return dict(instrument=instrument, sigma_1min=float(sigma_1min[dets[0]]) if len(dets) == 1 and has_noise else np.nan,   # a joint fit has one noise level per detector: see tab.attrs["sigma_1min"]
-                A_B_fit=fit["A_B_fit"], bias_A_B=fit["bias_A_B"], sigma_A_B=fit.get("sigma_A_B", np.nan), F_fit=fit.get("F_fit", np.nan), sigma_F=fit.get("sigma_F", np.nan))
+                A_B_fit=fit["A_B_fit"], bias_A_B=fit["bias_A_B"], sigma_A_B=fit.get("sigma_A_B", np.nan), F_fit=fit.get("F_fit", np.nan), sigma_F=fit.get("sigma_F", np.nan),
+                chi2=fit["chi2"] if has_noise else np.nan)   # chi2 at the detectors' own noise (instrument_false_F(fits=...)); none at the placeholder noise
 
 
 # One planet, several instruments: the fitted A_B and its Fisher sigma per instrument, for a hyperillumination truth injected at A_B_true (the multi-instrument
