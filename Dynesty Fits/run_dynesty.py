@@ -6,8 +6,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.p
 import contextlib, io
 with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
     import fspiderman as sp
-from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, run_pandexo, rms_1min, DEFAULT_A_B, DEFAULT_A, DEFAULT_U_B, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS, A_B_BOUNDS, F_BOUNDS, OFFSET_BOUNDS
-from hyperillumination_phasecurve_utils import FittingConfig, ConstantBandAlbedo, ScaledBandAlbedo
+from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, rms_1min, DEFAULT_A_B, DEFAULT_A, DEFAULT_U_B, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS, A_B_BOUNDS, F_BOUNDS, OFFSET_BOUNDS
+from hyperillumination_phasecurve_utils import FittingConfig, ConstantBandAlbedo, ScaledBandAlbedo   # ScaledBandAlbedo(1.): A = A_B, the A_B-coupled alternative (only within the physical prior A_B_BOUNDS, where A >= 0)
 from dynesty_utils import *
 
 
@@ -27,7 +27,8 @@ A_model = ConstantBandAlbedo(DEFAULT_A)   # band-integrated albedo A of the refl
 # Filter to be used
 instrument = "JWST_NIRSpec.G395H_NRS1" # "MIRI/LRS" #  "MIRI/F1280W" (no PandExo mode: rms_1min takes sigma_1min from CUSTOM_SIGMA_1MIN in HItargets_utils.py)
 
-INSOL_TRUTH = "hyperillum"   # insolation model the simulated data are drawn from (F = 0 in the truth: any fitted F is bias)
+INSOL_TRUTH = "hyperillum"   # insolation model the simulated data are drawn from (no redistribution in the truth: any fitted F is bias)
+F_TRUE = None                # heat redistribution of the truth, only for INSOL_TRUTH = "naive_redist" (None otherwise); the fitted F is then compared with it
 MODELS = ("hyperillum", "naive", "naive_redist")  # insolation models fitted to those data; each one is sampled with its OWN pset (see PSETS)
 
 seed = 42
@@ -46,7 +47,7 @@ PSETS = {"hyperillum":   ParameterSet((_A_B, _OFFSET)),
          "naive_redist": ParameterSet((_A_B, _OFFSET, _F))}
 
 # Sampler. pfrac=0.8 -> effort on the posterior; pfrac=0 -> all effort on lnZ (for the Bayes factor)
-sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10, dlogz=0.01, nprocs=8)
+sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10, dlogz=0.01, nprocs=12)
 
 
 ####################################################################################################
@@ -76,7 +77,7 @@ if __name__ == "__main__":
     print(f"1-sigma per bin (over all orbits) = {cfg.sigma_bin:.1f} ppm")
 
     # SIMULATED OBSERVATION. Reproducible: the same inputs and seed give the same data.
-    data = simulate_data(cfg, A_B_true, insolation_model=INSOL_TRUTH, seed=seed, plotting=False)
+    data = simulate_data(cfg, A_B_true, insolation_model=INSOL_TRUTH, seed=seed, plotting=False, **({} if F_TRUE is None else dict(F=F_TRUE)))
 
     # LogLikelihoods. Same data for every model, each with its own pset
     missing = [m for m in MODELS if m not in PSETS]
@@ -101,9 +102,9 @@ if __name__ == "__main__":
         scfg = SamplerConfig(seed=seed, outfile=outfile_of(PSETS[m]), **sampler)
         fits[m] = run_nested_fit(L, PSETS[m], scfg)
 
-    # Summary. The truth has no redistribution, so the injected F is 0 and the posterior's distance from it IS the bias
+    # Summary. The injected value of every parameter any model samples: without redistribution in the truth the injected F is 0, so the posterior's distance from it IS the bias
     # (posterior_summary only quotes a bias for parameters a model actually samples, so one base serves all three).
-    base = dict(A_B=A_B_true, offset=0., F=0.)
+    base = dict(A_B=A_B_true, offset=0., F=0. if data["truth"]["F"] is None else data["truth"]["F"])
     print("\n" + "=" * 78)
     for f in fits.values():
         posterior_summary(f, base)

@@ -760,3 +760,13 @@ def rms_1min_pandexo_sample(names, instrument, verbose=False, **overrides):
     if missing:
         print(f"no noise level on {instrument} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry) for {len(missing)} of {len(missing) + len(out)} planets: {', '.join(missing)}")
     return out
+
+
+# sigma_1min [ppm/min] of ONE planet on several instruments: {instrument: rms_1min(...)}, PandExo (cache) or CUSTOM_SIGMA_1MIN; an instrument with neither is left out silently (NoNoiseLevelError),
+# so callers test `ins in levels`. A planet the archive cannot supply PandExo inputs for raises, as in rms_1min_pandexo_sample.
+def noise_levels(planet, instruments, **overrides):
+    out = {}
+    for ins in instruments:
+        try: out[ins] = rms_1min(planet, ins, verbose=False, **overrides)
+        except NoNoiseLevelError: pass
+    return out

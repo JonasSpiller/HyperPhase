@@ -1726,3 +1726,123 @@ def _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize
               title=legend_title + f", Fisher error bars {levels} (dark to light)", title_fontsize=9)
     fig.tight_layout()
     return fig, ax
+
+
+
+###########################################################################################################################
+#####
+#####   Nightside temperature: tables and plots (NightsideTemperature.ipynb)
+#####
+###########################################################################################################################
+
+# Presentation helpers of NightsideTemperature.ipynb; the rows come from its band_row (nightside signal, T_b,night, T_b,day) and fit_row (point-source fit with redistribution, T_night^KL).
+
+
+def display_formatted(df, columns, index="name", transpose=False):
+    '''Display the columns of df given as {column: (header, format)} under their headers, NaN as "-"; transpose: quantities as rows (for a wide table that would wrap).'''
+    from IPython.display import display
+    cell = lambda v, f: "-" if v is None or (isinstance(v, (float, np.floating)) and not np.isfinite(v)) else f.format(v)
+    t = pd.DataFrame({h: [cell(v, f) for v in df[c]] for c, (h, f) in columns.items()}, index=pd.Index(list(df[index]), name=None))
+    display(t.T if transpose else t)
+
+
+def band_range_um(instrument):
+    '''(blue, red) edge [um] of a band; a joint fit of several detectors spans all of them.'''
+    from HItargets_utils import filter_lambda
+    lam = 1e6 * np.array([filter_lambda(d) for d in detectors(instrument)], dtype=float)
+    return lam.min(), lam.max()
+
+
+def planet_label(pl, newline=True):
+    sep = "\n" if newline else ", "
+    return f"{pl.name}{sep}$a/R_\\star$ = {pl.R / pl.r2:.2f}{sep}$i$ = {pl.incl:.0f}°"
+
+
+def plot_nightside_survey(survey, pls, z_detect=2., noise_label=r"$\sigma_{\rm amp}$"):
+    '''All planets in one band (x: planet, ordered as pls). Top: thermal nightside signal at mid-transit, edge-on, against the amplitude noise sigma_amp (FittingConfig.sigma_amp). Bottom: true edge-on T_b,night against the
+    uniform nightside T_night^KL of the point-source fit with redistribution, annotated with the offset and z_F (filled: spurious F detected, z_F >= z_detect; railed fits are left out).'''
+    d = survey.set_index("name").loc[list(pls)]
+    x, det = np.arange(len(d)), (d["z_F"] >= z_detect).to_numpy()
+    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(11, 8), sharex=True, gridspec_kw=dict(height_ratios=(1, 1.4)))
+    ax.plot(x, d["night_hi_90"], "o", ms=8, color=C_HI, zorder=4, label="extended source (point source: 0)")
+    ax.plot(x, d["sigma_amp"], "_", ms=16, mew=2, color=MUTED, zorder=3, label=noise_label)
+    ax.set_ylim(bottom=0.); ax.set_ylabel(r"thermal $F_p/F_s$ at mid-transit [ppm]"); ax.legend(fontsize=9, loc="upper right")
+    ax2.vlines(x, d["T_night_90"], d["T_night_fit"], color=MUTED, lw=1.2, zorder=1)
+    ax2.plot(x, d["T_night_90"], "o", ms=8, color=C_HI, zorder=4)
+    ax2.plot(x[det], d["T_night_fit"][det], "s", ms=8, color=C_REDIST, zorder=4)
+    ax2.plot(x[~det], d["T_night_fit"][~det], "s", ms=8, mfc="none", mec=C_REDIST, mew=1.4, zorder=4)
+    for xi, t_true, t_fit, z in zip(x, d["T_night_90"], d["T_night_fit"], d["z_F"]):
+        if np.isfinite(t_fit): ax2.annotate(f"{t_fit - t_true:+.0f} K" + (f"\n$z_F$ = {z:.1f}" if np.isfinite(z) else ""), (xi, t_fit), xytext=(7, 0), textcoords="offset points", va="center", fontsize=8, color=INK_2)
+    ax2.set_ylabel("nightside temperature [K]"); ax2.set_ylim(bottom=0.)
+    ax2.legend(handles=[plt.Line2D([], [], marker="o", ls="none", ms=8, color=C_HI, label=r"true $T_{\rm b,night}$ (edge-on)"),
+                        plt.Line2D([], [], marker="s", ls="none", ms=8, color=C_REDIST, label=rf"$T_{{\rm night}}^{{\rm KL}}$ of the point-source fit, $F$ detected ($z_F \geq {z_detect:g}$)"),
+                        plt.Line2D([], [], marker="s", ls="none", ms=8, mfc="none", mec=C_REDIST, mew=1.4, label=rf"$T_{{\rm night}}^{{\rm KL}}$, $z_F < {z_detect:g}$")], fontsize=9, loc="lower left")
+    ax2.set_xticks(x, [planet_label(pls[nm]) for nm in d.index], fontsize=8); ax2.set_xlim(-0.5, len(d) - 0.2)
+    for a_ in (ax, ax2): a_.grid(axis="x", visible=False)
+    fig.tight_layout()
+    return fig
+
+
+def plot_nightside_spectra(night, fits, pls, names, z_detect=2., noise_label=r"$\sigma_{\rm amp}$"):
+    '''One column per planet, against wavelength (horizontal bars: band ranges). Top: thermal nightside signal at mid-transit, edge-on and at the planet's inclination, the point-source value
+    at the planet's inclination (the dayside seen past the pole; 0 for an edge-on planet) and the amplitude noise sigma_amp. Bottom: T_b,night (edge-on, planet's inclination) and T_night^KL of the point-source fit with
+    redistribution per band (filled: z_F >= z_detect); a joint fit of several detectors is a line across their bands, a railed fit a grey "railed" mark.'''
+    fig, axs = plt.subplots(2, len(names), figsize=(6.2 * len(names), 8.5), sharex=True, sharey="row", squeeze=False)
+    for j, nm in enumerate(names):
+        ax, ax2 = axs[:, j]
+        d = night[night["name"] == nm]
+        lo, hi = np.array([band_range_um(ins) for ins in d["instrument"]]).T
+        xc, hw = (lo + hi) / 2., (hi - lo) / 2.
+        ax.errorbar(xc, d["night_hi_90"], xerr=hw, fmt="o", ms=7, color=C_HI, label="extended source, edge-on")
+        ax.errorbar(xc, d["night_hi"], xerr=hw, fmt="o", ms=7, mfc="none", mew=1.3, color=C_HI, label="extended source, planet's $i$")
+        ax.errorbar(xc, d["night_ps"], xerr=hw, fmt="o", ms=7, mfc="none", mew=1.3, color=C_NAIVE, label="point source, planet's $i$ (dayside past the pole)")
+        ax.plot(xc, d["sigma_amp"], "_", ms=16, mew=2, color=MUTED, label=noise_label)
+        ax.set_title(planet_label(pls[nm], newline=False), fontsize=11)
+        ax2.errorbar(xc, d["T_night_90"], xerr=hw, fmt="o", ms=7, color=C_HI)
+        ax2.errorbar(xc, d["T_night"], xerr=hw, fmt="o", ms=7, mfc="none", mew=1.3, color=C_HI)
+        for _, r in fits[fits["name"] == nm].iterrows():
+            b0, b1 = band_range_um(r["instrument"])
+            if not np.isfinite(r["T_night_fit"]):
+                ax2.annotate("railed", ((b0 + b1) / 2., 0.), xycoords=("data", "axes fraction"), xytext=(0, 6), textcoords="offset points", ha="center", rotation=90, fontsize=8, color=MUTED, style="italic")
+                continue
+            joint, filled = len(detectors(r["instrument"])) > 1, r["z_F"] >= z_detect
+            ax2.hlines(r["T_night_fit"], b0, b1, colors=C_REDIST, lw=1.4, ls="--" if joint else "-", zorder=2)
+            ax2.plot(np.sqrt(b0 * b1), r["T_night_fit"], "D" if joint else "s", ms=7, color=C_REDIST, mfc=C_REDIST if filled else "none", mew=1.4, zorder=4)
+        ax2.set_xscale("log"); ax2.set_xlabel("wavelength [µm]"); ax2.set_ylim(bottom=0.)
+        ax2.set_xticks([3, 4, 5, 7, 10, 15, 20], ["3", "4", "5", "7", "10", "15", "20"]); ax2.minorticks_off()
+        for a_ in (ax, ax2): a_.grid(axis="x", visible=False)
+    axs[0, 0].set_ylim(bottom=0.)
+    axs[0, 0].set_ylabel(r"thermal $F_p/F_s$ at mid-transit [ppm]"); axs[1, 0].set_ylabel("nightside temperature [K]")
+    axs[0, -1].legend(fontsize=8, loc="upper left")
+    axs[1, 0].legend(handles=[plt.Line2D([], [], marker="o", ls="none", ms=7, color=C_HI, label=r"true $T_{\rm b,night}$, edge-on"),
+                              plt.Line2D([], [], marker="o", ls="none", ms=7, mfc="none", mew=1.3, color=C_HI, label=r"true $T_{\rm b,night}$, planet's $i$"),
+                              plt.Line2D([], [], marker="s", ls="-", ms=7, color=C_REDIST, label=r"$T_{\rm night}^{\rm KL}$, single band"),
+                              plt.Line2D([], [], marker="D", ls="--", ms=7, color=C_REDIST, label=r"$T_{\rm night}^{\rm KL}$, joint NRS1 + NRS2"),
+                              plt.Line2D([], [], marker="s", ls="none", ms=7, mfc="none", mec=C_REDIST, mew=1.4, label=rf"hollow: $z_F < {z_detect:g}$")], fontsize=8, loc="lower left")
+    fig.tight_layout()
+    return fig
+
+
+def plot_sg_comparison(sg, band_label="MIRI/LRS"):
+    '''Sadh & Gavassino (2026) Table 2 comparison, one row per planet: dayside and nightside temperature under each hemisphere definition (columns <key>_day / <key>_night of sg: pub, uniform, area, disk, band and teske, see hemisphere_temperatures), and A_T.'''
+    names, y = list(sg["name"]), np.arange(len(sg))[::-1]
+    fig, axs = plt.subplots(1, 3, figsize=(17, 5.), sharey=True, gridspec_kw=dict(width_ratios=(1.25, 1.25, 1.)))
+    series = [("pub", "*", INK, True, 12, "S&G 2026 Table 2 / eq. 18"),
+              ("uniform", "o", INK, False, 9, "S&G recipe (eqs. 15-17, uniform weight), our insolation"),
+              ("area", "o", C_REDIST, True, 7, "area mean of the flux"),
+              ("disk", "o", C_HI, True, 7, "bolometric, disk-integrated (edge-on)"),
+              ("band", "s", INSTRUMENT_COLORS[1], False, 8, f"{band_label} $T_b$ (edge-on)")]
+    for ax, side in zip(axs[:2], ("day", "night")):
+        for key, m, col, fill, ms, label in series:
+            ax.plot(sg[f"{key}_{side}"], y, m, ls="none", ms=ms, color=col, mfc=col if fill else "none", mew=1.3, label=label, zorder=4)
+        ax.set_xlabel(f"{side}side temperature [K]")
+    axs[0].plot(sg["teske"], y, "D", ls="none", ms=6, color=MUTED, label=r"Teske et al. 2025 $T_{d,\max}$ (point source)", zorder=3)
+    for key, m, col, fill, ms, label in series:
+        axs[2].plot(sg[f"A_T_{key}"], y, m, ls="none", ms=ms, color=col, mfc=col if fill else "none", mew=1.3, zorder=4)
+    axs[2].axvline(1., color=AXIS, lw=.8); axs[2].set_xlabel(r"$A_T = 1 - T_{\rm night}/T_{\rm day}$")
+    axs[0].set_yticks(y, [f"{nm}\n$a/R_\\star$ = {r:.2f}" for nm, r in zip(names, sg["a_rs"])])
+    for a_ in axs: a_.grid(axis="y", visible=False)
+    fig.legend(*axs[0].get_legend_handles_labels(), fontsize=9, ncol=3, loc="lower center")
+    fig.suptitle(r"Sadh & Gavassino (2026) Table 2 against consistent hemisphere definitions ($A_B$ = 0)", fontsize=12)
+    fig.tight_layout(rect=(0., 0.14, 1., 1.))   # room for the figure legend: lay out with tight=False in paper_figure
+    return fig

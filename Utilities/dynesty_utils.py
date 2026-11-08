@@ -1,5 +1,5 @@
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import time
 import os
 import glob
@@ -9,11 +9,13 @@ import dynesty
 from dynesty.pool import Pool
 from joblib import Parallel, delayed
 import contextlib
-from hyperillumination_phasecurve_utils import DEFAULT_N_LO, DEFAULT_N_LA, model_pcurve, reflected_unit, insolation_cache, pcurve_params, occultation_depth, custom_temperature_grid, swept_planet  # forward model, its geometry-only caches, and the pieces the derived quantities need
+from hyperillumination_phasecurve_utils import DEFAULT_N_LO, DEFAULT_N_LA, model_pcurve, reflected_unit, insolation_cache, pcurve_params, occultation_depth, custom_temperature_grid, swept_planet, stellar_spidergrid, FittingConfig  # forward model, its geometry-only caches, and the pieces the derived quantities need
 import astro_utils   # T_bright
 from dynesty import utils as dyfunc
 from scipy.ndimage import gaussian_filter
-from simple_bias_analysis import binned, fit_naive, temperature_bias
+from simple_bias_analysis import binned, fit_naive, fit_redist, fisher_sigma, measurability, temperature_bias   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth compares the sampler with
+from hyperillumination_utils import surface_temperature   # the nightside temperature a fitted F implies
+from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS   # the parameter ranges: priors (physical) and the least-squares fit range of A_B
 from scipy.stats import norm, truncnorm
 import warnings
 from dynesty.dynamicsampler import stopping_function   # re-evaluated post-run to tell convergence from budget truncation
@@ -27,12 +29,28 @@ import matplotlib.pyplot as plt
 #####
 ###########################################################################################################################
 
+# Forward-model resolution of the TRUTH simulate_data draws the data from. Well above the likelihood's defaults (model_pcurve: n_t = 50 n_bins, n_layers 40 / 60, n_lo / n_la = DEFAULT_N_LO / DEFAULT_N_LA),
+# so that a truth-vs-model residual is model bias and not grid resolution; plot_noisy_vs_truth checks that against its "numerical floor". k_truth: sub-samples per bin (n_t = k_truth * n_bins).
+TRUTH_KW = dict(k_truth=200, n_layers=80, n_lo=600, n_la=300)
+
+
+def truth_model_kw(data, cfg):
+    """The model_pcurve settings the truth of `data` was computed with, as model_pcurve keywords (n_t, n_layers, n_lo, n_la, and F for a "naive_redist" truth).
+    simulate_data records them in data["truth"]["model_kw"] (since 2026-11-08); for older data the defaults TRUTH_KW are assumed."""
+    tr = dict(data.get("truth") or {})
+    kw = dict(tr.get("model_kw") or dict(n_t=TRUTH_KW["k_truth"] * cfg.n_bins, n_layers=TRUTH_KW["n_layers"], n_lo=TRUTH_KW["n_lo"], n_la=TRUTH_KW["n_la"]))
+    if tr.get("F") is not None: kw.setdefault("F", tr["F"])
+    return kw
+
+
 def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", **model_kw):
+    """The simulated observation against the truth it was drawn from (re-evaluated here, one forward model at the truth's own resolution, truth_model_kw), with the residuals in units of sigma.
+    Prints the chi2 check of the noise realisation. Returns fig, (ax, axr) and does not show (the caller does)."""
     ph = data["t"] / cfg.planet.period  # orbital phase
 
-    # Full Phase Curve (for custom reproduction of simulate_data)
-    t_hi, y_hi = model_pcurve(cfg, insolation_model, A_B_true, n_t=200 * cfg.n_bins, n_layers=80, n_lo=600, n_la=300, **model_kw)
-    y_true = binned(cfg, y_hi)
+    # Full Phase Curve (the exact curve simulate_data drew the data from; model_kw overrides the recorded settings)
+    t_hi, y_hi = model_pcurve(cfg, insolation_model, A_B_true, **{**truth_model_kw(data, cfg), **model_kw})
+    y_true = binned(cfg, y_hi) + float((data.get("truth") or {}).get("offset", 0.))   # with the injected baseline, if any
     ph_hi = t_hi / cfg.planet.period
 
     # Plotting
@@ -55,28 +73,31 @@ def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", **mo
     axr.set_xlabel("orbital phase");
     axr.set_ylabel("resid / $\\sigma$");
     axr.set_ylim(-3.5, 3.5)
-    return fig, (ax, axr)
 
     # Numerical Checks
     chi2 = np.sum(r ** 2)
     print(f"sigma_bin: {cfg.sigma_bin:.2f} ppm  (bin width {cfg.planet.period * 24 * 60 / cfg.n_bins:.2f} min)")
     print(f"chi2 / n_bins (normalized average noise per bin ~1): {chi2 / cfg.n_bins:.2f}")
     print(f"residual mean / sigma (~0): {r.mean():.2f}")
+    return fig, (ax, axr)
 
 
 def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=True, offset=0.,
-                  k_truth=200, n_layers=80, n_lo=600, n_la=300, plotting=True, **model_kw):
+                  k_truth=TRUTH_KW["k_truth"], n_layers=TRUTH_KW["n_layers"], n_lo=TRUTH_KW["n_lo"], n_la=TRUTH_KW["n_la"], plotting=True, **model_kw):
     """Simulated phase-folded observation: binned(truth) + N(0, sigma_bin).
 
     cfg          : FittingConfig — the only mandatory input; supplies planet, filter, stellar_grid, A_(A_B), sigma_1min, n_orbits, n_bins, u_B, reflected.
     A_B_true     : true Bond albedo.
     noise        : False -> the noiseless ("Asimov") dataset. Use it for bias maps; do NOT use it for lnZ / Bayes factors, where chi2 = 0 at the truth inflates Z.
     offset       : constant baseline injected into the data [ppm]; set non-zero to check that the fitted nuisance offset is actually recovered.
-    k_truth      : sub-samples per bin for the truth (n_t = k_truth * n_bins, must tile).
+    k_truth      : sub-samples per bin for the truth (n_t = k_truth * n_bins, must tile); with n_layers, n_lo, n_la the truth's resolution (TRUTH_KW).
+    model_kw     : further model_pcurve keywords of the truth, e.g. F for insolation_model="naive_redist".
+    The injected truth (A_B, insolation model, F, offset, seed, and the forward-model settings) travels with the data in data["truth"], and from there into NestedFit.meta.
     """
 
     # high-resolution truth (thermal + reflected, since cfg.reflected=True)
-    t_hi, y_hi = model_pcurve(cfg, insolation_model, A_B_true, n_t=k_truth * cfg.n_bins, n_layers=n_layers, n_lo=n_lo, n_la=n_la, **model_kw)
+    model_kw_truth = dict(n_t=k_truth * cfg.n_bins, n_layers=n_layers, n_lo=n_lo, n_la=n_la, **model_kw)
+    t_hi, y_hi = model_pcurve(cfg, insolation_model, A_B_true, **model_kw_truth)
 
     # reduce to the observed bins
     y_true = binned(cfg, y_hi) + offset
@@ -89,11 +110,12 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
     t=(np.arange(cfg.n_bins) + 0.5) * cfg.planet.period / cfg.n_bins
     sigma = np.full(cfg.n_bins, s)
 
-    # the injected truth travels with the data (and from there into NestedFit.meta), so a saved fit knows what it was fitted to
-    truth = dict(A_B=float(A_B_true), insolation_model=insolation_model, offset=float(offset), seed=int(seed), noise=bool(noise))
+    # the injected truth travels with the data (and from there into NestedFit.meta), so a saved fit knows what it was fitted to; model_kw lets plot_simulated_data / plot_noisy_vs_truth re-evaluate exactly this truth
+    F_true = model_kw.get("F")
+    truth = dict(A_B=float(A_B_true), insolation_model=insolation_model, F=None if F_true is None else float(F_true), offset=float(offset), seed=int(seed), noise=bool(noise), model_kw=model_kw_truth)
     data = {"t": t, "y_obs": y_obs, "sigma":sigma, "truth": truth}
 
-    if plotting: plot_simulated_data(cfg, A_B_true, data, insolation_model=insolation_model, **{k: v for k, v in model_kw.items() if k == "F"}); plt.show()   # plot_simulated_data returns the figure and no longer shows it itself
+    if plotting: plot_simulated_data(cfg, A_B_true, data, insolation_model=insolation_model); plt.show()   # plot_simulated_data returns the figure and does not show it itself
 
     return data
 
@@ -159,14 +181,15 @@ class TruncNormal:
 @dataclass(frozen=True)
 class Parameter:
     name: str                # must be one of _KNOWN below
-    prior: object            # callable u -> value, e.g. Uniform(0., 0.8)
+    prior: object            # callable u -> value, e.g. Uniform(*A_B_BOUNDS)
     label: str = None        # LaTeX label for plots; defaults to the name
 
 
 @dataclass(frozen=True)
 class ParameterSet:
     """This class defines the priors: the ordered free parameters of a fit.
-    Call by e.g.: pset = ParameterSet((Parameter("A_B", Uniform(0., 0.8), r"$A_B$"), Parameter("offset", Uniform(-50., 50.), "offset [ppm]")))
+    Call by e.g.: pset = ParameterSet((Parameter("A_B", Uniform(*A_B_BOUNDS), r"$A_B$"), Parameter("offset", Uniform(*OFFSET_BOUNDS), "offset [ppm]")))
+    The ranges are the shared ones of HItargets_utils: A_B_BOUNDS, F_BOUNDS (physical) and OFFSET_BOUNDS.
     """
     params: tuple
 
@@ -281,7 +304,7 @@ class GaussianLogL:
         self._live["refl"] &= cfg.reflected  # nothing to cache when the reflected part is switched off
         self._live["insol"] &= insolation_model != "naive_redist"   # the Louden model never touches an insolation map
         self.refl_unit = reflected_unit(cfg, insolation_model, n_t=self.model_kw.get("n_t"), **geom) if self._live["refl"] else None
-        self.insol = insolation_cache(cfg, insolation_model, n_lo=self.model_kw.get("n_lo", 300), n_la=self.model_kw.get("n_la", 150), **geom) if self._live["insol"] else None
+        self.insol = insolation_cache(cfg, insolation_model, n_lo=self.model_kw.get("n_lo", DEFAULT_N_LO), n_la=self.model_kw.get("n_la", DEFAULT_N_LA), **geom) if self._live["insol"] else None
 
     # Build the likelihood from a ParameterSet, so the sampled names have a single source of truth. Fixed values are not the pset's business: pass them here, e.g. from_pset(..., pset, fixed=dict(a_rs=2.5))
     @classmethod
@@ -639,14 +662,33 @@ def load_fits(paths):
     return out
 
 
+def check_fit_current(fit, cfg=None, rtol=1e-6):
+    """Is a saved fit still a fit of TODAY's forward model? Returns the relative difference between the stellar grid the fit was run with (pickled inside its cfg) and the one the
+    current code builds from the same inputs (star, band, filter file, stellar model). 0 means identical; anything else means the thermal normalisation changed since the run
+    (stellar SED, filter convention, band-edge fix, ...), so the saved samples are not the posterior of the current likelihood and every plot that re-evaluates the forward model
+    would mix the two. Also raises for a cfg saved with an older FittingConfig (missing fields), which the forward model could not evaluate anyway."""
+    cfg = cfg if cfg is not None else fit.meta["cfg"]
+    missing = [f.name for f in fields(FittingConfig) if not hasattr(cfg, f.name)]
+    if missing: raise ValueError(f"the saved FittingConfig predates the field(s) {missing}: this fit ({fit.meta.get('file', '?')}) was run with an older forward model and has to be re-run")
+    now = stellar_spidergrid((cfg.l1, cfg.l2), cfg.filter_path, cfg.planet.logg, cfg.planet.feh, stellar_model=cfg.stellar_model)
+    then = cfg.stellar_grid
+    if np.shape(now[1]) != np.shape(then[1]) or not np.allclose(now[0], then[0]): return np.inf   # different T_eff nodes
+    rel = float(np.max(np.abs(np.asarray(now[1], float) / np.asarray(then[1], float) - 1.)))
+    if rel > rtol: warnings.warn(f"{fit.meta['insolation_model']}: the stellar grid of the current code differs from the one this fit was run with by up to {100 * rel:.3g} % "
+                                 f"(stellar model, filter or band changed since {fit.meta.get('file', 'the run')}). Its samples are not the posterior of today's likelihood: re-run the fit before quoting it.", RuntimeWarning, stacklevel=2)
+    return rel
+
+
 def logl_from_fit(fit, cfg=None, **model_kw):
     """The GaussianLogL a saved fit was run with, rebuilt from the pickle alone - what the plotting helpers that still
     evaluate the forward model (logl_slice/logl_grid, plot_posterior_predictive, derived_samples, plot_noisy_vs_truth) need.
 
-    Uses the FittingConfig stored in meta by run_nested_fit; pass `cfg` explicitly for fits saved before that was added.
+    Uses the FittingConfig stored in meta by run_nested_fit (with the stellar grid as it was at run time); pass `cfg` explicitly for fits saved before that was added.
+    check_fit_current warns when the current code would build a different stellar grid, i.e. when the forward model has changed since the run.
     The geometry-only caches are rebuilt here, so the first call costs a second or two."""
     cfg = cfg if cfg is not None else fit.meta.get("cfg")
     if cfg is None: raise ValueError("this fit predates cfg being stored in meta - pass cfg=... (or re-run the fit)")
+    check_fit_current(fit, cfg)
     kw = {**fit.meta.get("model_kw", {}), **model_kw}
     return GaussianLogL.from_pset(cfg, fit.meta["data"], fit.meta["insolation_model"], fit.pset, fixed=fit.meta.get("fixed"), **kw)
 
@@ -722,22 +764,27 @@ def bayes_factor(fits, num="hyperillum", den="naive", K=200, seed=0, verbose=Tru
 def derived_samples(logl, thetas, n_jobs=-1):
     """Posterior draws pushed through to physical quantities -> {key: array of length n_draws}.
 
-    T_sub / T_term / T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point. Under "naive" T_anti is the 0 K nightside and T_term is only np.interp of the grid between the last dayside and the first nightside node; under "hyperillum" the extended star pushes real flux past 90 deg, which is exactly the physical difference the Bayes factor is measuring.
+    T_sub / T_term / T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point. Under "naive" T_anti is the 0 K nightside and T_term is only np.interp of the grid between the last dayside and the first nightside node; under "hyperillum" the extended star pushes real flux past 90 deg, which is exactly the physical difference the Bayes factor is measuring. Under "naive_redist" T_anti is the redistributed nightside, T_anti^4 = (1-A_B) F S / (2 emissivity_B sigma) - the nightside temperature an observer would infer from that model, and 0 K in the truth.
     depth_th / depth_refl / depth : occultation depth [ppm], thermal / reflected / total. Feed depth_th to brightness_temperature().
     """
     cfg, m = logl.cfg, logl.insolation_model
-    n_lo, n_la = logl.model_kw.get("n_lo", 300), logl.model_kw.get("n_la", 150)
+    n_lo, n_la = logl.model_kw.get("n_lo", DEFAULT_N_LO), logl.model_kw.get("n_la", DEFAULT_N_LA)
+    # The temperature map of "naive_redist" is the naive insolation map, redistributed (K&L eq. 1). model_pcurve never needs it (Louden is analytic), so GaussianLogL does not cache
+    # it - but it is geometry-only, so unless a geometry parameter is sampled it is built ONCE here rather than once per draw (~0.4 s each).
+    insol = logl.insol
+    if insol is None and not any(n in logl.names for n in _GEOMETRY):
+        insol = insolation_cache(cfg, m, n_lo=n_lo, n_la=n_la, **{k: v for k, v in logl.fixed.items() if k in _GEOMETRY})
 
     def _one(theta):
         p_ = logl.unpack(theta)
         geom = {k: p_[k] for k in _GEOMETRY if k in p_}
         A_B_, F_ = p_["A_B"], p_.get("F")
 
-        lo, la, Tg = custom_temperature_grid(swept_planet(cfg, **geom), u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=m, F=F_, A_B=A_B_, emissivity_B=cfg.emissivity_B, insol=logl.insol)
+        lo, la, Tg = custom_temperature_grid(swept_planet(cfg, **geom), u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=m, F=F_, A_B=A_B_, emissivity_B=cfg.emissivity_B, insol=insol)
         eq = int(np.argmin(np.abs(la)))   # equator row; Tg has shape (n_la, n_lo)
         T = list(np.interp([0., 90., 180.], lo, Tg[eq]))   # interpolated, not nearest-cell: T falls steeply through the terminator, so the nearest grid longitude is off by hundreds of K there
 
-        pp = pcurve_params(cfg, m, A_B_, F=F_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=logl.insol)
+        pp = pcurve_params(cfg, m, A_B_, F=F_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=insol)
         d_th = float(occultation_depth(pp, stellar_grid=cfg.stellar_grid, emissivity=cfg.emissivity))
 
         # Reflected part: linear in A, and its maximum over the orbit is the last point before ingress - within ~1% of the full-phase value, since reflected_unit itself carries the occultation.
@@ -939,8 +986,12 @@ def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=
     fig, axes = plt.subplots(1, len(keys), figsize=figsize or (3.6 * len(keys), 2.7))
     axes = np.atleast_1d(axes)
     for ax, k in zip(axes, keys):
-        for name, d in derived.items():
-            ax.hist(d[k], bins=bins, density=True, histtype="step", lw=1.4, color=colors.get(name, "k"), label=name)
+        for j, (name, d) in enumerate(derived.items()):
+            v = np.asarray(d[k], float)
+            if np.ptp(v) == 0.:   # a constant, e.g. the 0 K nightside (T_anti) of "naive" and "hyperillum": a histogram of one value has an arbitrary width, so draw a line (dash lengths distinguish coincident models)
+                ax.axvline(v[0], color=colors.get(name, "k"), lw=1.4, ls=(0, (4 + 2 * j, 2)), label=f"{name} (= {v[0]:g})")
+            else:
+                ax.hist(v, bins=bins, density=True, histtype="step", lw=1.4, color=colors.get(name, "k"), label=name)
             if truth and name in truth: ax.axvline(np.median(truth[name][k]), color=colors.get(name, "k"), lw=1.0, ls="--")
         ax.set_xlabel(f"{k} {unit.get(k, '')}"); ax.set_yticks([])
     axes[0].legend(frameon=False, fontsize=8)
@@ -949,37 +1000,62 @@ def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=
 
 
 def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth="hyperillum",
-                        A_B_bounds=(0.0, 0.8), xatol=1e-3, truth_kw=None, colors=None, figsize=(8.5, 6.2), verbose=False):
+                        A_B_bounds=A_B_FIT_BOUNDS, xatol=None, truth_kw=None, fisher=True, colors=None, figsize=(8.5, 6.2), verbose=False):
     """The one-seed fits against the noiseless truth: what you would report vs. what the bias actually is.
 
-    Top panel   : the high-resolution truth and its binned version (= the noiseless data), the simulated data, each model's posterior MEDIAN curve, and the naive model fitted to the NOISELESS truth (simple_bias_analysis.fit_naive, offset free) - that last one is deterministic (no seed, no noise) and IS the bias.
-    Lower panel : everything minus the binned truth against +/- sigma_bin. The black points are the noise realisation the medians are chasing; the dotted grey line is the numerical floor, i.e. the truth model re-evaluated at the injected theta on the likelihood's own coarser grid, so anything at that level is grid resolution and not model bias.
+    Top panel   : the high-resolution truth and its binned version (= the noiseless data), the simulated data, each model's posterior MEDIAN curve, and the misspecified model(s) fitted
+                  to the NOISELESS truth with the least-squares fits of the bias analysis (simple_bias_analysis.fit_naive for "naive"; fit_redist, jointly in (A_B, F), when a
+                  "naive_redist" fit is loaded), offset free - those are deterministic (no seed, no noise) and ARE the bias. For "naive_redist" the fitted F is the false-positive
+                  redistribution the point-source model needs to mimic hyperillumination, and the nightside temperature it implies is printed.
+    Lower panel : everything minus the binned truth against +/- sigma_bin. The black points are the noise realisation the medians are chasing; the dotted grey line is the numerical
+                  floor, i.e. the truth model re-evaluated at the injected theta on the likelihood's own coarser grid, so anything at that level is grid resolution and not model bias.
 
     cfg / data       : the FittingConfig and the simulate_data() output the fits were run on.
-    logls / fits     : {model_name: GaussianLogL} and {model_name: NestedFit}, same keys.
+    logls / fits     : {model_name: GaussianLogL} and {model_name: NestedFit}, same keys. "naive" and "naive_redist" get a noiseless fit each when present; the truth's own model only its median.
     base             : {param: injected value} (the dict handed to theta_of / posterior_summary).
     insolation_truth : which insolation model the data were drawn from; must be a key of logls for the numerical floor to be drawn.
-    truth_kw         : forward-model resolution of the truth; defaults to simulate_data's own settings.
-    verbose          : False prints only the noiseless bias, |dA_B|/sigma_A_B with the critical sigma_1min, and the bias/floor gate; True adds the per-model median and max-lnL rows, the absorbed offset and the floor detail.
+    A_B_bounds       : range of the noiseless fits, i.e. of the bias; A_B_FIT_BOUNDS by default, as in the bias analysis (A_B_fit < 0 allowed), not the sampler's prior.
+    xatol            : tolerance of the noiseless fits; None -> the fitters' own defaults, so the numbers are exactly those of the bias analysis.
+    truth_kw         : forward-model resolution of the truth; defaults to what simulate_data recorded in data["truth"] (truth_model_kw).
+    fisher           : also evaluate the Fisher sigma of each noiseless fit (simple_bias_analysis.fisher_sigma, the error bar of the bias analysis) and quote the bias in its units next to
+                       the posterior width of this one seed: the two agree where the posterior is Gaussian and not truncated by the prior.
+    verbose          : False prints the noiseless fits, the bias in sigma with the critical sigma_1min and the bias/floor gate; True adds the per-model median and max-lnL rows, the absorbed offset and the floor detail.
 
-    Returns fig, (ax, axr), out - where out carries every number printed at either verbosity (naive-to-truth fit, bias_sigma0, sigma_1min_crit, per-model median/max-lnL chi2, the floor).
+    Returns fig, (ax, axr), out. out["noiseless"][model] carries every number of a noiseless fit (A_B, F, offset, chi2, rms, bias_A_B, dT_over_T [substellar], T_night [naive_redist],
+    sigma_A_B / sigma_F [posterior, this seed], bias_sigma0, sigma_1min_crit, bias_over_floor, and with fisher=True sigma_A_B_fisher / sigma_F_fisher, bias_sigma_fisher, sigma_1min_crit_fisher);
+    the rest are the curves (t_hi, y_hi, y_true, y_med, y_map, y_floor), the posterior summaries and the per-model chi2 against the truth.
     """
     colors = colors or _COLOR
-    truth_kw = dict(n_t=200 * cfg.n_bins, n_layers=80, n_lo=600, n_la=300) if truth_kw is None else dict(truth_kw)
+    tr = dict(data.get("truth") or {})
+    truth_kw = truth_model_kw(data, cfg) if truth_kw is None else dict(truth_kw)
+    F_truth = truth_kw.pop("F", None)                                 # only a "naive_redist" truth has one
+    off_inj = float(tr.get("offset", 0.))                             # the injected baseline, if any
+    fit_kw = {} if xatol is None else dict(xatol=xatol)
 
     # --- the noiseless reference: exactly the curve simulate_data drew the data from ---------------
-    t_hi, y_hi = model_pcurve(cfg, insolation_truth, A_B_true, **truth_kw)
-    y_true = binned(cfg, y_hi)                                    # the noiseless data
+    t_hi, y_hi = model_pcurve(cfg, insolation_truth, A_B_true, F=F_truth, **truth_kw)
+    y_true = binned(cfg, y_hi) + off_inj                                   # the noiseless data
     ph, ph_hi, s_bin = data["t"] / cfg.planet.period, t_hi / cfg.planet.period, cfg.sigma_bin
 
-    # --- naive fitted to the NOISELESS truth: the deterministic bias, no seed involved -------------
-    insol0 = insolation_cache(cfg, "naive", n_lo=truth_kw["n_lo"], n_la=truth_kw["n_la"])   # A_B only rescales the map, so one cache serves the whole scan
-    A_naive0, chi2_naive0, rms_naive0 = fit_naive(cfg, y_hi, free_offset=True, bounds=A_B_bounds, xatol=xatol, insol=insol0, **truth_kw)
-    y_naive0 = binned(cfg, model_pcurve(cfg, "naive", A_naive0, insol=insol0, **truth_kw)[1])
-    off_naive0 = float(np.mean(y_true - y_naive0))                # what free_offset absorbed
-    y_naive0 = y_naive0 + off_naive0
+    # --- the misspecified models fitted to the NOISELESS truth: the deterministic bias, no seed involved (the fits of the bias analysis, at the truth's resolution) ---
+    noiseless, insols = {}, {}
+    if "naive" in fits:
+        insols["naive"] = insolation_cache(cfg, "naive", n_lo=truth_kw.get("n_lo", DEFAULT_N_LO), n_la=truth_kw.get("n_la", DEFAULT_N_LA))   # A_B only rescales the map, so one cache serves the whole scan
+        A0, chi2_0, rms0 = fit_naive(cfg, y_hi, free_offset=True, bounds=A_B_bounds, insol=insols["naive"], **fit_kw, **truth_kw)
+        noiseless["naive"] = dict(A_B=float(A0), F=None, chi2=float(chi2_0), rms=float(rms0))
+    if "naive_redist" in fits:
+        insols["naive_redist"] = None                                      # the Louden model has no map to cache
+        A0, F0, chi2_0, rms0 = fit_redist(cfg, y_hi, free_offset=True, bounds=A_B_bounds, F_bounds=F_BOUNDS, **({} if xatol is None else dict(xatol=xatol, F_xatol=xatol)), **truth_kw)
+        noiseless["naive_redist"] = dict(A_B=float(A0), F=float(F0), chi2=float(chi2_0), rms=float(rms0))
+    for m, d in noiseless.items():
+        y0 = binned(cfg, model_pcurve(cfg, m, d["A_B"], F=d["F"], insol=insols[m], **truth_kw)[1])
+        d["offset"] = float(np.mean(y_true - y0))                          # what free_offset absorbed
+        d["y"] = y0 + d["offset"]
+        d["bias_A_B"] = d["A_B"] - A_B_true
+        d["dT_over_T"] = float(temperature_bias(A_B_true, d["bias_A_B"], d["F"] or 0.))   # substellar temperature
+        if d["F"] is not None: d["T_night"] = float(surface_temperature(np.pi, cfg.planet, "naive_redist", A_B=d["A_B"], emissivity_B=cfg.emissivity_B, F=d["F"]))   # the nightside the false-positive F implies (0 K in the truth)
 
-    # --- the two noisy fits: posterior median (what you would report) and max-lnL (= MAP, uniform priors)
+    # --- the noisy fits: posterior median (what you would report) and max-lnL (= MAP, uniform priors) -------------
     summ   = {m: posterior_summary(f, base, verbose=False)["params"] for m, f in fits.items()}
     th_med = {m: np.array([summ[m][n]["med"] for n in f.pset.names], float) for m, f in fits.items()}
     th_map = {m: f.results.samples[int(np.argmax(f.results.logl))] for m, f in fits.items()}
@@ -989,12 +1065,14 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
 
     fig, (ax, axr) = plt.subplots(2, 1, figsize=figsize, sharex=True, gridspec_kw=dict(height_ratios=[3, 1.7], hspace=0.06))
 
-    ax.plot(ph_hi, y_hi, lw=1.0, color="0.55", zorder=1, label=f"truth ({insolation_truth}, $A_B$={A_B_true:.3f})")
+    ax.plot(ph_hi, y_hi + off_inj, lw=1.0, color="0.55", zorder=1, label=f"truth ({insolation_truth}, $A_B$={A_B_true:.3f}" + (f", $F$={F_truth:g})" if F_truth is not None else ")"))
     ax.step(ph, y_true, where="mid", color="0.25", lw=1.2, zorder=2, label="binned truth = noiseless data")
     ax.errorbar(ph, data["y_obs"], yerr=data["sigma"], fmt="o", ms=4, color="k", capsize=2, elinewidth=1., zorder=6, label=f"simulated data ($\\sigma$={s_bin:.1f} ppm)")
     for m in fits:
         ax.step(ph, y_med[m], where="mid", color=colors.get(m, "k"), lw=1.6, zorder=4, label=f"{m} posterior median (one seed)")
-    ax.step(ph, y_naive0, where="mid", color=colors.get("naive", "k"), lw=1.6, ls="--", zorder=5, label=f"naive fitted to the noiseless truth ($A_B$={A_naive0:.4f})")
+    for m, d in noiseless.items():
+        ax.step(ph, d["y"], where="mid", color=colors.get(m, "k"), lw=1.6, ls="--", zorder=5,
+                label=f"{m} fitted to the noiseless truth ($A_B$={d['A_B']:.4f}" + (f", $F$={d['F']:.4f})" if d["F"] is not None else ")"))
     ax.set_ylabel("$F_p/F_\\star$ [ppm]"); ax.legend(frameon=False, fontsize=8); ax.margins(x=0.01)
 
     axr.axhspan(-s_bin, s_bin, fc="0.9", ec="0.6", lw=0.8, zorder=0, label=r"$\pm\sigma_{bin}$")
@@ -1002,7 +1080,8 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     axr.plot(ph, data["y_obs"] - y_true, "o", ms=4, color="k", zorder=6, label="data - truth (the noise realisation)")
     for m in fits:
         axr.step(ph, y_med[m] - y_true, where="mid", color=colors.get(m, "k"), lw=1.6, zorder=4)
-    axr.step(ph, y_naive0 - y_true, where="mid", color=colors.get("naive", "k"), lw=1.6, ls="--", zorder=5)
+    for m, d in noiseless.items():
+        axr.step(ph, d["y"] - y_true, where="mid", color=colors.get(m, "k"), lw=1.6, ls="--", zorder=5)
     if y_floor is not None:
         axr.step(ph, y_floor - y_true, where="mid", color="0.45", lw=1.0, ls=":", zorder=3, label="numerical floor (truth model at the injected $\\theta$)")
     axr.set_xlabel("orbital phase"); axr.set_ylabel("model - truth [ppm]"); axr.margins(x=0.01)
@@ -1011,37 +1090,55 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
 
     # --- numbers -----------------------------------------------------------------------------------
     chi2_tr = lambda y: float(np.sum(((y - y_true) / s_bin) ** 2))
-    sig_AB  = 0.5 * (summ["naive"]["A_B"]["hi"] - summ["naive"]["A_B"]["lo"])
-    out = dict(t_hi=t_hi, y_hi=y_hi, y_true=y_true, y_med=y_med, y_map=y_map, y_naive0=y_naive0, y_floor=y_floor,
-               summary=summ, A_naive0=float(A_naive0), chi2_naive0=float(chi2_naive0), rms_naive0=float(rms_naive0),
-               offset_naive0=off_naive0, bias_naive0=float(A_naive0 - A_B_true), sigma_A_B=float(sig_AB),
-               dT_over_T=float(temperature_bias(A_B_true, A_naive0 - A_B_true)),
-               chi2_truth={m: chi2_tr(y_med[m]) for m in fits},
-               chi2_floor=chi2_tr(y_floor) if y_floor is not None else None)
-    out["bias_over_floor"] = (out["chi2_naive0"] / out["chi2_floor"]) if out["chi2_floor"] else None   # the gate on this whole figure: how far the naive-vs-truth distance stands above the forward model's own discretisation error
-    out["bias_sigma0"] = abs(out["bias_naive0"]) / sig_AB                    # the NOISELESS bias in units of the posterior width - the seed-free counterpart of summ["naive"]["A_B"]["bias_sigma"], whose numerator is one realisation's median
-    out["sigma_1min_crit"] = cfg.sigma_1min * out["bias_sigma0"]             # sigma_A_B scales linearly with sigma_1min (at fixed n_orbits/n_bins) while the bias does not, so |dA_B| = sigma_A_B exactly at this per-minute precision; sigma_A_B is read off THIS seed's posterior, so it carries one realisation's scatter, and the linear scaling assumes the posterior is not truncated by the prior box
+    chi2_floor = chi2_tr(y_floor) if y_floor is not None else None
+    for m, d in noiseless.items():
+        sig = 0.5 * (summ[m]["A_B"]["hi"] - summ[m]["A_B"]["lo"])        # posterior width of A_B under this model, this seed
+        d["sigma_A_B"] = float(sig)
+        d["bias_sigma0"] = abs(d["bias_A_B"]) / sig                       # the NOISELESS bias in units of the posterior width - the seed-free counterpart of summ[m]["A_B"]["bias_sigma"], whose numerator is one realisation's median
+        d["sigma_1min_crit"] = cfg.sigma_1min * d["bias_sigma0"]          # sigma_A_B scales linearly with sigma_1min (at fixed n_orbits/n_bins) while the bias does not, so |dA_B| = sigma_A_B exactly at this per-minute precision; sigma_A_B is read off THIS seed's posterior, so it carries one realisation's scatter, and the linear scaling assumes the posterior is not truncated by the prior box
+        if d["F"] is not None:
+            d["sigma_F"] = float(0.5 * (summ[m]["F"]["hi"] - summ[m]["F"]["lo"]))
+            d["F_sigma0"] = d["F"] / d["sigma_F"]                            # the false-positive F in units of its (one-sided, prior-truncated) posterior width
+        if fisher:   # the error bar of the bias analysis: Fisher sigma at the noiseless fit, marginalised over the baseline (and over F for naive_redist)
+            sf = fisher_sigma(cfg, m, d["A_B"], F=d["F"], bounds=A_B_bounds, F_bounds=F_BOUNDS, insol=insols[m], **truth_kw)
+            d["sigma_A_B_fisher"] = float(sf[0])
+            d["bias_sigma_fisher"], d["sigma_1min_crit_fisher"] = (float(x) for x in measurability(d["bias_A_B"], sf[0], cfg.sigma_1min))
+            if d["F"] is not None: d["sigma_F_fisher"] = float(sf[1])
+        d["bias_over_floor"] = (d["chi2"] / chi2_floor) if chi2_floor else None   # the gate on this whole figure: how far the model-vs-truth distance stands above the forward model's own discretisation error
+
+    out = dict(t_hi=t_hi, y_hi=y_hi, y_true=y_true, y_med=y_med, y_map=y_map, y_floor=y_floor, summary=summ, noiseless=noiseless,
+               chi2_truth={m: chi2_tr(y_med[m]) for m in fits}, chi2_floor=chi2_floor)
+
     if verbose:
         for m in fits:
             a, o, pm = summ[m]["A_B"], summ[m]["offset"], logls[m].unpack(th_map[m])
-            print(f"{m:11s} median   A_B {a['med']:.4f} ({a['bias']:+.4f} = {a['bias_sigma']:+.2f} sigma)   offset {o['med']:+7.2f} ppm ({o['bias']:+.2f} = {o['bias_sigma']:+.2f} sigma)"
+            fF = (f"   F {summ[m]['F']['med']:.4f} ({summ[m]['F']['bias']:+.4f})", f"   F {pm['F']:.4f} ({pm['F'] - base.get('F', 0.):+.4f})") if "F" in summ[m] else ("", "")
+            print(f"{m:12s} median   A_B {a['med']:.4f} ({a['bias']:+.4f} = {a['bias_sigma']:+.2f} sigma)   offset {o['med']:+7.2f} ppm ({o['bias']:+.2f} = {o['bias_sigma']:+.2f} sigma){fF[0]}"
                   f"   chi2 vs truth {chi2_tr(y_med[m]):6.2f}   vs data {logls[m].chi2(th_med[m]):6.2f}")
-            print(f"{'':11s} max-lnL  A_B {pm['A_B']:.4f} ({pm['A_B'] - A_B_true:+.4f})              offset {pm['offset']:+7.2f} ppm ({pm['offset']:+.2f})"
+            print(f"{'':12s} max-lnL  A_B {pm['A_B']:.4f} ({pm['A_B'] - A_B_true:+.4f})              offset {pm['offset']:+7.2f} ppm ({pm['offset'] - off_inj:+.2f}){fF[1]}"
                   f"           chi2 vs truth {chi2_tr(y_map[m]):6.2f}   vs data {logls[m].chi2(th_map[m]):6.2f}")
         print()
 
-    fac = (1. / out["bias_sigma0"]) if out["bias_sigma0"] > 0 else np.inf      # how much finer sigma_1min must get before the bias is a 1-sigma effect
-    print(f"NOISELESS naive vs the NOISELESS truth  (offset free, no noise, no seed - this is THE bias):")
-    print(f"   A_B      {A_naive0:.4f}   bias {out['bias_naive0']:+.4f} = {out['bias_naive0'] / sig_AB:+.2f} sigma_A_B   ->   dT/T = {100 * out['dT_over_T']:+.2f} %")
-    print(f"   |dA_B|/sigma_A_B = {out['bias_sigma0']:.2f}   ->   sigma_1min,crit = {out['sigma_1min_crit']:.1f} ppm/min   (now {cfg.sigma_1min:.1f}, so {fac:.1f}x finer photometry - or {fac ** 2:.0f}x the orbits - before the bias reaches 1 sigma)")
-    if verbose:
-        print(f"   offset absorbed {off_naive0:+.2f} ppm    chi2 {chi2_naive0:.3f}  (squared truth-to-manifold distance in units of sigma_bin)    resid rms {rms_naive0:.2f} ppm = {rms_naive0 / s_bin:.2f} sigma_bin")
-        print(f"   the noisy naive median instead says {summ['naive']['A_B']['bias']:+.4f}; the gap to {out['bias_naive0']:+.4f} is this one seed's noise (sigma_A_B = {sig_AB:.4f})")
-
-    if y_floor is not None:
+    if noiseless: print("NOISELESS fit(s) to the NOISELESS truth  (offset free, no noise, no seed - this is THE bias; the least-squares fits of the bias analysis):")
+    for m, d in noiseless.items():
+        fac = (1. / d["bias_sigma0"]) if d["bias_sigma0"] > 0 else np.inf      # how much finer sigma_1min must get before the bias is a 1-sigma effect
+        fisher_txt = f" = {np.sign(d['bias_A_B']) * d['bias_sigma_fisher']:+.2f} sigma_Fisher" if fisher else ""
+        print(f"   {m:12s} A_B {d['A_B']:.4f}   bias {d['bias_A_B']:+.4f} = {d['bias_A_B'] / d['sigma_A_B']:+.2f} sigma_A_B (posterior, this seed){fisher_txt}   ->   dT_sub/T = {100 * d['dT_over_T']:+.2f} %")
+        if d["F"] is not None:
+            print(f"   {'':12s} F   {d['F']:.4f}   false positive (truth F = 0) = {d['F_sigma0']:.2f} sigma_F (posterior)" + (f", sigma_F,Fisher = {d['sigma_F_fisher']:.4f} (one-sided at F = 0: indicative only)" if fisher else "")
+                  + f"   ->   implied nightside T = {d['T_night']:.0f} K")
+        print(f"   {'':12s} |dA_B|/sigma_A_B = {d['bias_sigma0']:.2f}   ->   sigma_1min,crit = {d['sigma_1min_crit']:.1f} ppm/min"
+              + (f" (posterior) / {d['sigma_1min_crit_fisher']:.1f} ppm/min (Fisher)" if fisher else "")
+              + (f"   (now {cfg.sigma_1min:.1f}, so {fac:.1f}x finer photometry - or {fac ** 2:.0f}x the orbits - before the bias reaches 1 sigma)" if d["bias_sigma0"] < 1.
+                 else f"   (now {cfg.sigma_1min:.1f}, already finer: the bias is a {d['bias_sigma0']:.1f} sigma effect at the delivered noise)"))
         if verbose:
-            print(f"\nnumerical floor: {insolation_truth} at the injected theta vs its own truth curve, chi2 = {chi2_tr(y_floor):.3f}   max |diff| = {np.abs(y_floor - y_true).max():.2f} ppm = {np.abs(y_floor - y_true).max() / s_bin:.2f} sigma_bin")
-            print(f"   the likelihood runs model_pcurve at its DEFAULTS (n_t=50*n_bins, n_lo={DEFAULT_N_LO}, n_la={DEFAULT_N_LA}), the truth at {truth_kw} - anything here is grid resolution, not model bias")
-        r = out["bias_over_floor"]
-        print(f"   bias / floor = {chi2_naive0:.3f} / {out['chi2_floor']:.3f} = {r:.1f}x   ->   " + ("bias resolved" if r >= 10. else "NOT RESOLVED - refine model_kw (n_lo, n_la, n_layers, n_t) before quoting any bias from this run"))
+            print(f"   {'':12s} offset absorbed {d['offset']:+.2f} ppm    chi2 {d['chi2']:.3f}  (squared truth-to-manifold distance in units of sigma_bin)    resid rms {d['rms']:.2f} ppm = {d['rms'] / s_bin:.2f} sigma_bin")
+            print(f"   {'':12s} the noisy {m} median instead says {summ[m]['A_B']['bias']:+.4f}; the gap to {d['bias_A_B']:+.4f} is this one seed's noise (sigma_A_B = {d['sigma_A_B']:.4f})")
+        if chi2_floor:
+            r = d["bias_over_floor"]
+            print(f"   {'':12s} bias / floor = {d['chi2']:.3f} / {chi2_floor:.3f} = {r:.1f}x   ->   " + ("bias resolved" if r >= 10. else "NOT RESOLVED - refine model_kw (n_lo, n_la, n_layers, n_t) before quoting any bias from this run"))
+
+    if y_floor is not None and verbose:
+        print(f"\nnumerical floor: {insolation_truth} at the injected theta vs its own truth curve, chi2 = {chi2_floor:.3f}   max |diff| = {np.abs(y_floor - y_true).max():.2f} ppm = {np.abs(y_floor - y_true).max() / s_bin:.2f} sigma_bin")
+        print(f"   the likelihood runs model_pcurve at its DEFAULTS (n_t=50*n_bins, n_lo={DEFAULT_N_LO}, n_la={DEFAULT_N_LA}), the truth at {truth_kw} - anything here is grid resolution, not model bias")
     return fig, (ax, axr), out
