@@ -40,7 +40,8 @@ DEFAULT_EMISSIVITY = 1.
 DEFAULT_U_B = 0.5
 
 # Quadratic limb darkening (u1, u2) of the batman transit. The transit is identical in both irradiation models and cancels exactly in every comparison,
-# so the value only needs to be plausible: the median of ExoTiC-LD fits over the hosts of PAPER_PLANETS, in the band throughputs of the forward model (Stellar Model/LimbDarkening.ipynb).
+# so the value only needs to be plausible: the median of ExoTiC-LD fits over the hosts of the twelve PAPER_PLANETS of 2026-11-02, in the band throughputs of the forward model
+# (Stellar Model/LimbDarkening.ipynb). Not re-derived for the sample of 2026-11-08 (hosts of 4100-5960 K, as before): the value does not enter any result.
 DEFAULT_U = (0.09, 0.14)
 
 # Orbits observed and phase-folded. The periods are only 4-7 h, so five orbits are roughly 1-1.5 days of JWST time (about 27 h for TOI-2431 b, 34 h for K2-141 b):
@@ -80,13 +81,24 @@ MAX_R1_OVER_R2 = 0.3
 # Single definition, shared by best_hi_planets and simple_bias_analysis.rocky_sample / overlay_planets.
 ROCKY_MAX_RADE = 1.7
 
-# The planets of the paper (tab:targets): the twelve rocky archive planets with the smallest a/R* (aggregate of 2026-08-21), in that order. Hard-coded so that the
-# sample does not move with archive updates. best_hi_planets(12) is NOT this set: it ranks by (1 - Rp/R*)/(a/R*), which puts K2-223 b (tiny Rp/R*) ahead of TOI-561 b (no. 12 in a/R*).
-PAPER_PLANETS = ("TOI-2431 b", "TOI-2260 b", "Kepler-1340 b", "K2-141 b", "KOI-1843.03", "K2-157 b", "Kepler-990 c", "K2-183 b", "Kepler-78 b", "EPIC 206042996 c", "K2-131 b", "TOI-561 b")
+# The planets of the paper (tab:targets): the confirmed rocky planets (Rp < ROCKY_MAX_RADE) with a/R* < 3 and ESM > 4 (Kempton et al. 2018; the archive's value), ordered by a/R*
+# (the CUSTOM values, 2026-11-08). The a/R* cut keeps the stellar half-angle above 19.5 deg; the ESM cut keeps the planets whose A_B the per-planet figures can constrain at all
+# (K2-157 b, K2-223 b, KOI-1843.03, K2-183 b, K2-301 c, Kepler-990 c fail it with ESM 0.7-1.9; K2-106 b with 3.0). Every member has a CUSTOM entry, so the sample does not move
+# with archive updates. Dropped on the a/R* cut: TOI-6255 b, TOI-431 b, GJ 367 b (3.10-3.35, ESM 15-22; three of the five GO 8864 targets) and TOI-6324 b (4.29).
+# best_hi_planets is NOT this set: it ranks by (1 - Rp/R*)/(a/R*) and has no brightness cut.
+PAPER_PLANETS = ("TOI-2431 b", "TOI-2260 b", "K2-141 b", "K2-131 b", "TOI-561 b", "Kepler-78 b", "TOI-1444 b", "TOI-1798.02", "HD 80653 b")
 
-# Mean planet densities [g/cm^3] of the Roche limits drawn on every (a/R*, T_eff) bias map (simple_bias_analysis.draw_roche_frontier, for main-sequence hosts): Earth's bulk
-# density, and Earth composition compressed to ~1.5 Earth radii, which matches the archive densities of TOI-2431 b and K2-141 b (HypotheticalExtremePlanet.ipynb).
-ROCHE_RHO_P = {"Earth bulk density": 5.5, "Earth composition at 1.5 R⊕": 8.0}
+# The Roche limits drawn on every (a/R*, T_eff) map (simple_bias_analysis.draw_roche_frontier, main-sequence hosts) and used in HypotheticalExtremePlanet.ipynb, as {label: (iron mass
+# fraction, rho_0 / rho_mean)} of a rock/iron planet of radius ROCHE_R_P. The radius and iron fraction give the mean density (astro_utils.rocky_mean_density, Fortney et al. 2007 eq. 8), and
+# with rho_0 / rho_mean the Roche period (astro_utils.roche_period_h, Rappaport et al. 2013 eq. 5); simple_bias_analysis.roche_periods evaluates them.
+# - "Earth-like": Earth's iron fraction 0.33 and Earth's central concentration 13.1 / 5.51 = 2.37 (PREM). The wall for a typical rocky planet.
+# - "iron-rich": 70 % iron, the most that collisional mantle stripping leaves in planets above ~1 M_E (Marcus et al. 2010, as used by Rappaport et al. 2013), with rho_0 / rho_mean = 2.5,
+#   the top of Rappaport's range 1-2.5 (a larger ratio survives closer in, so this is the permissive end). The innermost line: left of it no rocky planet of radius ROCHE_R_P survives
+#   around a main-sequence host (hatched on the maps).
+# ROCHE_R_P = 1.5 R_E, typical of PAPER_PLANETS (TOI-2431 b and K2-141 b are 1.5 R_E). Compression makes larger planets denser and shifts the limits inwards: the Earth-like P_R is
+# ~4.7 / ~4.0 / ~3.7 h at 1.0 / 1.5 / 1.7 R_E, i.e. a/R* of the line -5 / +12 % at 1.7 / 1.0 R_E against 1.5 R_E.
+ROCHE_R_P = 1.5   # [R_E]
+ROCHE_CASES = {"Earth-like": (0.33, 2.37), "iron-rich (70 % Fe)": (0.70, 2.5)}
 
 # Argument of periastron where the archive has none. 90 deg is the transit convention and is irrelevant at e = 0.
 DEFAULT_W_DEG = 90.0
@@ -97,16 +109,49 @@ AU_IN_R_SUN = float(const.au / const.R_sun)
 # Custom parameters
 # ==========================================================================
 
-# entire planet with custom parameters
+# Planets with hand-curated parameters, each from a PUBLISHED source so that every value in the paper's target table can be cited.
+# The rule: a/R*, Rp/R* and i are the published fit; where no paper fits a/R*, the ratio of the paper's own tabulated a and R*
+# (TOI-2431 b, TOI-2260 b, Kepler-1323 b) or of its tabulated stellar density (TOI-1798.02); an inclination without a published value is acos(b / (a/R*)) from the published b,
+# or 90 deg where nothing is published (stated per entry); T14 is published where it exists and otherwise follows from the published geometry (it only enters the PandExo
+# in-transit integration count). Stellar parameters are published spectroscopic values or a named catalogue (TICv8, Fulton & Petigura 2018, Berger et al. 2020).
+# r2 = 1, so R is a/R*. T14 in hours. a_AU = (a/R*) x R* of the adopted star: it only feeds the light-travel-time correction, and it lets apply_custom recover R* and Rp for
+# the archive frame. Planets of the review without a citable, physically consistent geometry are deliberately NOT here: Kepler-780 b, -1340 b, -1368 b, -1547 b, -1566 b, -879 c.
+# CUSTOM takes precedence over the archive everywhere: hi_planets_by_name returns these objects, and apply_custom writes them into every archive frame.
 CUSTOM = {
-    "K2-141 b": PlanetParams(name="K2-141 b", period=0.2803244, incl=86.3, ecc=0.0, w=90.0, r1=0.02037, r2=1.0, R=2.292, T2_eff=4599.0, a_AU=0.00747, T14=0.94, logg=4.62, feh=-0.06), # Malavolta et al. 2018 (logg, [Fe/H]: their Table 2), Barragán et al. 2018
+    # ---- the eight recommended PAPER_PLANETS (chat of 2026-11-07) ---------------------------------------------------------------------------------------------------
+    "TOI-2431 b":       PlanetParams(name="TOI-2431 b", period=0.22419578, incl=74.0, ecc=0.0, w=90.0, r1=0.02131, r2=1.0, R=2.08, T2_eff=4109.0, a_AU=0.00630, T14=0.748, logg=4.68, feh=-0.02),   # Tas et al. 2026 (A&A 707, A238) Tab. 1-2 (FCO fit): P, Rp/R*, i = 74, b = 0.573, a = 0.0063 AU, R* = 0.651, star. No a/R* in the paper: 2.08 = a / R* (Coy et al. 2026 Tab. 5 print 2.08 +- 0.05; the fitted rho* = 3.25 would give 2.05). T14 from the geometry (none published; ExoFOP's 0.29 h is wrong)
+    "TOI-2260 b":       PlanetParams(name="TOI-2260 b", period=0.3524728, incl=69.7, ecc=0.0, w=90.0, r1=0.0158, r2=1.0, R=2.22, T2_eff=5534.0, a_AU=0.0097, T14=0.87, logg=4.62, feh=0.22),       # Giacalone et al. 2022 (AJ 163, 99) Tab. 2-3: P, b = 0.77 +- 0.04, a = 0.0097 AU, Rp = 1.62, R* = 0.94, M* = 0.99, star. No fitted a/R*, Rp/R*, i: a/R* = a / R*, Rp/R* = Rp / R*, i = acos(b / (a/R*)). T14 from the geometry. No RV mass; the archive's i = 90 is a placeholder
+    "K2-141 b":         PlanetParams(name="K2-141 b", period=0.2803244, incl=86.3, ecc=0.0, w=90.0, r1=0.02037, r2=1.0, R=2.292, T2_eff=4599.0, a_AU=0.00726, T14=0.94, logg=4.62, feh=-0.06),     # Malavolta et al. 2018 (AJ 155, 107) Tab. 2-3 (R* 0.681); T14 Barragán et al. 2018. Zieba et al. 2022 (joint K2+Spitzer) get a/R* = 2.365, Rp/R* = 0.02061, i = 85.2
+    "TOI-561 b":        PlanetParams(name="TOI-561 b", period=0.4465697, incl=87.0, ecc=0.0, w=90.0, r1=0.01519, r2=1.0, R=2.683, T2_eff=5372.0, a_AU=0.01052, T14=1.308, logg=4.50, feh=-0.40),   # Piotto et al. 2024 (MNRAS 535, 2763) Tab. 2; star Lacedelli et al. 2022 (MNRAS 511, 4551) Tab. 1 (R* 0.843): metal-poor, alpha-enhanced. JWST G395H gives Rp/R* = 0.0146 (Boucher et al. 2026)
+    "TOI-6255 b":       PlanetParams(name="TOI-6255 b", period=0.23818244, incl=74.4, ecc=0.0, w=90.0, r1=0.0267, r2=1.0, R=3.10, T2_eff=3421.0, a_AU=0.00533, T14=0.36, logg=4.85, feh=-0.14),    # Dai et al. 2024 (AJ 168, 101) Tab. 1-2 (R* 0.370); b = 0.84. T14 from the geometry (none published; ExoFOP's 0.48 h is not from the fit). P/P_Roche = 1.13: ellipsoidal variations of tens of ppm expected
+    "TOI-6324 b":       PlanetParams(name="TOI-6324 b", period=0.2792210, incl=82.36, ecc=0.0, w=90.0, r1=0.03217, r2=1.0, R=4.29, T2_eff=3247.0, a_AU=0.00585, T14=0.435, logg=4.93, feh=-0.32),  # geometry Gomez Barrientos et al. 2025 (AJ 170, 148) Tab. 3 (a/R* 4.29 +0.61/-0.69, b 0.57, i 82.36 +- 2.94, TESS Rp/R*); star and P Lee et al. 2025 (ApJL 983, L36) Tab. 1 (R* 0.293). Lee's own fit (a/R* 3.17, i 74.6) rests on a stellar density mislabelled by the factor rho_sun (10.7 solar = 15.1 g/cm^3). T14 from the geometry
+    "TOI-431 b":        PlanetParams(name="TOI-431 b", period=0.490054945, incl=84.7, ecc=0.0, w=90.0, r1=0.0161, r2=1.0, R=3.35, T2_eff=4850.0, a_AU=0.01139, T14=1.10, logg=4.60, feh=0.20),     # Smith et al. 2026 (arXiv:2609.03029) Tab. 1-2, joint TESS+RV fit with Osborn's density prior; star Osborn et al. 2021 (MNRAS 507, 2782) Tab. 2 (R* 0.731). The archive's a/R* = 3.42 +- 1.71 (Kokori et al. 2023) is a catalogue value, not a fit
+    "GJ 367 b":         PlanetParams(name="GJ 367 b", period=0.3219225, incl=79.89, ecc=0.0, w=90.0, r1=0.01399, r2=1.0, R=3.327, T2_eff=3522.0, a_AU=0.00709, T14=0.629, logg=4.776, feh=-0.01),  # Goffo et al. 2023 (ApJL 955, L3) Tab. 1-2 (R* 0.458; e = 0.06 +0.07/-0.04 set to 0; b = 0.584); a/R* = 3.327 as adopted from Goffo by Zhang et al. 2024 (ApJL 961, L44) Sect. 2 (Lee et al. 2026, arXiv:2606.18355: 3.33 +- 0.17, b = 0.68, Rp/R* = 0.0148)
+    # ---- tier A of the top-30 review: usable geometry and host -------------------------------------------------------------------------------------------------------
+    "K2-157 b":         PlanetParams(name="K2-157 b", period=0.3652575, incl=89.2, ecc=0.0, w=90.0, r1=0.00996, r2=1.0, R=2.405, T2_eff=5334.0, a_AU=0.00962, T14=1.161, logg=4.45, feh=0.02),        # Castro-Gonzalez et al. 2025 (A&A 699, A344) Tab. B.5, Tab. 1 (R* 0.860); a/R* from the stellar priors; i = 89.2 is a flat-prior median (b = 0.03 +- 0.38)
+    "Kepler-78 b":      PlanetParams(name="Kepler-78 b", period=0.35500745, incl=75.2, ecc=0.0, w=90.0, r1=0.01473, r2=1.0, R=2.7, T2_eff=5058.0, a_AU=0.00939, T14=0.813, logg=4.55, feh=-0.18),     # Howard et al. 2013 (Nature 503, 381) Tab. 1: a/R* 2.7 +- 0.2, i 75.2 +2.6/-2.1, depth 217 ppm (Rp/R* = sqrt), T14 0.813; R* = 0.7475 Dai et al. 2019 (ApJ 883, 79) Tab. 1 (Gaia); T_eff, log g, [Fe/H] Pepe et al. 2013 (Nature 503, 377). No short-cadence data
+    "K2-131 b":         PlanetParams(name="K2-131 b", period=0.3693038, incl=85.0, ecc=0.0, w=90.0, r1=0.0204, r2=1.0, R=2.66, T2_eff=5120.0, a_AU=0.00940, T14=1.027, logg=4.62, feh=-0.04),         # Dai et al. 2017 (AJ 154, 226) Tab. 7: a/R* 2.66 +0.36/-0.18, i 85 +10/-9, Rp/R* 0.0204 (Adams et al. 2021 give 0.0172: EVEREST depth 29 % shallower), Tab. 5 log g; T_eff, [Fe/H], R* = 0.7595 Bonomo et al. 2023 Tab. 1; T14 Singh et al. 2022 Tab. 4
+    "TOI-1444 b":       PlanetParams(name="TOI-1444 b", period=0.4702694, incl=82.0, ecc=0.0, w=90.0, r1=0.01410, r2=1.0, R=2.73, T2_eff=5430.0, a_AU=0.01152, T14=1.283, logg=4.49, feh=0.13),        # Dai et al. 2021 (AJ 162, 62) Tab. 1-2 (R* 0.907; b = 0.38 +- 0.14); T14 MacDougall et al. 2023 as in Polanski et al. 2024 (their Rp/R* 0.01428)
+    "K2-223 b":         PlanetParams(name="K2-223 b", period=0.505608, incl=78.1, ecc=0.0, w=90.0, r1=0.00687, r2=1.0, R=2.79, T2_eff=5858.0, a_AU=0.01362, T14=1.205, logg=4.56, feh=0.18),           # Jankowski et al. 2026 (arXiv:2609.01721) Tab. C.2, Tab. 1 (R* 1.05 +- 0.10); b = 0.57 +0.15/-0.21; Rp/R* 15 % below Adams/Mayo/Livingston (0.0080-0.0083); SNR 10, sub-Earth
+    "EPIC 220674823 b": PlanetParams(name="EPIC 220674823 b", period=0.57130782, incl=88.5, ecc=0.0, w=90.0, r1=0.0148, r2=1.0, R=2.858, T2_eff=5532.0, a_AU=0.01320, T14=1.599, logg=4.40, feh=0.10),  # = K2-106 b. Palethorpe et al. 2026 (arXiv:2603.14552) Tab. 5, Tab. 1 (R* 0.993); log g Guenther et al. 2024. Rp/R* 2 sigma below Guenther (0.0155), Adams (0.0157), Rodriguez-Martinez (0.0160): Rp 1.61 vs 1.68-1.73
+    "TOI-1798.02":      PlanetParams(name="TOI-1798.02", period=0.4378146, incl=83.7, ecc=0.0, w=90.0, r1=0.01622, r2=1.0, R=2.905, T2_eff=5106.0, a_AU=0.01069, T14=1.285, logg=4.572, feh=0.073),    # MacDougall et al. 2023 (AJ 166, 33) star (R* 0.791, rho* 2.42 g/cm^3) and transit posteriors (Rp/R*, b = 0.32 +0.31/-0.22, T14) as in Polanski et al. 2024 (ApJS 272, 32). No fitted a/R* exists: 2.905 from rho* and P; i = acos(b / (a/R*)). Confirmed only via the RV mass
+    "HD 80653 b":       PlanetParams(name="HD 80653 b", period=0.71957926, incl=81.7, ecc=0.0, w=90.0, r1=0.01242, r2=1.0, R=2.973, T2_eff=5959.0, a_AU=0.01658, T14=1.725, logg=4.342, feh=0.255),    # = K2-312 b. Naponiello et al. 2026 (arXiv:2607.19325) Tab. 1-2 (R* 1.199), joint K2+TESS+HARPS-N; Frustagli et al. 2020 within 1 sigma. The archive's T_eff = 5838 matches no paper
+    "Kepler-407 b":     PlanetParams(name="Kepler-407 b", period=0.669310092, incl=87.19, ecc=0.0, w=90.0, r1=0.01034, r2=1.0, R=3.193, T2_eff=5487.0, a_AU=0.01544, T14=1.627, logg=4.30, feh=0.35),  # transit Kepler Q1-Q17 DR25 KOI table (Thompson et al. 2018; a/R* 3.193 +- 0.093, consistent with Kepler III from the star, 3.09-3.22); star Brinkman et al. 2025 (arXiv:2410.00213) Tab. 1 (R* 1.04). Kepler eclipse 6 +- 2 ppm (Singh et al. 2022)
+    "WASP-47 e":        PlanetParams(name="WASP-47 e", period=0.789592, incl=85.98, ecc=0.0, w=90.0, r1=0.01461, r2=1.0, R=3.205, T2_eff=5552.0, a_AU=0.01695, T14=1.899, logg=4.344, feh=0.38),       # Vanderburg et al. 2017 (AJ 154, 237) Tab. 3 (R* 1.137), rho* free (pinned by planets b, d). Rp = 1.81 +- 0.03 R_Earth > ROCKY_MAX_RADE, rho_p 6.3-8.1 g/cm^3. The archive's 3.112 is Crossfield's a over Nascimbeni's R*
+    # ---- tier B of the top-30 review: published fits of lower quality (KOI pipeline / Adams et al. 2021 without density priors), faint hosts, statistical validation ----
+    "KOI-1843.03":      PlanetParams(name="KOI-1843.03", period=0.1768913, incl=72.0, ecc=0.0, w=90.0, r1=0.01225, r2=1.0, R=1.9, T2_eff=3584.0, a_AU=0.00398, T14=0.65, logg=4.80, feh=0.0),          # = Kepler-974 c. Rappaport et al. 2013 (ApJL 773, L15) Tab. 1: a/R* 1.9 +0.3/-0.5, i 72 +12/-20, depth 150 ppm (Rp/R* = sqrt), T14 0.65; star as adopted there (Dressing & Charbonneau 2013: R* 0.45, T_eff 3584, log g 4.80). 30-min cadence only; Gaia-era star (TICv8, R* 0.538) would give a/R* 2.00. Tidally distorted (axis ratio >= 1.3)
+    "K2-183 b":         PlanetParams(name="K2-183 b", period=0.469285, incl=90.0, ecc=0.0, w=90.0, r1=0.0117, r2=1.0, R=2.5, T2_eff=5519.0, a_AU=0.01128, T14=1.541, logg=4.43, feh=0.09),             # Adams et al. 2021 (PSJ 2, 152) Tab. 2: a/R* 2.5 +0.3/-0.4, i 90.1 +20/-10, Rp/R* 0.0117 (free fit, no density prior); T14 Kruse et al. 2019; star Livingston et al. 2018b (AJ 156, 277; Gaia, R* 0.97: Adams used Mayo's 0.87). Kepler III from the star gives 2.56
+    "EPIC 206042996 c": PlanetParams(name="EPIC 206042996 c", period=0.354884, incl=89.9, ecc=0.0, w=90.0, r1=0.0223, r2=1.0, R=2.6, T2_eff=4055.0, a_AU=0.00815, T14=1.07, logg=4.58, feh=0.0),       # = K2-301 c. Adams et al. 2021 Tab. 2: a/R* 2.6 +- 0.5, i 89.9 +20/-10, Rp/R* 0.0223; T14 Vanderburg et al. 2016 (b = 0.25); star TICv8 (Stassun et al. 2019; R* 0.674, the EPIC 0.50 Adams used is wrong, so Rp ~ 1.63 not 1.2). Kp 16, validated only via the multiplicity boost, no imaging
+    "Kepler-990 c":     PlanetParams(name="Kepler-990 c", period=0.53835407, incl=82.87, ecc=0.0, w=90.0, r1=0.01264, r2=1.0, R=2.693, T2_eff=5577.0, a_AU=0.01202, T14=1.5045, logg=4.40, feh=-0.11), # transit Kepler DR25 KOI table (a/R* 2.693 +- 0.554, consistent with Kepler III from the star, 2.76); star Fulton & Petigura 2018 (AJ 156, 264) Tab. 2 (R* 0.960), log g TICv8. Ks 12.9
+    "EPIC 220554210 c": PlanetParams(name="EPIC 220554210 c", period=0.705310, incl=90.0, ecc=0.0, w=90.0, r1=0.0146, r2=1.0, R=3.0, T2_eff=5523.0, a_AU=0.01311, T14=1.704, logg=4.47, feh=0.15),     # = K2-282 c. Adams et al. 2021 Tab. 2: a/R* 3.0 +0.3/-0.5, i 91.3 +- 10 (= 88.7; 90 adopted); Rp/R* 0.0146 Heller et al. 2019 (A&A 627, A66) Tab. 1 (b = 0.25); T14 Kruse et al. 2019; star Livingston et al. 2018b (spectroscopic, R* 0.94). Planet b's density and the star both favour a/R* ~ 3.4-3.5
+    "Kepler-1323 b":    PlanetParams(name="Kepler-1323 b", period=0.929906166, incl=88.59, ecc=0.0, w=90.0, r1=0.00956, r2=1.0, R=3.37, T2_eff=6063.0, a_AU=0.01911, T14=1.743, logg=4.354, feh=0.00), # a/R* = a / R* of Fulton & Petigura 2018 Tab. 2-3 (a 0.01911 AU, R* 1.221; also T_eff, [Fe/H]); the DR25 KOI fit (4.14 +- 0.15) is the b = 0 branch of the degeneracy and inconsistent with the star; Rp/R*, i, T14 DR25 KOI; log g Berger et al. 2020. Note: i = 88.59 with a/R* 3.37 overpredicts the measured T14 (2.0 vs 1.74 h). SNR 80, Ks 11.1
+    "EPIC 201427007 b": PlanetParams(name="EPIC 201427007 b", period=0.72091, incl=88.5, ecc=0.0, w=90.0, r1=0.0142, r2=1.0, R=3.1, T2_eff=5383.0, a_AU=0.01567, T14=1.83, logg=4.33, feh=0.31),       # = K2-359 b. Adams et al. 2021 Tab. 2 (only fit): a/R* 3.1 +0.3/-0.6, i 88.5 +- 10, Rp/R* 0.0142; star TICv8 (R* 1.087, not EPIC 0.94). T14 from the geometry (none published). Rp ~ 1.68 (rocky cut not secure); Kp 14.2, no follow-up
+    "EPIC 212624936 b": PlanetParams(name="EPIC 212624936 b", period=0.578657, incl=89.7, ecc=0.0, w=90.0, r1=0.0114, r2=1.0, R=3.0, T2_eff=5627.0, a_AU=0.01273, T14=1.52, logg=4.52, feh=-0.39),     # = K2-361 b. Adams et al. 2021 Tab. 2 (only fit; FPP 0.004, SNR 13): a/R* 3.0 +0.4/-0.6, i 90.3 +- 10 (= 89.7), Rp/R* 0.0114; star TICv8 (R* 0.9125); [Fe/H] is the EPIC value (+- 0.25). T14 from the geometry (none published). No follow-up
 }
 
 
+# Field overrides for ARCHIVE planets (a planet in CUSTOM never reaches them). T14 in HOURS, matching PlanetParams.
 OVERRIDES = {
-    # T14 in HOURS, matching PlanetParams. The archive's pl_trandur for TOI-2431 b is an ExoFOP TESS duration
-    # (0.292 h) inconsistent with the Tas et al. 2026 geometry in the same row, which implies 0.7475 h.
-    "TOI 2431 b": {"T14": 0.7475}
 }
 
 # --------------------------------------------------------------------------
@@ -117,7 +162,7 @@ OVERRIDES = {
 def _archive():
     """The aggregate table, loaded once, with the ranking metric and validity mask attached."""
     path = sorted((Path(__file__).resolve().parent.parent / "NASAExoplanetArchive").glob(INPUT_GLOB))[-1]
-    df = pd.read_csv(path, low_memory=False)
+    df = apply_custom(pd.read_csv(path, low_memory=False))   # CUSTOM / OVERRIDES take precedence over the archive, also in the ranking metric below
     df["hyperillum_metric"] = (df["pl_ratror"] - 1.0) / df["a_over_r2"]   # (r1 - r2) / R
     df["hyperillum_valid"] = (df["pl_ratror"] < MAX_R1_OVER_R2) & (df["a_over_r2"] > 1.0 + df["pl_ratror"]) # & df["st_teff"].notna()
     df["_key"] = df["pl_name"].str.lower().str.replace(r"[\s\-_]", "", regex=True)
@@ -132,6 +177,49 @@ def _normalise(name):
 # Built at import, so edit CUSTOM / OVERRIDES in this file rather than at runtime.
 CUSTOM_N = {_normalise(k): v for k, v in CUSTOM.items()}
 OVERRIDES_N = {_normalise(k): v for k, v in OVERRIDES.items()}
+_both = set(CUSTOM_N) & set(OVERRIDES_N)
+if _both: raise KeyError(f"planet(s) in both CUSTOM and OVERRIDES: {sorted(_both)}. A CUSTOM planet never reaches OVERRIDES in hi_planets_by_name, so put every change into its CUSTOM entry.")
+
+
+# Archive columns that a PlanetParams field (CUSTOM entry or OVERRIDES value) replaces, so that every consumer of the archive table sees the curated values.
+_FIELD_COLUMNS = {"period": "pl_orbper", "incl": "pl_orbincl", "ecc": "pl_orbeccen", "w": "pl_orblper", "T2_eff": "st_teff", "logg": "st_logg", "feh": "st_met", "a_AU": "pl_orbsmax", "T14": "pl_trandur"}
+R_EARTH_IN_R_SUN = float(const.R_earth / const.R_sun)
+
+# A copy of an archive table with CUSTOM and OVERRIDES written into it: CUSTOM / OVERRIDES always take precedence over the archive, not only in hi_planets_by_name but also in
+# the sample cuts and background scatter of the bias maps (simple_bias_analysis.rocky_sample / overlay_planets / planet_archive_value) and in best_hi_planets.
+# A CUSTOM planet replaces pl_orbper, pl_orbincl, pl_orbeccen, pl_orblper, pl_ratror (r1/r2), pl_rprs2, a_over_r2 and pl_ratdor (R/r2; e = 0 for all of them), st_teff, st_logg, st_met,
+# pl_orbsmax (a_AU), pl_trandur (T14), st_rad = a_AU / (a/R*) (CUSTOM entries set a_AU = (a/R*) x R* of the adopted star for exactly this) and pl_rade = Rp/R* x st_rad.
+# An OVERRIDES entry replaces only the columns of the fields it gives. Columns derived from these in ExoArchive_customcols.py (pl_Teq, the occultation depths, ESM, ...) are NOT
+# recomputed. A CUSTOM planet the table does not have is left out (nothing to patch), with no note: the table is what it is. Rows are matched on the normalised name.
+def apply_custom(df):
+    df = df.copy()
+    key = df["pl_name"].map(_normalise)
+    for name, pl in CUSTOM.items():
+        rows = key == _normalise(name)
+        if not rows.any(): continue
+        for field, col in _FIELD_COLUMNS.items():
+            if col in df: df.loc[rows, col] = getattr(pl, field)
+        rp_rs, a_rs = pl.r1 / pl.r2, pl.R / pl.r2
+        for col, val in (("pl_ratror", rp_rs), ("pl_rprs2", rp_rs ** 2), ("a_over_r2", a_rs), ("pl_ratdor", a_rs)):
+            if col in df: df.loc[rows, col] = val
+        r_star = pl.a_AU * AU_IN_R_SUN / a_rs   # [R_sun]
+        if "st_rad" in df: df.loc[rows, "st_rad"] = r_star
+        if "pl_rade" in df: df.loc[rows, "pl_rade"] = rp_rs * r_star / R_EARTH_IN_R_SUN
+    for name, fields in OVERRIDES.items():
+        rows = key == _normalise(name)
+        if not rows.any(): continue
+        for field, val in fields.items():
+            col = _FIELD_COLUMNS.get(field)
+            if field in ("r1", "r2") and "pl_ratror" in df:
+                r1 = fields.get("r1", df.loc[rows, "pl_ratror"].iloc[0]); r2 = fields.get("r2", 1.0)
+                df.loc[rows, "pl_ratror"] = r1 / r2
+                if "pl_rprs2" in df: df.loc[rows, "pl_rprs2"] = (r1 / r2) ** 2
+            elif field == "R":
+                for col in ("a_over_r2", "pl_ratdor"):
+                    if col in df: df.loc[rows, col] = val / fields.get("r2", 1.0)
+            elif col is not None and col in df:
+                df.loc[rows, col] = val
+    return df
 
 
 _NOTED = set()   # (planet, note) pairs already printed, so each stellar-parameter fallback is reported once per session

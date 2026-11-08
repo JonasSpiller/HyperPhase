@@ -4,7 +4,8 @@ from scipy.optimize import minimize_scalar
 from scipy.interpolate import RegularGridInterpolator
 from hyperillumination_phasecurve_utils import *
 from astro_utils import roche_period_h, roche_proximity, rocky_mean_density, kepler_period_days, kepler_a_rs, rho_star
-from HItargets_utils import ROCKY_MAX_RADE, A_B_BOUNDS, F_BOUNDS, ROCHE_CASES, ROCHE_R_P, hi_planets_by_name
+from HItargets_utils import ROCKY_MAX_RADE, A_B_BOUNDS, F_BOUNDS, ROCHE_CASES, ROCHE_R_P, hi_planets_by_name, apply_custom
+from functools import lru_cache
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -450,10 +451,18 @@ def select_planets(tab, planets):
     return out
 
 
+# The archive aggregate table (path AGG) as every function here reads it: with HItargets_utils.CUSTOM and OVERRIDES written into it (apply_custom), so that the curated
+# geometry and stellar parameters take precedence over the archive in the sample cuts, the background scatter and the per-planet rows, exactly as in hi_planets_by_name.
+# Cached per path: planet_archive_value is called once per planet and the CSV read is the slow part. Columns derived in ExoArchive_customcols.py (ESM, pl_Teq, ...) stay the archive's.
+@lru_cache(maxsize=4)
+def archive_frame(AGG):
+    return apply_custom(pd.read_csv(AGG)).drop_duplicates("pl_name")
+
+
 # ESM of a single archive planet by name, for a target drawn outside overlay_planets (the notebook's own planet).
-# One archive value for a planet by name, NaN where the archive has none or the value is missing: "ESM" for the tick labels / rows, "pl_rade" for the Rp row.
+# One archive value for a planet by name, NaN where the archive has none or the value is missing: "ESM" for the tick labels / rows, "pl_rade" for the Rp row (CUSTOM / OVERRIDES applied).
 def planet_archive_value(AGG, pl_name, column):
-    d = pd.read_csv(AGG).drop_duplicates("pl_name")
+    d = archive_frame(AGG)
     row = d[d.pl_name.map(_norm_name) == _norm_name(pl_name)]
     return float(row[column].iloc[0]) if len(row) and pd.notna(row[column].iloc[0]) else np.nan
 
@@ -512,8 +521,9 @@ def map_grid(lo, hi, n, include=None, pad=0.1, bounds=None):
 # The archive planets that fall inside a bias map (x = a/Rs = `a_over_r2`, y = `ykey`), restricted to ROCKY planets, Rp < `max_rade` Earth radii.
 # The cut must be on the ABSOLUTE radius `pl_rade`, not on Rp/Rs (see HItargets_utils.ROCKY_MAX_RADE, the shared default, also used by best_hi_planets).
 # Factored out of overlay_planets so the maps and the per-planet bar figures select from exactly one sample definition; `exclude` takes loose spellings.
+# Reads the archive through archive_frame, i.e. with CUSTOM / OVERRIDES applied (HItargets_utils.apply_custom).
 def rocky_sample(AGG, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=ROCKY_MAX_RADE, exclude=None):
-    _exo = pd.read_csv(AGG)
+    _exo = archive_frame(AGG)   # CUSTOM / OVERRIDES applied: a/Rs, Rp/Rs, T_eff and Rp of the curated planets are the curated values, not the archive's
     drop = [exclude] if isinstance(exclude, str) else list(exclude or [])
     keep = ~_exo.pl_name.map(_norm_name).isin({_norm_name(n) for n in drop})
     _phys = _exo[np.isfinite(_exo.a_over_r2) & np.isfinite(_exo.st_teff) & np.isfinite(_exo.pl_ratror)
@@ -531,12 +541,22 @@ def _label_colors(n):
     return [base[k % len(base)] for k in range(n)]
 
 
-def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=ROCKY_MAX_RADE, target=None, exclude=None, mark_target=True, *, planets):
+# The n rocky archive planets (Rp < max_rade) with the smallest a/Rs, by archive name, from archive_frame (CUSTOM / OVERRIDES applied), optionally without `exclude` (loose spellings).
+def closest_in(AGG, n, max_rade=ROCKY_MAX_RADE, exclude=None):
+    d = archive_frame(AGG)
+    drop = {_norm_name(x) for x in ([exclude] if isinstance(exclude, str) else list(exclude or []))}
+    ok = (np.isfinite(d.a_over_r2) & np.isfinite(d.pl_ratror) & (d.pl_ratror > 0) & (d.a_over_r2 > 1. + d.pl_ratror) & np.isfinite(d.pl_rade) & (d.pl_rade < max_rade)
+          & ~d.pl_name.map(_norm_name).isin(drop))
+    return list(d[ok].nsmallest(n, "a_over_r2").pl_name)
+
+
+def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=ROCKY_MAX_RADE, target=None, exclude=None, mark_target=True, n_closest=10, *, planets):
     """Overplot the archive planets on a bias map (x = a/Rs, y = `ykey`).
 
     planets     : the planets to label (required; the notebooks pass HItargets_utils.PAPER_PLANETS), any form planet_list takes. Each gets its own colour and a
-                  legend entry (name, a/Rs, ESM) at its PlanetParams position (hi_planets_by_name: CUSTOM / OVERRIDES apply, as in the per-planet fits).
+                  legend entry (name, a/Rs, ESM) at its PlanetParams position (hi_planets_by_name: CUSTOM / OVERRIDES apply, as in the per-planet fits), drawn as a circle.
                   Planets outside the map box are not drawn; their names are returned.
+    n_closest   : the n rocky archive planets with the smallest a/Rs (closest_in) are labelled too, as diamonds, where they are not already in `planets`; 0 for none.
     The other rocky_sample planets inside the box are faint background dots.
     target      : the notebook's PlanetParams. It is dropped from the scatter and the labels (matched on its name) and, unless
                   `mark_target=False`, drawn as the green star by target_marker - so the highlighted planet follows
@@ -544,20 +564,25 @@ def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=ROCKY_MAX
     exclude     : extra name(s) to drop from the background scatter; loose spellings are fine.
     """
     if ykey not in _TARGET_Y: raise ValueError(f"no planet coordinate for ykey={ykey!r}; known: {tuple(_TARGET_Y)}")
-    labelled = [pl for pl in planet_list(planets) if target is None or _norm_name(pl.name) != _norm_name(target.name)]   # the target is the green star instead
+    not_target = lambda pl: target is None or _norm_name(pl.name) != _norm_name(target.name)   # the target is the green star instead
+    labelled = [pl for pl in planet_list(planets) if not_target(pl)]
+    given = {_norm_name(pl.name) for pl in labelled}
+    extra = [pl for pl in planet_list(closest_in(AGG, n_closest, max_rade=max_rade, exclude=[target.name] if target is not None else None)) if _norm_name(pl.name) not in given and not_target(pl)] if n_closest else []
+    marker = {**{pl.name: "o" for pl in labelled}, **{pl.name: "D" for pl in extra}}
+    labelled = labelled + extra
     drop = ([exclude] if isinstance(exclude, str) else list(exclude or [])) + [pl.name for pl in labelled] + ([target.name] if target is not None else [])
     bg = rocky_sample(AGG, ykey, ylim, a_rs_lim=a_rs_lim, max_rade=max_rade, exclude=drop)
 
     x = "a_over_r2"
     ax.scatter(bg[x], bg[ykey], s=16, facecolor="#40c4d6", edgecolor="w", linewidths=.3,
                alpha=.6, zorder=3, label=f"other known rocky planets ($R_p<{max_rade:g}\\,R_\\oplus$, N={len(bg)})")
-    arch = pd.read_csv(AGG).drop_duplicates("pl_name")
+    arch = archive_frame(AGG)
     esm = dict(zip(arch.pl_name.map(_norm_name), arch["ESM"]))
     pos = {pl.name: (pl.R / pl.r2, _TARGET_Y[ykey](pl)) for pl in labelled}
     inside = [pl for pl in labelled if a_rs_lim[0] <= pos[pl.name][0] <= a_rs_lim[1] and ylim[0] <= pos[pl.name][1] <= ylim[1]]
     for color, pl in zip(_label_colors(len(inside)), inside):
-        ax.scatter(*pos[pl.name], s=60, color=color, edgecolor="w", linewidths=.7, zorder=5,
-                   label=f"{pl.name}  ($a/R_\\star$={pos[pl.name][0]:.2f}, ESM={_fmt_esm(esm.get(_norm_name(pl.name), np.nan))})")
+        ax.scatter(*pos[pl.name], s=60 if marker[pl.name] == "o" else 48, marker=marker[pl.name], color=color, edgecolor="w", linewidths=.7, zorder=5,
+                   label=f"{pl.name}  ($a/R_\\star$={pos[pl.name][0]:.2f}, ESM={_fmt_esm(esm.get(_norm_name(pl.name), np.nan))})" + ("" if marker[pl.name] == "o" else f"  [{n_closest} closest-in]"))
     if target is not None and mark_target: target_marker(ax, target, ykey, AGG)
     return [pl.name for pl in labelled if pl not in inside]
 
@@ -805,11 +830,12 @@ def print_limit_curve(sweep, A_B_true, roche_a_rs, sweep_uB0=None, u_B=None):
 # The dashed lines then bound the grazing zone 1 - Rp/R* < b < 1 + Rp/R* (drawn only where it reaches into the map; at incl = 90 every cell occults and there is none).
 # rp_rs_of(y) is Rp/R* at the map's y values; incl [deg] is the inclination the map was computed at (cfg.planet.incl).
 # The maps are planet-agnostic: target=None highlights no planet; a PlanetParams there is drawn as the green star (and dropped from the archive scatter). title overrides the suptitle.
-# planets (required): the labelled archive planets (overlay_planets), e.g. HItargets_utils.PAPER_PLANETS; those outside the map box are listed in a note.
+# planets (required): the labelled archive planets (overlay_planets), e.g. HItargets_utils.PAPER_PLANETS, drawn as circles; the n_closest rocky archive planets with the smallest a/R*
+# are labelled as diamonds where not already among them (n_closest=0: none). Those outside the map box are listed in a note.
 # roche: the Roche frontier (draw_roche_frontier) on every panel of an (a/R*, T_eff) map - True: roche_periods() (HItargets_utils.ROCHE_CASES at ROCHE_R_P), a {label: P_R [h]} dict:
 # those, False: none. Only a T_eff axis fixes the host density (main sequence), so other maps never show it.
 def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl=90., F_map=None, F_levels=(0.01, 0.02, 0.05),
-                   show_absolute=True, show_relative=False, show_F=False, target=None, title=None, roche=True, legend_fontsize=12, *, planets):
+                   show_absolute=True, show_relative=False, show_F=False, target=None, title=None, roche=True, legend_fontsize=12, n_closest=10, *, planets):
     if show_F and F_map is None: raise ValueError("show_F=True needs F_map")
     if not (show_absolute or show_relative or show_F): raise ValueError("nothing to draw: set show_absolute, show_relative or show_F")
     cos_i = np.cos(np.radians(incl))
@@ -840,7 +866,7 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
                 ax.plot((1. + sign * rp_rs_of(y_line)) / cos_i, y_line, color=INK, ls="--", lw=1.2, label=r"grazing occultation ($b = 1 \mp R_p/R_\star$)" if sign > 0 else None)
         if _roche_cases(roche) and ykey == "st_teff": draw_roche_frontier(ax, xg, yg, _roche_cases(roche), rp_rs_of)
         # `planets` labelled with a/Rs and ESM, the other known ROCKY planets (NASA Exoplanet Archive, Rp < ROCKY_MAX_RADE R_Earth) as dots; a target is drawn as the green star
-        outside = overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target, planets=planets)
+        outside = overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target, n_closest=n_closest, planets=planets)
         ax.set_facecolor("0.85")
         ax.grid(False)
         ax.set_xlim(xg[0], xg[-1]); ax.set_ylim(yg[0], yg[-1])
@@ -921,9 +947,9 @@ def print_allowed_extremes(xg, yg, bias_map, A_B_true, allowed, periods):
 # as in plot_bias_maps. cfg: the map's config (its sigma_1min is the noise the dchi2 map was evaluated with, its n_orbits the number of orbits the critical noise refers to).
 # The map holds Rp/R* and i at the reference values: the phase-curve signal is ∝ (Rp/R*)^2, so dchi2_F ∝ (Rp/R*)^4 and sigma_crit ∝ (Rp/R*)^2 to a good approximation; planets with a
 # different Rp/R* must be rescaled (or fitted at their own geometry) before their noise level is compared with the map.
-# planets (required): the labelled archive planets, roche: the Roche frontier, both as in plot_bias_maps.
+# planets (required): the labelled archive planets, n_closest: the closest-in planets labelled in addition, roche: the Roche frontier, all as in plot_bias_maps.
 def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=90., z=2., sigma_levels=(10., 20., 50., 100., 200., 500., 1000., 2000., 5000.), target=None, title=None,
-                     roche=True, *, planets):
+                     roche=True, n_closest=10, *, planets):
     from matplotlib.colors import LogNorm
     cos_i = np.cos(np.radians(incl))
     X, Y = np.meshgrid(xg, yg)
@@ -945,7 +971,7 @@ def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=9
         for sign in (-1., 1.):
             ax.plot((1. + sign * rp_rs_of(y_line)) / cos_i, y_line, color=INK, ls="--", lw=1.2, label=r"grazing occultation ($b = 1 \mp R_p/R_\star$)" if sign > 0 else None)
     if _roche_cases(roche) and ykey == "st_teff": draw_roche_frontier(ax, xg, yg, _roche_cases(roche), rp_rs_of)
-    outside = overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target, planets=planets)
+    outside = overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target, n_closest=n_closest, planets=planets)
     if outside: print(f"outside the map box, not drawn: {', '.join(outside)}")
     ax.set_facecolor("0.85")
     ax.grid(False)
