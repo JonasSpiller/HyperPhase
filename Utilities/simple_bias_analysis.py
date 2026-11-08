@@ -1179,8 +1179,8 @@ def _instrument_row(cfg, A_B_true, pl, instrument, sigma_1min, redist, bounds, F
 # counterpart of planet_bias_table, plotted by plot_instrument_retrievals). cfg supplies everything but the instrument (albedo model, n_bins, n_orbits, limb darkening).
 # An entry of `instruments` is a FILTER_LAMBDA_UM key, or a tuple of keys for a JOINT fit of those detectors (one shared A_B / F, a separate baseline per detector; its table
 # row carries the "+"-joined key and NaN as sigma_1min).
-# sigma_1min: {detector: ppm/min}; by default HItargets_utils.rms_1min per detector (PandExo, or CUSTOM_SIGMA_1MIN where PandExo has no mode). PandExo is not cached, so pass the
-# returned table's attrs["sigma_1min"] back in to refit without rerunning it. A single detector without a noise level is fitted without one (verdict VERDICT_NO_NOISE: exact fitted
+# sigma_1min: {detector: ppm/min}; by default HItargets_utils.rms_1min per detector (PandExo, or CUSTOM_SIGMA_1MIN where PandExo has no mode). These come from the PandExo cache
+# where possible (HItargets_utils.PANDEXO_CACHE); the returned table's attrs["sigma_1min"] can be passed back in to refit with the same levels. A single detector without a noise level is fitted without one (verdict VERDICT_NO_NOISE: exact fitted
 # value, no Fisher sigma); a joint fit whose detectors do not all have one is left out (it weights its detectors by their noise). Both with a note.
 # Returns a DataFrame in the order of `instruments`, with the verdict of each fit (bias_verdict on A_B, at the flat-prior std of `bounds`).
 def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigma_1min=None, bounds=A_B_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):

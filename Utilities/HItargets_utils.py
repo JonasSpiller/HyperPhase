@@ -1,3 +1,5 @@
+import os, fcntl
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 import numpy as np
@@ -450,6 +452,11 @@ def pandexo_params(planet_name, **overrides):
     return params
 
 
+# The settings of run_pandexo that do not come from the planet. Also part of the PandExo cache key (see rms_1min), so change them here only.
+PANDEXO_FIXED = dict(sat_level=60, sat_unit="%", noccultations=1, R=None, baseline_unit="frac", baseline=1, noise_floor=0,
+                     star_type="phoenix", planet_type="constant", ngroup="optimize", background="ecliptic", background_level="high")
+
+
 def run_pandexo(planet_name, instrument, verbose=True, **overrides):
     """PandExo noise estimate for one archive planet, identified by name alone. instrument is a FILTER_LAMBDA_UM key; the PandExo mode is looked up via pandexo_mode.
     Any PANDEXO_PARAM_KEYS entry can be overridden by keyword.
@@ -466,19 +473,19 @@ def run_pandexo(planet_name, instrument, verbose=True, **overrides):
         print(f"PandExo inputs for {p['name']}  [instrument={instrument} (PandExo: {mode})]")
         for k in PANDEXO_PARAM_KEYS:
             print(f"    {k:10s} = {float(p[k]):<12.5g} {unit[k]:<16s} <- {src(k)}")
-        print("    fixed: noccultations=1, sat_level=60%, baseline=1 (frac), R=None (native), noise_floor=0 ppm, "
-              "ngroup=optimize, background=ecliptic/high\n")
+        print("    fixed: " + ", ".join(f"{k}={v}" for k, v in PANDEXO_FIXED.items()) + "\n")
 
+    fx = PANDEXO_FIXED
     exo_dict = jdi.load_exo_dict()
-    exo_dict['observation']['sat_level'] = 60     # saturation level in percent of full well
-    exo_dict['observation']['sat_unit'] = '%'
-    exo_dict['observation']['noccultations'] = 1  # number of transits
-    exo_dict['observation']['R'] = None           # no fixed binning -- bin afterwards with binning() instead of redoing the calculation
-    exo_dict['observation']['baseline_unit'] = 'frac'  # 'frac' -> baseline is the in/out time ratio
-    exo_dict['observation']['baseline'] = 1
-    exo_dict['observation']['noise_floor'] = 0    # fixed level [ppm], or a path to a wavelength-dependent solution
+    exo_dict['observation']['sat_level'] = fx["sat_level"]       # saturation level in percent of full well
+    exo_dict['observation']['sat_unit'] = fx["sat_unit"]
+    exo_dict['observation']['noccultations'] = fx["noccultations"]   # number of transits
+    exo_dict['observation']['R'] = fx["R"]                       # None: no fixed binning -- bin afterwards with binning() instead of redoing the calculation
+    exo_dict['observation']['baseline_unit'] = fx["baseline_unit"]   # 'frac' -> baseline is the in/out time ratio
+    exo_dict['observation']['baseline'] = fx["baseline"]
+    exo_dict['observation']['noise_floor'] = fx["noise_floor"]   # fixed level [ppm], or a path to a wavelength-dependent solution
 
-    exo_dict['star']['type'] = 'phoenix'          # phoenix or user (if you have your own)
+    exo_dict['star']['type'] = fx["star_type"]          # phoenix or user (if you have your own)
     exo_dict['star']['mag'] = p['mag']
     exo_dict['star']['ref_wave'] = p['ref_wave']  # J = 1.25, H = 1.6, K = 2.22 micron
     exo_dict['star']['temp'] = p['teff']
@@ -487,7 +494,7 @@ def run_pandexo(planet_name, instrument, verbose=True, **overrides):
     exo_dict['star']['radius'] = p['rs_rsun']
     exo_dict['star']['r_unit'] = 'R_sun'
 
-    exo_dict['planet']['type'] = 'constant'       # fixed transit depth
+    exo_dict['planet']['type'] = fx["planet_type"]      # constant: fixed transit depth
     exo_dict['planet']['transit_duration'] = p['t14_h'] * 3600.
     exo_dict['planet']['td_unit'] = 's'
     exo_dict['planet']['radius'] = p['rp_rearth']
@@ -495,9 +502,9 @@ def run_pandexo(planet_name, instrument, verbose=True, **overrides):
     exo_dict['planet']['f_unit'] = 'rp^2/r*^2'    # primary transit
 
     inst_dict = jdi.load_mode_dict(mode)
-    inst_dict["configuration"]["detector"]["ngroup"] = 'optimize'   # picks the maximum that stays under sat_level
-    inst_dict['background'] = 'ecliptic'
-    inst_dict['background_level'] = 'high'
+    inst_dict["configuration"]["detector"]["ngroup"] = fx["ngroup"]   # optimize: picks the maximum that stays under sat_level
+    inst_dict['background'] = fx["background"]
+    inst_dict['background_level'] = fx["background_level"]
 
     result = jdi.run_pandexo(exo_dict, inst_dict, save_file=False)
 
@@ -542,10 +549,69 @@ class NoNoiseLevelError(ValueError):
     pass
 
 
-# sigma_1min [ppm/min] of one planet on one instrument: run_pandexo + rms_1min_pandexo. instrument is a FILTER_LAMBDA_UM key (the PandExo mode is looked up via pandexo_mode),
-# lrs_range [m] the band the PandExo spectrum is binned over (default: filter_lambda(instrument)). overrides go to run_pandexo (verbose, mag, ...); the transit duration is planet.T14 unless t14_h overrides it.
+# PandExo cache: sigma_1min of every PandExo run made through rms_1min, in a CSV next to the PandExo notebook. A run takes seconds, a lookup milliseconds.
+# The key is everything the value depends on: the PandExo inputs (pandexo_params: planet, radii, T_eff, log g, [Fe/H], T14, normalisation magnitude and band), the PandExo
+# mode and the band binned over, PANDEXO_FIXED, PANDEXO_NOISE_VERSION and the installed PandExo / Pandeia versions. Any change (an archive update, an override, a new PandExo)
+# is a miss: rms_1min runs PandExo and adds the row, so a value computed from other inputs is never served. The file is locked while it is read or written (fcntl), so
+# parallel kernels and joblib workers can share it. To force a rerun: rms_1min(..., use_cache=False), which replaces the row, or delete rows / the file.
+PANDEXO_CACHE = Path(__file__).resolve().parent.parent / "Stellar Model" / "Pandexo" / "pandexo_cache.csv"
+PANDEXO_NOISE_VERSION = 2   # version of the noise computation from a PandExo result (binning, rms_1min_pandexo); bump it when that changes. 2: summed electrons (2026-11-06)
+_PANDEXO_KEY_PARAMS = ("rp_rearth", "rs_rsun", "teff", "logg", "metal", "t14_h", "mag", "ref_wave")   # pandexo_params without the period, which PandExo does not use
+_PANDEXO_TEXT = ("planet", "instrument", "mode", "mag_band", "settings", "pandexo_version", "pandeia_version", "created")   # read as text, so "2026.10" stays a version
+
+def _package_version(dist):
+    from importlib.metadata import version, PackageNotFoundError
+    try: return version(dist)
+    except PackageNotFoundError: return "n/a"
+
+def _pandexo_key(p, instrument, band):
+    """Cache key of one sigma_1min: p from pandexo_params, band [m]."""
+    return dict(planet=p["name"], instrument=instrument, mode=pandexo_mode(instrument), band_lo_um=1e6 * float(band[0]), band_hi_um=1e6 * float(band[1]),
+                **{k: float(p[k]) for k in _PANDEXO_KEY_PARAMS}, mag_band=p["mag_band"],
+                settings=f"noise v{PANDEXO_NOISE_VERSION}; " + ", ".join(f"{k}={v}" for k, v in PANDEXO_FIXED.items()),
+                pandexo_version=_package_version("pandexo.engine"), pandeia_version=_package_version("pandeia.engine"))
+
+def _pandexo_match(df, key):
+    """Rows of the cache table that match key: numbers to 1e-9 relative, text exactly. A column the table lacks matches nothing."""
+    m = np.ones(len(df), bool)
+    for k, v in key.items():
+        if k not in df: return np.zeros(len(df), bool)
+        m &= np.isclose(pd.to_numeric(df[k], errors="coerce"), v, rtol=1e-9, atol=0.) if isinstance(v, float) else (df[k].astype(str) == str(v)).to_numpy()
+    return m
+
+def _read_pandexo_cache(f):
+    f.seek(0)
+    return pd.read_csv(f, dtype={c: str for c in _PANDEXO_TEXT}) if os.fstat(f.fileno()).st_size else pd.DataFrame()
+
+def pandexo_cache_lookup(key):
+    """sigma_1min [ppm/min] of the newest cached row matching key, or None."""
+    if not PANDEXO_CACHE.exists(): return None
+    with open(PANDEXO_CACHE) as f:
+        fcntl.flock(f, fcntl.LOCK_SH)
+        df = _read_pandexo_cache(f)
+    m = _pandexo_match(df, key)
+    return float(df.loc[m, "sigma_1min"].iloc[-1]) if m.any() else None
+
+def _pandexo_cache_store(entries):
+    """Add (key, values) entries to the cache, replacing rows with the same key; read-modify-write under an exclusive lock."""
+    PANDEXO_CACHE.touch(exist_ok=True)
+    with open(PANDEXO_CACHE, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        df = _read_pandexo_cache(f)
+        for key, _ in entries:
+            if len(df): df = df[~_pandexo_match(df, key)]
+        new = pd.DataFrame([{**key, **values} for key, values in entries])
+        df = pd.concat([df, new], ignore_index=True) if len(df) else new
+        f.seek(0); f.truncate()
+        df.to_csv(f, index=False)
+
+
+# sigma_1min [ppm/min] of one planet on one instrument: from the PandExo cache (PANDEXO_CACHE) if it has this exact configuration, else run_pandexo + rms_1min_pandexo, stored
+# in the cache. instrument is a FILTER_LAMBDA_UM key (the PandExo mode is looked up via pandexo_mode), lrs_range [m] the band the PandExo spectrum is binned over (default:
+# filter_lambda(instrument)). overrides go to run_pandexo (verbose, mag, ...); the transit duration is planet.T14 unless t14_h overrides it. A new run also stores every other
+# detector of the same PandExo mode at its own band, from the same result (one NIRSpec G395H run gives NRS1 and NRS2). use_cache=False reruns PandExo and replaces the cached row.
 # Where PandExo has no mode for the instrument, the value comes from CUSTOM_SIGMA_1MIN (lrs_range and overrides then do not apply); if that has none either, a NoNoiseLevelError says where to add one.
-def rms_1min(planet, instrument, lrs_range=None, **overrides):
+def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
     if PANDEXO_MODES[instrument] is None:
         custom = CUSTOM_SIGMA_1MIN_N.get(_normalise(planet.name), {})
         if instrument not in custom:
@@ -555,11 +621,31 @@ def rms_1min(planet, instrument, lrs_range=None, **overrides):
         return custom[instrument]
     if lrs_range is None: lrs_range = filter_lambda(instrument)
     overrides.setdefault("t14_h", planet.T14)
-    return rms_1min_pandexo(run_pandexo(planet.name, instrument, **overrides), overrides["t14_h"], lrs_range)
+    verbose = overrides.pop("verbose", True)
+    p = pandexo_params(planet.name, **overrides)   # exactly the inputs run_pandexo would use: the cache key
+    if use_cache:
+        cached = pandexo_cache_lookup(_pandexo_key(p, instrument, lrs_range))
+        if cached is not None:
+            if verbose: print(f"{p['name']} [{instrument}]: sigma_1min = {cached:.2f} ppm/min from the PandExo cache ({PANDEXO_CACHE.name})")
+            return cached
+    result = run_pandexo(planet.name, instrument, verbose=verbose, **overrides)
+    created, entries, value = datetime.now().isoformat(timespec="seconds"), [], None
+    siblings = [(d, filter_lambda(d)) for d, m in PANDEXO_MODES.items() if m == PANDEXO_MODES[instrument] and d != instrument]
+    for ins, band in [(instrument, lrs_range)] + siblings:
+        try:
+            out = rms_1min_pandexo(result, overrides["t14_h"], band, extra=True)
+        except ValueError:
+            if ins == instrument: raise
+            continue   # a sibling band the run does not cover
+        entries.append((_pandexo_key(p, ins, band), dict(sigma_1min=float(out["RMS_1min_pandexo"]), transit_precision_ppm=float(out["Precision Transit"]),
+                                                         integration_s=float(out["Integration Duration"]), created=created)))
+        if ins == instrument: value = float(out["RMS_1min_pandexo"])
+    _pandexo_cache_store(entries)
+    return value
 
 
 # sigma_1min [ppm] for a whole sample of archive planets on ONE instrument: rms_1min per target, keyed by PlanetParams.name.
-# PandExo is NOT cached and takes seconds per planet, so call this once and keep the dict. A target the archive cannot supply (no T14, no magnitude) or that PandExo
+# Served from the PandExo cache where possible; only a planet's first run on a PandExo mode takes seconds. A target the archive cannot supply (no T14, no magnitude) or that PandExo
 # fails on raises (KeyError / ValueError from pandexo_params, or PandExo's own error) rather than yielding NaN: a NaN sigma_1min would silently corrupt the fits downstream (planet_bias_table).
 # Only planets with no noise level at all (instrument without a PandExo mode and no CUSTOM_SIGMA_1MIN entry) are left out of the dict, with a note (possibly all of them: then {}).
 # planet_bias_table fits them without a noise level (no Fisher sigma); the false-positive tables, which need one, leave them out.
