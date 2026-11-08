@@ -307,6 +307,24 @@ def surface_temperature(gamma1, planet, insolation_model, u_B=DEFAULT_U_B, A_B=D
     return temperature_from_insolation(insolation(gamma1, planet, insolation_model, u_B=u_B), planet, insolation_model, A_B = A_B, emissivity_B=emissivity_B, F=F)
 
 
+# Bolometric hemisphere temperatures [K] of the day (gamma1 <= 90 deg) and night (>= 90 deg) side under three weights of the angle gamma1 from the substellar point, by 1-D trapezoid of
+# insolation(gamma1) in local radiative equilibrium (BBtemp_from_insolation; F for "naive_redist"). Returns {<weight>_day, <weight>_night} for
+#   uniform: d gamma1 / (pi/2) -- the hemisphere averages of Sadh & Gavassino 2026 (ApJ 997, 167) eqs. 15-17. Not an area mean: it over-counts the polar caps (point source: T0 (2/pi)^(1/4))
+#   area:    sin(gamma1) d gamma1 -- area mean of the flux over the hemisphere (point source: T0 (1/2)^(1/4))
+#   disk:    2 |cos gamma1| sin gamma1 d gamma1 -- disk-integrated brightness temperature seen along the star-planet axis, edge-on (dayside at mid-occultation, nightside at mid-transit);
+#            the point-source dayside is the T_d,max of Teske et al. 2025, T0 (2/3)^(1/4) (f = 2/3 of Cowan & Agol 2011)
+# with T0 = T_eff sqrt(R*/a) [(1-A_B)/emissivity_B]^(1/4). The point-source values are exact up to the quadrature: the check of the weights.
+def hemisphere_temperatures(planet, insolation_model="hyperillum", u_B=DEFAULT_U_B, A_B=DEFAULT_A_B, emissivity_B=DEFAULT_EMISSIVITY_B, F=None, n=40001):
+    g = np.linspace(0., np.pi, n)
+    I = effective_insolation(insolation(g, planet, insolation_model, u_B=u_B), planet, insolation_model, F=F)
+    weights = {"uniform": np.full_like(g, 2. / np.pi), "area": np.sin(g), "disk": 2. * np.abs(np.cos(g)) * np.sin(g)}
+    out = {}
+    for side, m in (("day", g <= np.pi / 2), ("night", g >= np.pi / 2)):
+        for key, w in weights.items():
+            out[f"{key}_{side}"] = float(BBtemp_from_insolation(np.trapezoid(I[m] * w[m], g[m]), A_B=A_B, emissivity_B=emissivity_B))
+    return out
+
+
 
 ###########################################################################################################################
 #####

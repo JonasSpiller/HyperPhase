@@ -599,6 +599,13 @@ class FittingConfig:
         minutes_binning = self.planet.period * 24 * 60 / self.n_bins
         return self.sigma_1min / np.sqrt(minutes_binning * self.n_orbits)
 
+    # Noise of a fitted phase-curve semi-amplitude (first harmonic over n_orbits): sigma_1min sqrt(2 / t_obs[min]), i.e. sigma(a) = sqrt(2/N) sigma per point (Montgomery & O'Donoghue 1999,
+    # DSSN 13, 28; Kallinger et al. 2008, A&A 481, 571, eq. 1). Binning-independent, so it is the reference for a flux level
+    # such as the nightside signal at mid-transit (sigma_bin is not: it scales with sqrt(n_bins)). A lower bound: it ignores the compensation by A_B that dchi2_F / z_F includes.
+    @property
+    def sigma_amp(self):
+        return self.sigma_1min * np.sqrt(2. / (self.planet.period * 24 * 60 * self.n_orbits))
+
 
 # The PlanetParams that model_pcurve actually evaluates, at the swept geometry, in pl's own units.
 # Factored out so that a cached insolation map (insolation_cache) is guaranteed to be built at exactly the geometry the corresponding model_pcurve call will use — the caches cannot silently go stale.
