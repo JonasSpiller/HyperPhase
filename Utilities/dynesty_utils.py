@@ -1,9 +1,11 @@
 import numpy as np
+import sys
 from dataclasses import dataclass, fields
 import time
 import os
 import glob
 import pickle
+import copy
 from datetime import datetime
 import dynesty
 from dynesty.pool import Pool
@@ -13,7 +15,7 @@ from hyperillumination_phasecurve_utils import DEFAULT_N_LO, DEFAULT_N_LA, model
 import astro_utils   # T_bright
 from dynesty import utils as dyfunc
 from scipy.ndimage import gaussian_filter
-from simple_bias_analysis import binned, fit_naive, fit_redist, fisher_sigma, measurability, temperature_bias   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth compares the sampler with
+from simple_bias_analysis import binned, fit_naive, fit_redist, fisher_sigma, measurability, temperature_bias, is_detector_set   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth compares the sampler with
 from hyperillumination_utils import surface_temperature   # the nightside temperature a fitted F implies
 from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS   # the parameter ranges: priors (physical) and the least-squares fit range of A_B
 from scipy.stats import norm, truncnorm
@@ -43,57 +45,90 @@ def truth_model_kw(data, cfg):
     return kw
 
 
-def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", **model_kw):
-    """The simulated observation against the truth it was drawn from (re-evaluated here, one forward model at the truth's own resolution, truth_model_kw), with the residuals in units of sigma.
-    Prints the chi2 check of the noise realisation. Returns fig, (ax, axr) and does not show (the caller does)."""
-    ph = data["t"] / cfg.planet.period  # orbital phase
+# A detector set (simple_bias_analysis.is_detector_set: a list/tuple of FittingConfigs with the same planet and binning, different band and noise) is fitted JOINTLY - one shared
+# (A_B, F), one baseline per detector - by JointGaussianLogL; its dataset is the per-detector simulate_data outputs under data["detectors"]. These helpers let every plot treat a
+# single FittingConfig and a set alike.
+def detector_cfgs(cfg):
+    """A FittingConfig or a detector set -> the list of FittingConfigs."""
+    return list(cfg) if is_detector_set(cfg) else [cfg]
 
-    # Full Phase Curve (the exact curve simulate_data drew the data from; model_kw overrides the recorded settings)
-    t_hi, y_hi = model_pcurve(cfg, insolation_model, A_B_true, **{**truth_model_kw(data, cfg), **model_kw})
-    y_true = binned(cfg, y_hi) + float((data.get("truth") or {}).get("offset", 0.))   # with the injected baseline, if any
-    ph_hi = t_hi / cfg.planet.period
+def detector_data(data):
+    """A simulate_data output -> the list of per-detector data dicts (data["detectors"] of a joint dataset, else the dict itself)."""
+    return list(data["detectors"]) if "detectors" in data else [data]
 
-    # Plotting
-    fig, (ax, axr) = plt.subplots(2, 1, figsize=(8, 5.5), sharex=True,
-                                  gridspec_kw=dict(height_ratios=[3, 1], hspace=0.06))
+def _blocks(sizes):
+    """Index slices of consecutive blocks of the given sizes in a concatenated array (the detectors' blocks of a joint model or residual vector)."""
+    edges = np.concatenate([[0], np.cumsum(sizes)]).astype(int)
+    return [slice(int(edges[k]), int(edges[k + 1])) for k in range(len(sizes))]
 
-    ax.plot(ph_hi, y_hi, lw=1., color="0.5", label=f'truth ({insolation_model}, $A_B$={A_B_true:.2f})')
-    ax.step(ph, y_true, where="mid", color="C0", lw=1.4, label="binned truth")
-    ax.errorbar(ph, data["y_obs"], yerr=data["sigma"], fmt="o", ms=4, color="k", capsize=2,
-                elinewidth=1., label=f'simulated data ($\\sigma$={cfg.sigma_bin:.1f} ppm)')
-    ax.set_ylabel("$F_p/F_\\star$ [ppm]");
-    ax.legend(frameon=False, fontsize=8);
-    ax.margins(x=0.01)
 
-    r = (data["y_obs"] - y_true) / data["sigma"]
-    axr.axhline(0, color="0.7", lw=0.8);
-    axr.axhline(1, color="0.85", lw=0.6, ls=":")
-    axr.axhline(-1, color="0.85", lw=0.6, ls=":")
-    axr.plot(ph, r, "ko", ms=4)
-    axr.set_xlabel("orbital phase");
-    axr.set_ylabel("resid / $\\sigma$");
-    axr.set_ylim(-3.5, 3.5)
+def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", labels=None, **model_kw):
+    """The simulated observation against the truth it was drawn from (re-evaluated here, one forward model per detector at the truth's own resolution, truth_model_kw), with the residuals
+    in units of sigma. Prints the chi2 check of the noise realisation. One column per detector for a detector set (joint dataset); `labels` names the columns.
+    Returns fig, (ax, axr) for a single detector and fig, axes (2 x n_detectors) for a set; does not show (the caller does)."""
+    cfgs, datas = detector_cfgs(cfg), detector_data(data)
+    labels = list(labels) if labels is not None else [None] * len(cfgs)
+    fig, axes = plt.subplots(2, len(cfgs), figsize=(8 * len(cfgs), 5.5), sharex=True, squeeze=False, gridspec_kw=dict(height_ratios=[3, 1], hspace=0.06))
+    for k, (c, d, lab) in enumerate(zip(cfgs, datas, labels)):
+        ax, axr = axes[0, k], axes[1, k]
+        ph = d["t"] / c.planet.period  # orbital phase
 
-    # Numerical Checks
-    chi2 = np.sum(r ** 2)
-    print(f"sigma_bin: {cfg.sigma_bin:.2f} ppm  (bin width {cfg.planet.period * 24 * 60 / cfg.n_bins:.2f} min)")
-    print(f"chi2 / n_bins (normalized average noise per bin ~1): {chi2 / cfg.n_bins:.2f}")
-    print(f"residual mean / sigma (~0): {r.mean():.2f}")
-    return fig, (ax, axr)
+        # Full Phase Curve (the exact curve simulate_data drew the data from; model_kw overrides the recorded settings)
+        t_hi, y_hi = model_pcurve(c, insolation_model, A_B_true, **{**truth_model_kw(d, c), **model_kw})
+        y_true = binned(c, y_hi) + float((d.get("truth") or {}).get("offset", 0.))   # with the injected baseline, if any
+        ph_hi = t_hi / c.planet.period
+
+        ax.plot(ph_hi, y_hi, lw=1., color="0.5", label=f'truth ({insolation_model}, $A_B$={A_B_true:.2f})')
+        ax.step(ph, y_true, where="mid", color="C0", lw=1.4, label="binned truth")
+        ax.errorbar(ph, d["y_obs"], yerr=d["sigma"], fmt="o", ms=4, color="k", capsize=2,
+                    elinewidth=1., label=f'simulated data ($\\sigma$={c.sigma_bin:.1f} ppm)')
+        ax.set_ylabel("$F_p/F_\\star$ [ppm]");
+        ax.legend(frameon=False, fontsize=8);
+        ax.margins(x=0.01)
+        if lab: ax.set_title(lab, fontsize=9)
+
+        r = (d["y_obs"] - y_true) / d["sigma"]
+        axr.axhline(0, color="0.7", lw=0.8);
+        axr.axhline(1, color="0.85", lw=0.6, ls=":")
+        axr.axhline(-1, color="0.85", lw=0.6, ls=":")
+        axr.plot(ph, r, "ko", ms=4)
+        axr.set_xlabel("orbital phase");
+        axr.set_ylabel("resid / $\\sigma$");
+        axr.set_ylim(-3.5, 3.5)
+
+        # Numerical Checks
+        chi2 = np.sum(r ** 2)
+        pre = f"{lab}: " if lab else ""
+        print(f"{pre}sigma_bin: {c.sigma_bin:.2f} ppm  (bin width {c.planet.period * 24 * 60 / c.n_bins:.2f} min)")
+        print(f"{pre}chi2 / n_bins (normalized average noise per bin ~1): {chi2 / c.n_bins:.2f}")
+        print(f"{pre}residual mean / sigma (~0): {r.mean():.2f}")
+    return (fig, (axes[0, 0], axes[1, 0])) if len(cfgs) == 1 else (fig, axes)
 
 
 def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=True, offset=0.,
-                  k_truth=TRUTH_KW["k_truth"], n_layers=TRUTH_KW["n_layers"], n_lo=TRUTH_KW["n_lo"], n_la=TRUTH_KW["n_la"], plotting=True, **model_kw):
+                  k_truth=TRUTH_KW["k_truth"], n_layers=TRUTH_KW["n_layers"], n_lo=TRUTH_KW["n_lo"], n_la=TRUTH_KW["n_la"], plotting=True, labels=None, _rng=None, **model_kw):
     """Simulated phase-folded observation: binned(truth) + N(0, sigma_bin).
 
     cfg          : FittingConfig — the only mandatory input; supplies planet, filter, stellar_grid, A_(A_B), sigma_1min, n_orbits, n_bins, u_B, reflected.
+                   Or a detector set (list/tuple of FittingConfigs sharing the planet and binning, differing in band and noise, as in the bias analysis): one dataset per detector from the
+                   same truth, with ONE noise stream continued across the detectors - the first detector's draws are exactly those of its single-detector dataset with the same seed, the
+                   next detector's the following, independent ones. The output then carries the per-detector dicts in data["detectors"] next to the concatenated "t", "y_obs", "sigma".
     A_B_true     : true Bond albedo.
     noise        : False -> the noiseless ("Asimov") dataset. Use it for bias maps; do NOT use it for lnZ / Bayes factors, where chi2 = 0 at the truth inflates Z.
     offset       : constant baseline injected into the data [ppm]; set non-zero to check that the fitted nuisance offset is actually recovered.
     k_truth      : sub-samples per bin for the truth (n_t = k_truth * n_bins, must tile); with n_layers, n_lo, n_la the truth's resolution (TRUTH_KW).
+    labels       : detector names for the plot of a detector set.
     model_kw     : further model_pcurve keywords of the truth, e.g. F for insolation_model="naive_redist".
     The injected truth (A_B, insolation model, F, offset, seed, and the forward-model settings) travels with the data in data["truth"], and from there into NestedFit.meta.
     """
+    if is_detector_set(cfg):
+        rng = np.random.default_rng(seed)   # one stream for all detectors
+        parts = [simulate_data(c, A_B_true, insolation_model, seed=seed, noise=noise, offset=offset, k_truth=k_truth, n_layers=n_layers, n_lo=n_lo, n_la=n_la, plotting=False, _rng=rng, **model_kw) for c in cfg]
+        data = {k: np.concatenate([d[k] for d in parts]) for k in ("t", "y_obs", "sigma")}
+        data["truth"] = dict(parts[0]["truth"])
+        data["detectors"] = parts
+        if plotting: plot_simulated_data(cfg, A_B_true, data, insolation_model=insolation_model, labels=labels); plt.show()
+        return data
 
     # high-resolution truth (thermal + reflected, since cfg.reflected=True)
     model_kw_truth = dict(n_t=k_truth * cfg.n_bins, n_layers=n_layers, n_lo=n_lo, n_la=n_la, **model_kw)
@@ -102,9 +137,9 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
     # reduce to the observed bins
     y_true = binned(cfg, y_hi) + offset
 
-    # adding noise
+    # adding noise (a stream handed in by the detector-set branch continues across detectors)
     s = cfg.sigma_bin
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed) if _rng is None else _rng
     y_obs = y_true + rng.normal(0., s, cfg.n_bins) if noise else y_true.copy()
 
     t=(np.arange(cfg.n_bins) + 0.5) * cfg.planet.period / cfg.n_bins
@@ -196,8 +231,8 @@ class ParameterSet:
     def __post_init__(self):
         if not self.params: raise ValueError("a ParameterSet needs at least one free Parameter")
         if len(set(self.names)) != len(self.names): raise ValueError(f"duplicate parameter names in {self.names}")
-        bad = [n for n in self.names if n not in _KNOWN]
-        if bad: raise ValueError(f"unsupported parameter(s) {bad}; supported: {_KNOWN}")
+        bad = [n for n in self.names if n not in _KNOWN and not n.startswith("offset_")]   # "offset_<label>": one baseline per detector of a joint fit (JointGaussianLogL)
+        if bad: raise ValueError(f"unsupported parameter(s) {bad}; supported: {_KNOWN} and offset_<label> for the detectors of a joint fit")
 
     @property
     def ndim(self): return len(self.params)
@@ -296,6 +331,7 @@ class GaussianLogL:
         if not np.all(self.sigma > 0): raise ValueError("all sigma must be > 0")
         self._inv_s = 1. / self.sigma
         self._const = float(np.sum(np.log(2. * np.pi * self.sigma ** 2)))  # theta-independent
+        self.data = {"t": self.t, "y_obs": self.y, "sigma": self.sigma, "truth": dict(self.truth)}   # what run_nested_fit stores with the fit
 
         # Geometry-only caches for speedup
         # Each cache is dropped as soon as ANY parameter it depends on is sampled, so it can never be used at a geometry it was not built at. Both are pure speed-ups: bit-identical either way.
@@ -375,8 +411,8 @@ class GaussianLogL:
             return self.bad_logl
         return self._logl_from_model(m)
 
-    def logl_offsets(self, theta, offsets):
-        # only for visualization - making offset sweeps cheap
+    def logl_offsets(self, theta, offsets, name="offset"):
+        # only for visualization - making offset sweeps cheap (`name` is the baseline's name, "offset" here; JointGaussianLogL has one per detector)
         p = self.unpack(theta)
         c = self.curve(p)
         offsets = np.atleast_1d(np.asarray(offsets, float))
@@ -384,6 +420,114 @@ class GaussianLogL:
             return np.full(offsets.shape, self.bad_logl)
         r = (self.y - c)[None, :] - offsets[:, None]
         return -0.5 * (np.sum((r * self._inv_s[None, :]) ** 2, axis=1) + self._const)
+
+    def logl_profile_offsets(self, theta, offsets):
+        """lnL at theta with the baseline MAXIMISED over `offsets`: the profile likelihood in the other parameters, the baseline treated as the nuisance it is. Free (one forward model)."""
+        return float(np.max(self.logl_offsets(theta, offsets)))
+
+
+class JointGaussianLogL:
+    """Several detectors fitted JOINTLY - the dynesty counterpart of a detector set in simple_bias_analysis (e.g. the two NIRSpec/G395H arrays): one GaussianLogL per detector, the
+    physical parameters (A_B, F, geometry) shared, one baseline per detector, and lnL = the sum of the detectors' lnL (independent data).
+
+    theta is ordered by `names`: the shared names plus one "offset_<label>" per detector; `labels` are the detectors' short names in the order of `cfgs` (e.g. ("NRS1", "NRS2"),
+    HItargets_utils.detector_label). Each component sees names = shared + ("offset",) and its own data dict, so every cache, check and model keyword works per detector exactly as
+    in a single fit. A baseline is additive within its own block only, so the offset scans stay free (logl_offsets for one baseline, logl_profile_offsets for all of them at once).
+
+    cfgs   : the detector set (list/tuple of FittingConfig; same planet and n_bins, different band and noise)
+    data   : a joint simulate_data output (with "detectors") or a list of per-detector data dicts
+    Pass the instance straight to dynesty as `loglike`, like a GaussianLogL; build it with make_logl / from_pset so the names cannot drift from the ParameterSet.
+    """
+
+    def __init__(self, cfgs, data, insolation_model, names, labels, fixed=None, bad_logl=-1e100, cache=True, **model_kw):
+        self.cfgs = list(cfgs)
+        self.cfg = tuple(self.cfgs)   # the detector set, as run_nested_fit stores it and the bias-analysis fitters take it
+        self.labels = tuple(labels)
+        if len(self.labels) != len(self.cfgs): raise ValueError(f"{len(self.labels)} detector labels for {len(self.cfgs)} FittingConfigs")
+        datas = detector_data(data) if isinstance(data, dict) else list(data)
+        if len(datas) != len(self.cfgs): raise ValueError(f"{len(datas)} datasets for {len(self.cfgs)} detectors")
+        self.names = tuple(names)
+        self.offset_names = tuple(f"offset_{l}" for l in self.labels)
+        missing = [o for o in self.offset_names if o not in self.names]
+        if missing: raise ValueError(f"a joint fit samples one baseline per detector: {missing} missing from names {self.names}")
+        if "offset" in self.names: raise ValueError('a joint fit names its baselines "offset_<label>", not "offset"')
+        self.shared = tuple(n for n in self.names if n not in self.offset_names)
+        self.insolation_model = insolation_model
+        self.fixed = dict(fixed or {})
+        self.model_kw = dict(model_kw)
+        self.components = [GaussianLogL(c, d, insolation_model, names=self.shared + ("offset",), fixed=fixed, bad_logl=bad_logl, cache=cache, **model_kw) for c, d in zip(self.cfgs, datas)]
+        self.t = np.concatenate([L.t for L in self.components])
+        self.y = np.concatenate([L.y for L in self.components])
+        self.sigma = np.concatenate([L.sigma for L in self.components])
+        self.truth = dict(self.components[0].truth)
+        self.data = {"t": self.t, "y_obs": self.y, "sigma": self.sigma, "truth": self.truth, "detectors": [L.data for L in self.components]}
+        self.blocks = _blocks([L.y.size for L in self.components])   # each detector's slice of the concatenated model / residual vector
+        self.n_calls = 0
+
+    @classmethod
+    def from_pset(cls, cfgs, data, insolation_model, pset, labels, **kw):
+        return cls(cfgs, data, insolation_model, names=pset.names, labels=labels, **kw)
+
+    @property
+    def ndim(self): return len(self.names)
+    @property
+    def cache_used(self): return self.components[0].cache_used
+    @property
+    def insol(self): return self.components[0].insol        # geometry-only, hence band-independent: the first detector's serves the derived quantities
+    @property
+    def refl_unit(self): return self.components[0].refl_unit
+
+    def __repr__(self):
+        return f"JointGaussianLogL({self.insolation_model}, detectors={self.labels}, names={self.names}, fixed={self.fixed}, ndim={self.ndim}, caches={self.cache_used})"
+
+    def unpack(self, theta):
+        """theta -> {name: value}, merged with `fixed`. Inverse of theta_of()."""
+        theta = np.atleast_1d(np.asarray(theta, float))
+        if theta.size != self.ndim: raise ValueError(f"theta has {theta.size} entries, expected {self.ndim} for {self.names}")
+        p = dict(self.fixed)
+        p.update(zip(self.names, theta))
+        return p
+
+    def thetas(self, theta):
+        """The joint theta -> one component theta per detector, its own baseline under the component's name "offset"."""
+        p = self.unpack(theta)
+        return [np.array([p[o] if n == "offset" else p[n] for n in L.names], float) for L, o in zip(self.components, self.offset_names)]
+
+    def models(self, theta):
+        """Binned model [ppm] per detector, offsets applied."""
+        return [L.model(th) for L, th in zip(self.components, self.thetas(theta))]
+
+    def model(self, theta):
+        """The detectors' binned models concatenated (self.blocks slices them)."""
+        return np.concatenate(self.models(theta))
+
+    def residuals(self, theta): return self.y - self.model(theta)
+
+    def chi2(self, theta): return float(np.sum((self.residuals(theta) / self.sigma) ** 2))
+
+    def __call__(self, theta):
+        """The dynesty `loglike`: the sum over the detectors."""
+        self.n_calls += 1
+        return float(sum(L(th) for L, th in zip(self.components, self.thetas(theta))))
+
+    def logl_offsets(self, theta, offsets, name):
+        """lnL along ONE detector's baseline `name` ("offset_<label>"), everything else at theta: that detector's block is scanned analytically, the other blocks are constants."""
+        k = self.offset_names.index(name)
+        ths = self.thetas(theta)
+        rest = sum(L(th) for j, (L, th) in enumerate(zip(self.components, ths)) if j != k)
+        return rest + self.components[k].logl_offsets(ths[k], offsets)
+
+    def logl_profile_offsets(self, theta, offsets):
+        """lnL at theta with EVERY baseline maximised over `offsets`: the blocks are independent, so the maxima separate."""
+        return float(sum(np.max(L.logl_offsets(th, offsets)) for L, th in zip(self.components, self.thetas(theta))))
+
+
+def make_logl(cfg, data, insolation_model, pset, labels=None, **kw):
+    """The likelihood of a ParameterSet for a FittingConfig (GaussianLogL) or a detector set (JointGaussianLogL; needs the detectors' `labels`, one per FittingConfig)."""
+    if is_detector_set(cfg):
+        if labels is None: raise ValueError("a joint fit needs the detector labels (one per FittingConfig, e.g. ('NRS1', 'NRS2'))")
+        return JointGaussianLogL.from_pset(cfg, data, insolation_model, pset, labels, **kw)
+    return GaussianLogL.from_pset(cfg, data, insolation_model, pset, **kw)
 
 
 def theta_of(logl, values):
@@ -417,11 +561,11 @@ def logl_slice(logl, name, values, base, n_jobs=-1):
     base   : {name: value} covering ALL of logl.names (the entry for `name` is overwritten)
     Returns lnL, same shape as values.
 
-    Scanning "offset" is free (one forward model, vectorised) because the offset is additive.
+    Scanning a baseline ("offset", or "offset_<label>" of a joint fit) is free (one forward model, vectorised) because it is additive.
     """
     values = np.asarray(values, float)
     if name not in logl.names: raise ValueError(f"{name!r} is not sampled; logl.names = {logl.names}")
-    if name == "offset": return logl.logl_offsets(theta_of(logl, base), values)
+    if name.startswith("offset"): return logl.logl_offsets(theta_of(logl, base), values, name)
 
     def _one(v):
         b = dict(base); b[name] = v
@@ -443,11 +587,12 @@ def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1, profile_off
     If one axis is "offset" the grid costs only len(other axis) forward-model evaluations, since the
     offset enters additively.
 
-    profile_offset : array of offsets. Instead of holding the offset at base["offset"], each cell is
+    profile_offset : array of offsets. Instead of holding the baseline(s) at `base`, each cell is
     MAXIMISED over them - the profile likelihood in the two plotted parameters, with the additive
-    baseline treated as the nuisance it is. Free: the offset reuses the cell's one forward model.
-    Use it when the plotted parameters are correlated with the offset (e.g. F), where a slice at a
-    fixed offset is narrower than the posterior actually is. Only for axes that are not "offset".
+    baseline treated as the nuisance it is (every detector's own baseline for a joint fit). Free:
+    the offsets reuse the cell's one forward model. Use it when the plotted parameters are correlated
+    with the offset (e.g. F), where a slice at a fixed offset is narrower than the posterior actually
+    is. Only for axes that are not baselines.
     """
     for n in (x_name, y_name):
         if n not in logl.names: raise ValueError(f"{n!r} is not sampled; logl.names = {logl.names}")
@@ -455,28 +600,31 @@ def logl_grid(logl, x_name, x_vals, y_name, y_vals, base, n_jobs=-1, profile_off
     x_vals = np.asarray(x_vals, float)
     y_vals = np.asarray(y_vals, float)
 
-    # fast path: the offset is purely additive -> one model call per non-offset grid value
-    if "offset" in (x_name, y_name):
-        off_is_y = (y_name == "offset")
+    # fast path: a baseline is purely additive -> one model call per non-baseline grid value
+    off_axes = [n for n in (x_name, y_name) if n.startswith("offset")]
+    if len(off_axes) == 2: raise ValueError("a map of one baseline against another is not supported (and not informative: the blocks are independent); scan a baseline against a physical parameter")
+    if off_axes:
+        off_name = off_axes[0]
+        off_is_y = (y_name == off_name)
         other_name, other_vals = (x_name, x_vals) if off_is_y else (y_name, y_vals)
         off_vals = y_vals if off_is_y else x_vals
 
         def _col(v):
             b = dict(base); b[other_name] = v
-            return logl.logl_offsets(theta_of(logl, b), off_vals)
+            return logl.logl_offsets(theta_of(logl, b), off_vals, off_name)
 
         lnL = np.asarray(_map(_col, other_vals, n_jobs), float).T   # (n_off, n_other)
         return lnL if off_is_y else lnL.T
 
     if profile_offset is not None:
-        if "offset" not in logl.names: raise ValueError("profile_offset needs the offset to be sampled")
+        if not any(n.startswith("offset") for n in logl.names): raise ValueError("profile_offset needs the baseline(s) to be sampled")
         profile_offset = np.asarray(profile_offset, float)
 
     def _one(ij):
         i, j = ij
         b = dict(base); b[x_name] = x_vals[i]; b[y_name] = y_vals[j]
         th = theta_of(logl, b)
-        return float(np.max(logl.logl_offsets(th, profile_offset))) if profile_offset is not None else logl(th)
+        return logl.logl_profile_offsets(th, profile_offset) if profile_offset is not None else logl(th)   # every baseline maximised (per detector for a joint fit)
     idx = [(i, j) for j in range(len(y_vals)) for i in range(len(x_vals))]
     return np.asarray(_map(_one, idx, n_jobs), float).reshape(len(y_vals), len(x_vals))
 
@@ -616,11 +764,11 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
 
     meta = dict(insolation_model=logl.insolation_model, caches=logl.cache_used, fixed=dict(logl.fixed), seed=scfg.seed, runtime_s=runtime,
                 ncall=int(np.sum(res.ncall)), niter=int(res.niter), lnZ=float(res.logz[-1]), lnZ_err=float(res.logzerr[-1]), information=float(res.information[-1]), n_bins=int(logl.y.size), sigma_bin=float(np.mean(logl.sigma)),
-                data=dict(t=logl.t.copy(), y_obs=logl.y.copy(), sigma=logl.sigma.copy(), truth=dict(logl.truth)),   # the fit travels with its data (and the injected truth), so a reloaded NestedFit can be re-plotted without re-running the notebook
-                cfg=logl.cfg, model_kw=dict(logl.model_kw))   # everything logl_from_fit needs to rebuild the likelihood from the pickle alone
+                data=copy.deepcopy(logl.data),   # the fit travels with its data (and the injected truth; per detector for a joint fit), so a reloaded NestedFit can be re-plotted without re-running the notebook
+                cfg=logl.cfg, model_kw=dict(logl.model_kw), labels=getattr(logl, "labels", None))   # everything logl_from_fit needs to rebuild the likelihood from the pickle alone (cfg is the detector set and labels the detector names for a joint fit)
 
     # The geometry actually used: sampled, held fixed, or (the usual case) inherited from cfg.planet - an empty `fixed` on its own would not record which.
-    pl = logl.cfg.planet
+    pl = detector_cfgs(logl.cfg)[0].planet
     meta["geometry"] = {k: ("sampled" if k in logl.names else float(logl.fixed.get(k, d))) for k, d in (("a_rs", pl.R / pl.r2), ("T_s", pl.T2_eff), ("rp_rs", pl.r1 / pl.r2))}
 
     meta.update(run_status(res, scfg, stop_kwargs))
@@ -664,33 +812,36 @@ def load_fits(paths):
 
 def check_fit_current(fit, cfg=None, rtol=1e-6):
     """Is a saved fit still a fit of TODAY's forward model? Returns the relative difference between the stellar grid the fit was run with (pickled inside its cfg) and the one the
-    current code builds from the same inputs (star, band, filter file, stellar model). 0 means identical; anything else means the thermal normalisation changed since the run
-    (stellar SED, filter convention, band-edge fix, ...), so the saved samples are not the posterior of the current likelihood and every plot that re-evaluates the forward model
-    would mix the two. Also raises for a cfg saved with an older FittingConfig (missing fields), which the forward model could not evaluate anyway."""
+    current code builds from the same inputs (star, band, filter file, stellar model), the largest over the detectors of a joint fit. 0 means identical; anything else means the
+    thermal normalisation changed since the run (stellar SED, filter convention, band-edge fix, ...), so the saved samples are not the posterior of the current likelihood and every
+    plot that re-evaluates the forward model would mix the two. Also raises for a cfg saved with an older FittingConfig (missing fields), which the forward model could not evaluate anyway."""
     cfg = cfg if cfg is not None else fit.meta["cfg"]
-    missing = [f.name for f in fields(FittingConfig) if not hasattr(cfg, f.name)]
-    if missing: raise ValueError(f"the saved FittingConfig predates the field(s) {missing}: this fit ({fit.meta.get('file', '?')}) was run with an older forward model and has to be re-run")
-    now = stellar_spidergrid((cfg.l1, cfg.l2), cfg.filter_path, cfg.planet.logg, cfg.planet.feh, stellar_model=cfg.stellar_model)
-    then = cfg.stellar_grid
-    if np.shape(now[1]) != np.shape(then[1]) or not np.allclose(now[0], then[0]): return np.inf   # different T_eff nodes
-    rel = float(np.max(np.abs(np.asarray(now[1], float) / np.asarray(then[1], float) - 1.)))
-    if rel > rtol: warnings.warn(f"{fit.meta['insolation_model']}: the stellar grid of the current code differs from the one this fit was run with by up to {100 * rel:.3g} % "
-                                 f"(stellar model, filter or band changed since {fit.meta.get('file', 'the run')}). Its samples are not the posterior of today's likelihood: re-run the fit before quoting it.", RuntimeWarning, stacklevel=2)
-    return rel
+    rel_max = 0.
+    for c in detector_cfgs(cfg):
+        missing = [f.name for f in fields(FittingConfig) if not hasattr(c, f.name)]
+        if missing: raise ValueError(f"the saved FittingConfig predates the field(s) {missing}: this fit ({fit.meta.get('file', '?')}) was run with an older forward model and has to be re-run")
+        now = stellar_spidergrid((c.l1, c.l2), c.filter_path, c.planet.logg, c.planet.feh, stellar_model=c.stellar_model)
+        then = c.stellar_grid
+        rel = np.inf if (np.shape(now[1]) != np.shape(then[1]) or not np.allclose(now[0], then[0])) else float(np.max(np.abs(np.asarray(now[1], float) / np.asarray(then[1], float) - 1.)))   # inf: different T_eff nodes
+        rel_max = max(rel_max, rel)
+    if rel_max > rtol:   # printed to stderr rather than warnings.warn: HItargets_utils silences every warning at import (warnings.filterwarnings('ignore')), and this one must be seen
+        print(f"WARNING [{fit.meta['insolation_model']}]: the stellar grid of the current code differs from the one this fit was run with by up to {100 * rel_max:.3g} % "
+              f"(stellar model, filter or band changed since {fit.meta.get('file', 'the run')}). Its samples are not the posterior of today's likelihood: re-run the fit before quoting it.", file=sys.stderr, flush=True)
+    return rel_max
 
 
 def logl_from_fit(fit, cfg=None, **model_kw):
     """The GaussianLogL a saved fit was run with, rebuilt from the pickle alone - what the plotting helpers that still
     evaluate the forward model (logl_slice/logl_grid, plot_posterior_predictive, derived_samples, plot_noisy_vs_truth) need.
 
-    Uses the FittingConfig stored in meta by run_nested_fit (with the stellar grid as it was at run time); pass `cfg` explicitly for fits saved before that was added.
+    Uses the FittingConfig (or detector set) stored in meta by run_nested_fit (with the stellar grid as it was at run time); pass `cfg` explicitly for fits saved before that was added.
     check_fit_current warns when the current code would build a different stellar grid, i.e. when the forward model has changed since the run.
     The geometry-only caches are rebuilt here, so the first call costs a second or two."""
     cfg = cfg if cfg is not None else fit.meta.get("cfg")
     if cfg is None: raise ValueError("this fit predates cfg being stored in meta - pass cfg=... (or re-run the fit)")
     check_fit_current(fit, cfg)
     kw = {**fit.meta.get("model_kw", {}), **model_kw}
-    return GaussianLogL.from_pset(cfg, fit.meta["data"], fit.meta["insolation_model"], fit.pset, fixed=fit.meta.get("fixed"), **kw)
+    return make_logl(cfg, fit.meta["data"], fit.meta["insolation_model"], fit.pset, labels=fit.meta.get("labels"), fixed=fit.meta.get("fixed"), **kw)   # a JointGaussianLogL for a detector set
 
 
 ###########################################################################################################################
@@ -765,13 +916,15 @@ def derived_samples(logl, thetas, n_jobs=-1):
     """Posterior draws pushed through to physical quantities -> {key: array of length n_draws}.
 
     T_sub / T_term / T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point. Under "naive" T_anti is the 0 K nightside and T_term is only np.interp of the grid between the last dayside and the first nightside node; under "hyperillum" the extended star pushes real flux past 90 deg, which is exactly the physical difference the Bayes factor is measuring. Under "naive_redist" T_anti is the redistributed nightside, T_anti^4 = (1-A_B) F S / (2 emissivity_B sigma) - the nightside temperature an observer would infer from that model, and 0 K in the truth.
-    depth_th / depth_refl / depth : occultation depth [ppm], thermal / reflected / total. Feed depth_th to brightness_temperature().
+    depth_th / depth_refl / depth : occultation depth [ppm], thermal / reflected / total, in the fit's band. For a joint fit (JointGaussianLogL) the temperatures are band-independent and computed once; the depths come per detector as "depth_th:<label>", "depth_refl:<label>", "depth:<label>", with the un-suffixed keys those of the first detector. Feed depth_th to brightness_temperature() with that detector's cfg.
     """
-    cfg, m = logl.cfg, logl.insolation_model
+    comps = logl.components if isinstance(logl, JointGaussianLogL) else [logl]
+    labels = list(logl.labels) if isinstance(logl, JointGaussianLogL) else None
+    cfg, m = comps[0].cfg, logl.insolation_model
     n_lo, n_la = logl.model_kw.get("n_lo", DEFAULT_N_LO), logl.model_kw.get("n_la", DEFAULT_N_LA)
     # The temperature map of "naive_redist" is the naive insolation map, redistributed (K&L eq. 1). model_pcurve never needs it (Louden is analytic), so GaussianLogL does not cache
     # it - but it is geometry-only, so unless a geometry parameter is sampled it is built ONCE here rather than once per draw (~0.4 s each).
-    insol = logl.insol
+    insol = comps[0].insol
     if insol is None and not any(n in logl.names for n in _GEOMETRY):
         insol = insolation_cache(cfg, m, n_lo=n_lo, n_la=n_la, **{k: v for k, v in logl.fixed.items() if k in _GEOMETRY})
 
@@ -784,18 +937,24 @@ def derived_samples(logl, thetas, n_jobs=-1):
         eq = int(np.argmin(np.abs(la)))   # equator row; Tg has shape (n_la, n_lo)
         T = list(np.interp([0., 90., 180.], lo, Tg[eq]))   # interpolated, not nearest-cell: T falls steeply through the terminator, so the nearest grid longitude is off by hundreds of K there
 
-        pp = pcurve_params(cfg, m, A_B_, F=F_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=insol)
-        d_th = float(occultation_depth(pp, stellar_grid=cfg.stellar_grid, emissivity=cfg.emissivity))
-
-        # Reflected part: linear in A, and its maximum over the orbit is the last point before ingress - within ~1% of the full-phase value, since reflected_unit itself carries the occultation.
-        ru = logl.refl_unit if logl.refl_unit is not None else (reflected_unit(cfg, m, n_t=logl.model_kw.get("n_t"), **geom) if cfg.reflected else None)
-        d_re = float(cfg.A_(A_B_) * np.max(ru)) if ru is not None else 0.
-        return T + [d_th, d_re]
+        depths = []
+        for L in comps:   # one band per detector
+            pp = pcurve_params(L.cfg, m, A_B_, F=F_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=insol)
+            d_th = float(occultation_depth(pp, stellar_grid=L.cfg.stellar_grid, emissivity=L.cfg.emissivity))
+            # Reflected part: linear in A, and its maximum over the orbit is the last point before ingress - within ~1% of the full-phase value, since reflected_unit itself carries the occultation.
+            ru = L.refl_unit if L.refl_unit is not None else (reflected_unit(L.cfg, m, n_t=logl.model_kw.get("n_t"), **geom) if L.cfg.reflected else None)
+            depths += [d_th, float(L.cfg.A_(A_B_) * np.max(ru)) if ru is not None else 0.]
+        return T + depths
 
     thetas = np.atleast_2d(np.asarray(thetas, float))
     a = np.asarray(_map(_one, list(thetas), n_jobs), float)
-    out = {k: a[:, i] for i, k in enumerate(("T_sub", "T_term", "T_anti", "depth_th", "depth_refl"))}
-    out["depth"] = out["depth_th"] + out["depth_refl"]
+    out = {k: a[:, i] for i, k in enumerate(("T_sub", "T_term", "T_anti"))}
+    for k in range(len(comps)):
+        suf = f":{labels[k]}" if labels else ""
+        out["depth_th" + suf], out["depth_refl" + suf] = a[:, 3 + 2 * k], a[:, 4 + 2 * k]
+        out["depth" + suf] = out["depth_th" + suf] + out["depth_refl" + suf]
+    if labels:   # un-suffixed = the first detector, so single-detector code keeps working
+        for key in ("depth_th", "depth_refl", "depth"): out[key] = out[f"{key}:{labels[0]}"]
     out["A_B"] = thetas[:, logl.names.index("A_B")] if "A_B" in logl.names else np.full(len(thetas), logl.fixed["A_B"])
     return out
 
@@ -915,66 +1074,80 @@ def model_samples(logl, thetas, n_jobs=-1):
     thetas = np.atleast_2d(np.asarray(thetas, float))
     return np.asarray(_map(logl.model, list(thetas), n_jobs), float)
 
-def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200, colors=None, seed=0, n_jobs=-1, figsize=(8.5, 8.0), levels=(68., 95.)):
-    """Posterior predictive check + where in orbital phase the two models actually differ.
+def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200, colors=None, seed=0, n_jobs=-1, figsize=None, levels=(68., 95.)):
+    """Posterior predictive check + where in orbital phase the two models actually differ. One column per detector for a joint fit.
 
     Panel 1: data with each model's median curve and its 68/95% posterior band.
     Panel 2: (data - median model) / sigma per model.
-    Panel 3: the difference of the two median curves [ppm] against +/- sigma_bin, and the per-bin delta chi2 between the two BEST-FIT (max-lnL) models as bars. Those bars sum to 2 * delta lnL_max, so they attribute the evidence to specific orbital phases.
+    Panel 3: the difference of the two median curves [ppm] against +/- sigma_bin, and the per-bin delta chi2 between the two BEST-FIT (max-lnL) models as bars. Those bars sum to 2 * delta lnL_max (over all detectors for a joint fit), so they attribute the evidence to specific orbital phases.
 
     num / den : which model is which in panel 3 - both the curve and the bars are num - den, same convention as bayes_factor(). Panel 3 previously took them from the order of `fits`, which is silent and easy to get backwards.
-    n         : posterior draws per model (n forward models per model)."""
+    n         : posterior draws per model (n forward models per model and detector).
+    Returns fig, (ax, axr, axd) for a single detector and fig, axes (3 x n_detectors) for a joint fit."""
     colors = colors or _COLOR
     names = list(fits)
-    f0 = fits[names[0]]
-    t = f0.meta["data"]["t"]; y = f0.meta["data"]["y_obs"]
-    s = f0.meta["data"]["sigma"]
-    ph = t / logls[names[0]].cfg.planet.period
+    f0, L0 = fits[names[0]], logls[names[0]]
+    cfgs, datas = detector_cfgs(L0.cfg), detector_data(f0.meta["data"])
+    labels = list(getattr(L0, "labels", None) or [None] * len(cfgs))
+    blocks = _blocks([d["y_obs"].size for d in datas])
+    n_det = len(cfgs)
 
-    fig, (ax, axr, axd) = plt.subplots(3, 1, figsize=figsize, sharex=True, gridspec_kw=dict(height_ratios=[3, 1.3, 1.6], hspace=0.07))
-    ax.errorbar(ph, y, yerr=s, fmt="o", ms=4, color="k", capsize=2, elinewidth=1., zorder=5, label="data")
-
-    med, best = {}, {}
-    mk = ("o", "s", "^", "v")   # the two residual sets sit on top of each other when the models fit almost equally well
-    for k, name in enumerate(names):
+    # the draws once per model: a joint theta gives every detector's curve at once
+    curves, best = {}, {}
+    for name in names:
         L, f = logls[name], fits[name]
-        curves = model_samples(L, equal_samples(f, n, seed), n_jobs=n_jobs)
-        lo1, m, hi1 = np.percentile(curves, [50 - levels[0] / 2, 50, 50 + levels[0] / 2], axis=0)
-        lo2, hi2 = np.percentile(curves, [50 - levels[1] / 2, 50 + levels[1] / 2], axis=0)
-        med[name] = m # pointwise median model curve
+        curves[name] = model_samples(L, equal_samples(f, n, seed), n_jobs=n_jobs)
         best[name] = L.model(f.results.samples[int(np.argmax(f.results.logl))])
-        c = colors.get(name, "k")
 
-        # Panel 1
-        ax.fill_between(ph, lo2, hi2, color=c, alpha=0.15, lw=0)
-        ax.fill_between(ph, lo1, hi1, color=c, alpha=0.30, lw=0)
-        ax.plot(ph, m, color=c, lw=1.5, label=f"{name} (pointwise median of {n} draws)")
+    fig, axes = plt.subplots(3, n_det, figsize=figsize or (8.5 * n_det, 8.0), sharex=True, squeeze=False, gridspec_kw=dict(height_ratios=[3, 1.3, 1.6], hspace=0.07))
+    mk = ("o", "s", "^", "v")   # the residual sets sit on top of each other when the models fit almost equally well
+    for kd in range(n_det):
+        ax, axr, axd = axes[:, kd]
+        blk, d = blocks[kd], datas[kd]
+        t, y, s = d["t"], d["y_obs"], d["sigma"]
+        ph = t / cfgs[kd].planet.period
+        ax.errorbar(ph, y, yerr=s, fmt="o", ms=4, color="k", capsize=2, elinewidth=1., zorder=5, label="data")
 
-        # Panel 2
-        axr.plot(ph, (y - m) / s, mk[k % len(mk)], ms=4, mfc="none" if k else c, color=c)
+        med = {}
+        for k, name in enumerate(names):
+            cv = curves[name][:, blk]
+            lo1, m, hi1 = np.percentile(cv, [50 - levels[0] / 2, 50, 50 + levels[0] / 2], axis=0)
+            lo2, hi2 = np.percentile(cv, [50 - levels[1] / 2, 50 + levels[1] / 2], axis=0)
+            med[name] = m # pointwise median model curve
+            c = colors.get(name, "k")
 
-    ax.set_ylabel("$F_p/F_\\star$ [ppm]"); ax.legend(frameon=False, fontsize=8); ax.margins(x=0.01)
-    for d in (-1., 1.): axr.axhline(d, color="0.85", lw=0.6, ls=":")
-    axr.axhline(0., color="0.7", lw=0.8); axr.set_ylabel("resid / $\\sigma$"); axr.set_ylim(-3.5, 3.5)
+            # Panel 1
+            ax.fill_between(ph, lo2, hi2, color=c, alpha=0.15, lw=0)
+            ax.fill_between(ph, lo1, hi1, color=c, alpha=0.30, lw=0)
+            ax.plot(ph, m, color=c, lw=1.5, label=f"{name} (pointwise median of {n} draws)")
 
-    # Panel 3: the num/den pair only - with more than two models every other one is still in panels 1-2, but a single difference curve can only be a pair
-    if num in fits and den in fits:
-        a, b = den, num
-        axd.axhspan(-s.mean(), s.mean(), fc="0.9", ec="0.6", lw=0.8, label=r"$\pm\sigma_{bin}$")
-        axd.axhline(0., color="0.7", lw=0.8)
-        dmed = med[b] - med[a]
-        axd.plot(ph, dmed, color="0.2", lw=1.5, label=f"median {b} - {a} [ppm]")
-        dchi2 = ((y - best[a]) ** 2 - (y - best[b]) ** 2) / s ** 2   # > 0 where b fits better; sums to 2*dlnL_max
-        ax2 = axd.twinx()
-        ax2.bar(ph, dchi2, width=0.7 / len(ph), color="C2", alpha=0.45, zorder=0)
-        # Both axes forced symmetric about zero. twinx() autoscales independently, so a one-signed dchi2 makes matplotlib clamp ax2 to [0, max] and the bars then grow from the panel floor while axd's zero line sits mid-panel - the reader reads the bars against a baseline that is not theirs.
-        w = 1.05 * max(float(np.abs(dmed).max()), float(s.mean())); axd.set_ylim(-w, w)
-        v = 1.05 * float(np.abs(dchi2).max()) or 1.; ax2.set_ylim(-v, v)
-        ax2.set_ylabel(f"$\\Delta\\chi^2$ per bin (sum {dchi2.sum():+.2f})", fontsize=8, color="C2")
-        ax2.tick_params(axis="y", labelcolor="C2", labelsize=8)
-        axd.legend(frameon=False, fontsize=8, loc="upper left")
-    axd.set_xlabel("orbital phase"); axd.set_ylabel("[ppm]")
-    return fig, (ax, axr, axd)
+            # Panel 2
+            axr.plot(ph, (y - m) / s, mk[k % len(mk)], ms=4, mfc="none" if k else c, color=c)
+
+        ax.set_ylabel("$F_p/F_\\star$ [ppm]"); ax.margins(x=0.01)
+        if kd == 0: ax.legend(frameon=False, fontsize=8)
+        if labels[kd]: ax.set_title(labels[kd], fontsize=9)
+        for dd in (-1., 1.): axr.axhline(dd, color="0.85", lw=0.6, ls=":")
+        axr.axhline(0., color="0.7", lw=0.8); axr.set_ylabel("resid / $\\sigma$"); axr.set_ylim(-3.5, 3.5)
+
+        # Panel 3: the num/den pair only - with more than two models every other one is still in panels 1-2, but a single difference curve can only be a pair
+        if num in fits and den in fits:
+            a, b = den, num
+            axd.axhspan(-s.mean(), s.mean(), fc="0.9", ec="0.6", lw=0.8, label=r"$\pm\sigma_{bin}$")
+            axd.axhline(0., color="0.7", lw=0.8)
+            dmed = med[b] - med[a]
+            axd.plot(ph, dmed, color="0.2", lw=1.5, label=f"median {b} - {a} [ppm]")
+            dchi2 = ((y - best[a][blk]) ** 2 - (y - best[b][blk]) ** 2) / s ** 2   # > 0 where b fits better; sums to 2*dlnL_max over all detectors
+            ax2 = axd.twinx()
+            ax2.bar(ph, dchi2, width=0.7 / len(ph), color="C2", alpha=0.45, zorder=0)
+            # Both axes forced symmetric about zero. twinx() autoscales independently, so a one-signed dchi2 makes matplotlib clamp ax2 to [0, max] and the bars then grow from the panel floor while axd's zero line sits mid-panel - the reader reads the bars against a baseline that is not theirs.
+            w = 1.05 * max(float(np.abs(dmed).max()), float(s.mean())); axd.set_ylim(-w, w)
+            v = 1.05 * float(np.abs(dchi2).max()) or 1.; ax2.set_ylim(-v, v)
+            ax2.set_ylabel(f"$\\Delta\\chi^2$ per bin (sum {dchi2.sum():+.2f})", fontsize=8, color="C2")
+            ax2.tick_params(axis="y", labelcolor="C2", labelsize=8)
+            if kd == 0: axd.legend(frameon=False, fontsize=8, loc="upper left")
+        axd.set_xlabel("orbital phase"); axd.set_ylabel("[ppm]")
+    return (fig, tuple(axes[:, 0])) if n_det == 1 else (fig, axes)
 
 
 def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=None, bins=50, figsize=None):
@@ -993,133 +1166,153 @@ def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=
             else:
                 ax.hist(v, bins=bins, density=True, histtype="step", lw=1.4, color=colors.get(name, "k"), label=name)
             if truth and name in truth: ax.axvline(np.median(truth[name][k]), color=colors.get(name, "k"), lw=1.0, ls="--")
-        ax.set_xlabel(f"{k} {unit.get(k, '')}"); ax.set_yticks([])
+        ax.set_xlabel(f"{k} {unit.get(k.split(':')[0], '')}"); ax.set_yticks([])   # "depth:<label>" of a joint fit shares the unit of "depth"
     axes[0].legend(frameon=False, fontsize=8)
     fig.tight_layout()
     return fig, axes
 
 
 def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth="hyperillum",
-                        A_B_bounds=A_B_FIT_BOUNDS, xatol=None, truth_kw=None, fisher=True, colors=None, figsize=(8.5, 6.2), verbose=False):
-    """The one-seed fits against the noiseless truth: what you would report vs. what the bias actually is.
+                        A_B_bounds=A_B_FIT_BOUNDS, xatol=None, truth_kw=None, fisher=True, colors=None, figsize=None, verbose=False):
+    """The one-seed fits against the noiseless truth: what you would report vs. what the bias actually is. One column per detector for a joint fit.
 
     Top panel   : the high-resolution truth and its binned version (= the noiseless data), the simulated data, each model's posterior MEDIAN curve, and the misspecified model(s) fitted
                   to the NOISELESS truth with the least-squares fits of the bias analysis (simple_bias_analysis.fit_naive for "naive"; fit_redist, jointly in (A_B, F), when a
-                  "naive_redist" fit is loaded), offset free - those are deterministic (no seed, no noise) and ARE the bias. For "naive_redist" the fitted F is the false-positive
-                  redistribution the point-source model needs to mimic hyperillumination, and the nightside temperature it implies is printed.
+                  "naive_redist" fit is loaded; for a detector set the joint fit with one baseline per detector), offset free - those are deterministic (no seed, no noise) and ARE the
+                  bias. For "naive_redist" the fitted F is the false-positive redistribution the point-source model needs to mimic hyperillumination, and the nightside temperature it implies is printed.
     Lower panel : everything minus the binned truth against +/- sigma_bin. The black points are the noise realisation the medians are chasing; the dotted grey line is the numerical
                   floor, i.e. the truth model re-evaluated at the injected theta on the likelihood's own coarser grid, so anything at that level is grid resolution and not model bias.
 
-    cfg / data       : the FittingConfig and the simulate_data() output the fits were run on.
-    logls / fits     : {model_name: GaussianLogL} and {model_name: NestedFit}, same keys. "naive" and "naive_redist" get a noiseless fit each when present; the truth's own model only its median.
-    base             : {param: injected value} (the dict handed to theta_of / posterior_summary).
+    cfg / data       : the FittingConfig (or detector set) and the simulate_data() output the fits were run on.
+    logls / fits     : {model_name: GaussianLogL or JointGaussianLogL} and {model_name: NestedFit}, same keys. "naive" and "naive_redist" get a noiseless fit each when present; the truth's own model only its median.
+    base             : {param: injected value} (the dict handed to theta_of / posterior_summary; every baseline included).
     insolation_truth : which insolation model the data were drawn from; must be a key of logls for the numerical floor to be drawn.
     A_B_bounds       : range of the noiseless fits, i.e. of the bias; A_B_FIT_BOUNDS by default, as in the bias analysis (A_B_fit < 0 allowed), not the sampler's prior.
     xatol            : tolerance of the noiseless fits; None -> the fitters' own defaults, so the numbers are exactly those of the bias analysis.
     truth_kw         : forward-model resolution of the truth; defaults to what simulate_data recorded in data["truth"] (truth_model_kw).
     fisher           : also evaluate the Fisher sigma of each noiseless fit (simple_bias_analysis.fisher_sigma, the error bar of the bias analysis) and quote the bias in its units next to
                        the posterior width of this one seed: the two agree where the posterior is Gaussian and not truncated by the prior.
-    verbose          : False prints the noiseless fits, the bias in sigma with the critical sigma_1min and the bias/floor gate; True adds the per-model median and max-lnL rows, the absorbed offset and the floor detail.
+    verbose          : False prints the noiseless fits, the bias in sigma with the critical sigma_1min and the bias/floor gate; True adds the per-model median and max-lnL rows, the absorbed offsets and the floor detail.
 
-    Returns fig, (ax, axr), out. out["noiseless"][model] carries every number of a noiseless fit (A_B, F, offset, chi2, rms, bias_A_B, dT_over_T [substellar], T_night [naive_redist],
-    sigma_A_B / sigma_F [posterior, this seed], bias_sigma0, sigma_1min_crit, bias_over_floor, and with fisher=True sigma_A_B_fisher / sigma_F_fisher, bias_sigma_fisher, sigma_1min_crit_fisher);
-    the rest are the curves (t_hi, y_hi, y_true, y_med, y_map, y_floor), the posterior summaries and the per-model chi2 against the truth.
+    Returns fig, (ax, axr), out for a single detector (fig, axes, out with axes 2 x n_detectors for a joint fit). out["noiseless"][model] carries every number of a noiseless fit
+    (A_B, F, offset [per detector], chi2, rms, bias_A_B, dT_over_T [substellar], T_night [naive_redist], sigma_A_B / sigma_F [posterior, this seed], bias_sigma0, sigma_1min_crit
+    [None for a joint fit: its detectors would all be scaled alike], bias_over_floor, and with fisher=True sigma_A_B_fisher / sigma_F_fisher, bias_sigma_fisher, sigma_1min_crit_fisher);
+    the rest are the curves (t_hi, y_hi, y_true, y_med, y_map, y_floor; per detector where applicable), the posterior summaries and the per-model chi2 against the truth.
     """
     colors = colors or _COLOR
+    cfgs, datas = detector_cfgs(cfg), detector_data(data)
+    n_det, cfg0, joint = len(cfgs), detector_cfgs(cfg)[0], len(detector_cfgs(cfg)) > 1
+    L0 = next(iter(logls.values()))
+    labels = list(getattr(L0, "labels", None) or [None] * n_det)
     tr = dict(data.get("truth") or {})
-    truth_kw = truth_model_kw(data, cfg) if truth_kw is None else dict(truth_kw)
+    truth_kw = truth_model_kw(data, cfg0) if truth_kw is None else dict(truth_kw)
     F_truth = truth_kw.pop("F", None)                                 # only a "naive_redist" truth has one
     off_inj = float(tr.get("offset", 0.))                             # the injected baseline, if any
     fit_kw = {} if xatol is None else dict(xatol=xatol)
+    blocks = _blocks([c.n_bins for c in cfgs])
 
-    # --- the noiseless reference: exactly the curve simulate_data drew the data from ---------------
-    t_hi, y_hi = model_pcurve(cfg, insolation_truth, A_B_true, F=F_truth, **truth_kw)
-    y_true = binned(cfg, y_hi) + off_inj                                   # the noiseless data
-    ph, ph_hi, s_bin = data["t"] / cfg.planet.period, t_hi / cfg.planet.period, cfg.sigma_bin
+    # --- the noiseless reference per detector: exactly the curves simulate_data drew the data from -------------
+    hi = [model_pcurve(c, insolation_truth, A_B_true, F=F_truth, **truth_kw) for c in cfgs]
+    t_hi, y_hi = hi[0][0], [y for _, y in hi]
+    y_true = [binned(c, y) + off_inj for c, y in zip(cfgs, y_hi)]                 # the noiseless data
+    s_bin = [c.sigma_bin for c in cfgs]
+    y_true_all, sig_all = np.concatenate(y_true), np.concatenate([np.full(c.n_bins, sb) for c, sb in zip(cfgs, s_bin)])
+    fit_cfg, fit_truth = (tuple(cfgs), y_hi) if joint else (cfg0, y_hi[0])        # what the bias-analysis fitters take: a detector set with one truth per detector
 
     # --- the misspecified models fitted to the NOISELESS truth: the deterministic bias, no seed involved (the fits of the bias analysis, at the truth's resolution) ---
     noiseless, insols = {}, {}
     if "naive" in fits:
-        insols["naive"] = insolation_cache(cfg, "naive", n_lo=truth_kw.get("n_lo", DEFAULT_N_LO), n_la=truth_kw.get("n_la", DEFAULT_N_LA))   # A_B only rescales the map, so one cache serves the whole scan
-        A0, chi2_0, rms0 = fit_naive(cfg, y_hi, free_offset=True, bounds=A_B_bounds, insol=insols["naive"], **fit_kw, **truth_kw)
+        insols["naive"] = insolation_cache(cfg0, "naive", n_lo=truth_kw.get("n_lo", DEFAULT_N_LO), n_la=truth_kw.get("n_la", DEFAULT_N_LA))   # A_B only rescales the map (geometry-only, so one for all detectors)
+        A0, chi2_0, rms0 = fit_naive(fit_cfg, fit_truth, free_offset=True, bounds=A_B_bounds, insol=insols["naive"], **fit_kw, **truth_kw)
         noiseless["naive"] = dict(A_B=float(A0), F=None, chi2=float(chi2_0), rms=float(rms0))
     if "naive_redist" in fits:
         insols["naive_redist"] = None                                      # the Louden model has no map to cache
-        A0, F0, chi2_0, rms0 = fit_redist(cfg, y_hi, free_offset=True, bounds=A_B_bounds, F_bounds=F_BOUNDS, **({} if xatol is None else dict(xatol=xatol, F_xatol=xatol)), **truth_kw)
+        A0, F0, chi2_0, rms0 = fit_redist(fit_cfg, fit_truth, free_offset=True, bounds=A_B_bounds, F_bounds=F_BOUNDS, **({} if xatol is None else dict(xatol=xatol, F_xatol=xatol)), **truth_kw)
         noiseless["naive_redist"] = dict(A_B=float(A0), F=float(F0), chi2=float(chi2_0), rms=float(rms0))
     for m, d in noiseless.items():
-        y0 = binned(cfg, model_pcurve(cfg, m, d["A_B"], F=d["F"], insol=insols[m], **truth_kw)[1])
-        d["offset"] = float(np.mean(y_true - y0))                          # what free_offset absorbed
-        d["y"] = y0 + d["offset"]
+        ys, offs = [], []
+        for c, yt in zip(cfgs, y_true):   # each detector's own baseline, as free_offset absorbed it
+            y0 = binned(c, model_pcurve(c, m, d["A_B"], F=d["F"], insol=insols[m], **truth_kw)[1])
+            offs.append(float(np.mean(yt - y0))); ys.append(y0 + offs[-1])
+        d["y"], d["offset"] = (ys if joint else ys[0]), (offs if joint else offs[0])
         d["bias_A_B"] = d["A_B"] - A_B_true
         d["dT_over_T"] = float(temperature_bias(A_B_true, d["bias_A_B"], d["F"] or 0.))   # substellar temperature
-        if d["F"] is not None: d["T_night"] = float(surface_temperature(np.pi, cfg.planet, "naive_redist", A_B=d["A_B"], emissivity_B=cfg.emissivity_B, F=d["F"]))   # the nightside the false-positive F implies (0 K in the truth)
+        if d["F"] is not None: d["T_night"] = float(surface_temperature(np.pi, cfg0.planet, "naive_redist", A_B=d["A_B"], emissivity_B=cfg0.emissivity_B, F=d["F"]))   # the nightside the false-positive F implies (0 K in the truth)
 
     # --- the noisy fits: posterior median (what you would report) and max-lnL (= MAP, uniform priors) -------------
     summ   = {m: posterior_summary(f, base, verbose=False)["params"] for m, f in fits.items()}
     th_med = {m: np.array([summ[m][n]["med"] for n in f.pset.names], float) for m, f in fits.items()}
     th_map = {m: f.results.samples[int(np.argmax(f.results.logl))] for m, f in fits.items()}
-    y_med  = {m: logls[m].model(th_med[m]) for m in fits}
+    y_med  = {m: logls[m].model(th_med[m]) for m in fits}                  # concatenated over the detectors (blocks)
     y_map  = {m: logls[m].model(th_map[m]) for m in fits}
     y_floor = logls[insolation_truth].model(theta_of(logls[insolation_truth], base)) if insolation_truth in logls else None   # same model, same parameters, coarser grid: the numerical floor of this figure
 
-    fig, (ax, axr) = plt.subplots(2, 1, figsize=figsize, sharex=True, gridspec_kw=dict(height_ratios=[3, 1.7], hspace=0.06))
+    fig, axes = plt.subplots(2, n_det, figsize=figsize or (8.5 * n_det, 6.2), sharex=True, squeeze=False, gridspec_kw=dict(height_ratios=[3, 1.7], hspace=0.06))
+    for kd in range(n_det):
+        ax, axr = axes[:, kd]
+        c, dk, blk, sb = cfgs[kd], datas[kd], blocks[kd], s_bin[kd]
+        ph, ph_hi = dk["t"] / c.planet.period, t_hi / c.planet.period
+        ax.plot(ph_hi, y_hi[kd] + off_inj, lw=1.0, color="0.55", zorder=1, label=f"truth ({insolation_truth}, $A_B$={A_B_true:.3f}" + (f", $F$={F_truth:g})" if F_truth is not None else ")"))
+        ax.step(ph, y_true[kd], where="mid", color="0.25", lw=1.2, zorder=2, label="binned truth = noiseless data")
+        ax.errorbar(ph, dk["y_obs"], yerr=dk["sigma"], fmt="o", ms=4, color="k", capsize=2, elinewidth=1., zorder=6, label=f"simulated data ($\\sigma$={sb:.1f} ppm)")
+        for m in fits:
+            ax.step(ph, y_med[m][blk], where="mid", color=colors.get(m, "k"), lw=1.6, zorder=4, label=f"{m} posterior median (one seed)")
+        for m, d in noiseless.items():
+            ax.step(ph, d["y"][kd] if joint else d["y"], where="mid", color=colors.get(m, "k"), lw=1.6, ls="--", zorder=5,
+                    label=f"{m} fitted to the noiseless truth ($A_B$={d['A_B']:.4f}" + (f", $F$={d['F']:.4f})" if d["F"] is not None else ")"))
+        ax.set_ylabel("$F_p/F_\\star$ [ppm]"); ax.margins(x=0.01)
+        if kd == 0: ax.legend(frameon=False, fontsize=8)
+        if labels[kd]: ax.set_title(labels[kd], fontsize=9)
 
-    ax.plot(ph_hi, y_hi + off_inj, lw=1.0, color="0.55", zorder=1, label=f"truth ({insolation_truth}, $A_B$={A_B_true:.3f}" + (f", $F$={F_truth:g})" if F_truth is not None else ")"))
-    ax.step(ph, y_true, where="mid", color="0.25", lw=1.2, zorder=2, label="binned truth = noiseless data")
-    ax.errorbar(ph, data["y_obs"], yerr=data["sigma"], fmt="o", ms=4, color="k", capsize=2, elinewidth=1., zorder=6, label=f"simulated data ($\\sigma$={s_bin:.1f} ppm)")
-    for m in fits:
-        ax.step(ph, y_med[m], where="mid", color=colors.get(m, "k"), lw=1.6, zorder=4, label=f"{m} posterior median (one seed)")
-    for m, d in noiseless.items():
-        ax.step(ph, d["y"], where="mid", color=colors.get(m, "k"), lw=1.6, ls="--", zorder=5,
-                label=f"{m} fitted to the noiseless truth ($A_B$={d['A_B']:.4f}" + (f", $F$={d['F']:.4f})" if d["F"] is not None else ")"))
-    ax.set_ylabel("$F_p/F_\\star$ [ppm]"); ax.legend(frameon=False, fontsize=8); ax.margins(x=0.01)
-
-    axr.axhspan(-s_bin, s_bin, fc="0.9", ec="0.6", lw=0.8, zorder=0, label=r"$\pm\sigma_{bin}$")
-    axr.axhline(0., color="0.7", lw=0.8)
-    axr.plot(ph, data["y_obs"] - y_true, "o", ms=4, color="k", zorder=6, label="data - truth (the noise realisation)")
-    for m in fits:
-        axr.step(ph, y_med[m] - y_true, where="mid", color=colors.get(m, "k"), lw=1.6, zorder=4)
-    for m, d in noiseless.items():
-        axr.step(ph, d["y"] - y_true, where="mid", color=colors.get(m, "k"), lw=1.6, ls="--", zorder=5)
-    if y_floor is not None:
-        axr.step(ph, y_floor - y_true, where="mid", color="0.45", lw=1.0, ls=":", zorder=3, label="numerical floor (truth model at the injected $\\theta$)")
-    axr.set_xlabel("orbital phase"); axr.set_ylabel("model - truth [ppm]"); axr.margins(x=0.01)
-    axr.secondary_yaxis("right", functions=(lambda v: v / s_bin, lambda v: v * s_bin)).set_ylabel(r"$\sigma_{bin}$", fontsize=8)
-    axr.legend(frameon=False, fontsize=7, ncol=3, loc="upper left")
+        axr.axhspan(-sb, sb, fc="0.9", ec="0.6", lw=0.8, zorder=0, label=r"$\pm\sigma_{bin}$")
+        axr.axhline(0., color="0.7", lw=0.8)
+        axr.plot(ph, dk["y_obs"] - y_true[kd], "o", ms=4, color="k", zorder=6, label="data - truth (the noise realisation)")
+        for m in fits:
+            axr.step(ph, y_med[m][blk] - y_true[kd], where="mid", color=colors.get(m, "k"), lw=1.6, zorder=4)
+        for m, d in noiseless.items():
+            axr.step(ph, (d["y"][kd] if joint else d["y"]) - y_true[kd], where="mid", color=colors.get(m, "k"), lw=1.6, ls="--", zorder=5)
+        if y_floor is not None:
+            axr.step(ph, y_floor[blk] - y_true[kd], where="mid", color="0.45", lw=1.0, ls=":", zorder=3, label="numerical floor (truth model at the injected $\\theta$)")
+        axr.set_xlabel("orbital phase"); axr.set_ylabel("model - truth [ppm]"); axr.margins(x=0.01)
+        axr.secondary_yaxis("right", functions=(lambda v, sb=sb: v / sb, lambda v, sb=sb: v * sb)).set_ylabel(r"$\sigma_{bin}$", fontsize=8)
+        if kd == 0: axr.legend(frameon=False, fontsize=7, ncol=3, loc="upper left")
 
     # --- numbers -----------------------------------------------------------------------------------
-    chi2_tr = lambda y: float(np.sum(((y - y_true) / s_bin) ** 2))
+    chi2_tr = lambda y: float(np.sum(((y - y_true_all) / sig_all) ** 2))
     chi2_floor = chi2_tr(y_floor) if y_floor is not None else None
     for m, d in noiseless.items():
         sig = 0.5 * (summ[m]["A_B"]["hi"] - summ[m]["A_B"]["lo"])        # posterior width of A_B under this model, this seed
         d["sigma_A_B"] = float(sig)
         d["bias_sigma0"] = abs(d["bias_A_B"]) / sig                       # the NOISELESS bias in units of the posterior width - the seed-free counterpart of summ[m]["A_B"]["bias_sigma"], whose numerator is one realisation's median
-        d["sigma_1min_crit"] = cfg.sigma_1min * d["bias_sigma0"]          # sigma_A_B scales linearly with sigma_1min (at fixed n_orbits/n_bins) while the bias does not, so |dA_B| = sigma_A_B exactly at this per-minute precision; sigma_A_B is read off THIS seed's posterior, so it carries one realisation's scatter, and the linear scaling assumes the posterior is not truncated by the prior box
+        d["sigma_1min_crit"] = None if joint else cfg0.sigma_1min * d["bias_sigma0"]   # sigma_A_B scales linearly with sigma_1min (at fixed n_orbits/n_bins) while the bias does not, so |dA_B| = sigma_A_B exactly at this per-minute precision; sigma_A_B is read off THIS seed's posterior, so it carries one realisation's scatter, and the linear scaling assumes the posterior is not truncated by the prior box. A joint fit has one sigma_1min per detector: only the common factor is quoted.
         if d["F"] is not None:
             d["sigma_F"] = float(0.5 * (summ[m]["F"]["hi"] - summ[m]["F"]["lo"]))
             d["F_sigma0"] = d["F"] / d["sigma_F"]                            # the false-positive F in units of its (one-sided, prior-truncated) posterior width
-        if fisher:   # the error bar of the bias analysis: Fisher sigma at the noiseless fit, marginalised over the baseline (and over F for naive_redist)
-            sf = fisher_sigma(cfg, m, d["A_B"], F=d["F"], bounds=A_B_bounds, F_bounds=F_BOUNDS, insol=insols[m], **truth_kw)
+        if fisher:   # the error bar of the bias analysis: Fisher sigma at the noiseless fit, marginalised over the baseline(s) (and over F for naive_redist)
+            sf = fisher_sigma(fit_cfg, m, d["A_B"], F=d["F"], bounds=A_B_bounds, F_bounds=F_BOUNDS, insol=insols[m], **truth_kw)
             d["sigma_A_B_fisher"] = float(sf[0])
-            d["bias_sigma_fisher"], d["sigma_1min_crit_fisher"] = (float(x) for x in measurability(d["bias_A_B"], sf[0], cfg.sigma_1min))
+            d["bias_sigma_fisher"], crit = (float(x) for x in measurability(d["bias_A_B"], sf[0], cfg0.sigma_1min))
+            d["sigma_1min_crit_fisher"] = None if joint else crit
             if d["F"] is not None: d["sigma_F_fisher"] = float(sf[1])
         d["bias_over_floor"] = (d["chi2"] / chi2_floor) if chi2_floor else None   # the gate on this whole figure: how far the model-vs-truth distance stands above the forward model's own discretisation error
 
-    out = dict(t_hi=t_hi, y_hi=y_hi, y_true=y_true, y_med=y_med, y_map=y_map, y_floor=y_floor, summary=summ, noiseless=noiseless,
-               chi2_truth={m: chi2_tr(y_med[m]) for m in fits}, chi2_floor=chi2_floor)
+    out = dict(t_hi=t_hi, y_hi=y_hi if joint else y_hi[0], y_true=y_true if joint else y_true[0], y_med=y_med, y_map=y_map, y_floor=y_floor, summary=summ, noiseless=noiseless,
+               chi2_truth={m: chi2_tr(y_med[m]) for m in fits}, chi2_floor=chi2_floor, blocks=blocks)
 
+    off_names = {m: [n for n in f.pset.names if n.startswith("offset")] for m, f in fits.items()}
     if verbose:
         for m in fits:
-            a, o, pm = summ[m]["A_B"], summ[m]["offset"], logls[m].unpack(th_map[m])
+            a, pm = summ[m]["A_B"], logls[m].unpack(th_map[m])
+            o_med = "   ".join(f"{o} {summ[m][o]['med']:+7.2f} ppm ({summ[m][o]['bias']:+.2f} = {summ[m][o]['bias_sigma']:+.2f} sigma)" for o in off_names[m])
+            o_map = "   ".join(f"{o} {pm[o]:+7.2f} ppm ({pm[o] - off_inj:+.2f})" for o in off_names[m])
             fF = (f"   F {summ[m]['F']['med']:.4f} ({summ[m]['F']['bias']:+.4f})", f"   F {pm['F']:.4f} ({pm['F'] - base.get('F', 0.):+.4f})") if "F" in summ[m] else ("", "")
-            print(f"{m:12s} median   A_B {a['med']:.4f} ({a['bias']:+.4f} = {a['bias_sigma']:+.2f} sigma)   offset {o['med']:+7.2f} ppm ({o['bias']:+.2f} = {o['bias_sigma']:+.2f} sigma){fF[0]}"
+            print(f"{m:12s} median   A_B {a['med']:.4f} ({a['bias']:+.4f} = {a['bias_sigma']:+.2f} sigma)   {o_med}{fF[0]}"
                   f"   chi2 vs truth {chi2_tr(y_med[m]):6.2f}   vs data {logls[m].chi2(th_med[m]):6.2f}")
-            print(f"{'':12s} max-lnL  A_B {pm['A_B']:.4f} ({pm['A_B'] - A_B_true:+.4f})              offset {pm['offset']:+7.2f} ppm ({pm['offset'] - off_inj:+.2f}){fF[1]}"
+            print(f"{'':12s} max-lnL  A_B {pm['A_B']:.4f} ({pm['A_B'] - A_B_true:+.4f})              {o_map}{fF[1]}"
                   f"           chi2 vs truth {chi2_tr(y_map[m]):6.2f}   vs data {logls[m].chi2(th_map[m]):6.2f}")
         print()
 
-    if noiseless: print("NOISELESS fit(s) to the NOISELESS truth  (offset free, no noise, no seed - this is THE bias; the least-squares fits of the bias analysis):")
+    if noiseless: print("NOISELESS fit(s) to the NOISELESS truth  (offset free, no noise, no seed - this is THE bias; the least-squares fits of the bias analysis" + (", jointly over the detectors):" if joint else "):"))
     for m, d in noiseless.items():
         fac = (1. / d["bias_sigma0"]) if d["bias_sigma0"] > 0 else np.inf      # how much finer sigma_1min must get before the bias is a 1-sigma effect
         fisher_txt = f" = {np.sign(d['bias_A_B']) * d['bias_sigma_fisher']:+.2f} sigma_Fisher" if fisher else ""
@@ -1127,18 +1320,24 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
         if d["F"] is not None:
             print(f"   {'':12s} F   {d['F']:.4f}   false positive (truth F = 0) = {d['F_sigma0']:.2f} sigma_F (posterior)" + (f", sigma_F,Fisher = {d['sigma_F_fisher']:.4f} (one-sided at F = 0: indicative only)" if fisher else "")
                   + f"   ->   implied nightside T = {d['T_night']:.0f} K")
-        print(f"   {'':12s} |dA_B|/sigma_A_B = {d['bias_sigma0']:.2f}   ->   sigma_1min,crit = {d['sigma_1min_crit']:.1f} ppm/min"
-              + (f" (posterior) / {d['sigma_1min_crit_fisher']:.1f} ppm/min (Fisher)" if fisher else "")
-              + (f"   (now {cfg.sigma_1min:.1f}, so {fac:.1f}x finer photometry - or {fac ** 2:.0f}x the orbits - before the bias reaches 1 sigma)" if d["bias_sigma0"] < 1.
-                 else f"   (now {cfg.sigma_1min:.1f}, already finer: the bias is a {d['bias_sigma0']:.1f} sigma effect at the delivered noise)"))
+        if joint:
+            print(f"   {'':12s} |dA_B|/sigma_A_B = {d['bias_sigma0']:.2f}   (all detectors scaled alike: " + (f"{fac:.1f}x finer photometry - or {fac ** 2:.0f}x the orbits - before the bias reaches 1 sigma)" if d["bias_sigma0"] < 1. else f"the bias is a {d['bias_sigma0']:.1f} sigma effect at the delivered noise)"))
+        else:
+            print(f"   {'':12s} |dA_B|/sigma_A_B = {d['bias_sigma0']:.2f}   ->   sigma_1min,crit = {d['sigma_1min_crit']:.1f} ppm/min"
+                  + (f" (posterior) / {d['sigma_1min_crit_fisher']:.1f} ppm/min (Fisher)" if fisher else "")
+                  + (f"   (now {cfg0.sigma_1min:.1f}, so {fac:.1f}x finer photometry - or {fac ** 2:.0f}x the orbits - before the bias reaches 1 sigma)" if d["bias_sigma0"] < 1.
+                     else f"   (now {cfg0.sigma_1min:.1f}, already finer: the bias is a {d['bias_sigma0']:.1f} sigma effect at the delivered noise)"))
         if verbose:
-            print(f"   {'':12s} offset absorbed {d['offset']:+.2f} ppm    chi2 {d['chi2']:.3f}  (squared truth-to-manifold distance in units of sigma_bin)    resid rms {d['rms']:.2f} ppm = {d['rms'] / s_bin:.2f} sigma_bin")
+            offs = d["offset"] if joint else [d["offset"]]
+            print(f"   {'':12s} offset absorbed " + ", ".join(f"{o:+.2f}" for o in offs) + f" ppm    chi2 {d['chi2']:.3f}  (squared truth-to-manifold distance in units of sigma_bin)    resid rms {d['rms']:.2f} ppm")
             print(f"   {'':12s} the noisy {m} median instead says {summ[m]['A_B']['bias']:+.4f}; the gap to {d['bias_A_B']:+.4f} is this one seed's noise (sigma_A_B = {d['sigma_A_B']:.4f})")
         if chi2_floor:
             r = d["bias_over_floor"]
             print(f"   {'':12s} bias / floor = {d['chi2']:.3f} / {chi2_floor:.3f} = {r:.1f}x   ->   " + ("bias resolved" if r >= 10. else "NOT RESOLVED - refine model_kw (n_lo, n_la, n_layers, n_t) before quoting any bias from this run"))
 
     if y_floor is not None and verbose:
-        print(f"\nnumerical floor: {insolation_truth} at the injected theta vs its own truth curve, chi2 = {chi2_floor:.3f}   max |diff| = {np.abs(y_floor - y_true).max():.2f} ppm = {np.abs(y_floor - y_true).max() / s_bin:.2f} sigma_bin")
+        print(f"\nnumerical floor: {insolation_truth} at the injected theta vs its own truth curve, chi2 = {chi2_floor:.3f}   max |diff| = {np.abs(y_floor - y_true_all).max():.2f} ppm = {np.abs((y_floor - y_true_all) / sig_all).max():.2f} sigma_bin")
         print(f"   the likelihood runs model_pcurve at its DEFAULTS (n_t=50*n_bins, n_lo={DEFAULT_N_LO}, n_la={DEFAULT_N_LA}), the truth at {truth_kw} - anything here is grid resolution, not model bias")
-    return fig, (ax, axr), out
+    return (fig, (axes[0, 0], axes[1, 0]), out) if n_det == 1 else (fig, axes, out)
+
+

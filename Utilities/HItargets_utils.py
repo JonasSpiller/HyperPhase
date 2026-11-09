@@ -1,4 +1,4 @@
-import os, fcntl
+import os, fcntl, re
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -427,6 +427,29 @@ JWST_BANDS = ["JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2", "MIRI/LRS", 
 JWST_RETRIEVALS = JWST_BANDS[:2] + [tuple(JWST_BANDS[:2])] + JWST_BANDS[2:]
 _bad = set(JWST_BANDS) - set(FILTER_LAMBDA_UM)
 if _bad: raise KeyError(f"JWST_BANDS uses unknown instrument(s) {sorted(_bad)}; valid keys are {list(FILTER_LAMBDA_UM)}")
+
+# Joint detector fits by name, for the `instruments` of run_dynesty.py: the alias stands for the detector tuple (the spelling JWST_RETRIEVALS uses); both spellings are accepted
+# by resolve_instrument, and joint_name turns the tuple back into the alias for file names.
+JOINT_INSTRUMENTS = {"JWST_NIRSpec.G395H_joint": tuple(JWST_BANDS[:2])}
+
+def resolve_instrument(instrument):
+    """An instrument entry -> a band name (str: a single-detector fit) or the tuple of band names of a joint fit (given as a tuple, or as one of the JOINT_INSTRUMENTS aliases)."""
+    if isinstance(instrument, str) and instrument in JOINT_INSTRUMENTS: return JOINT_INSTRUMENTS[instrument]
+    dets = tuple(instrument) if isinstance(instrument, (list, tuple)) else (instrument,)
+    bad = [d for d in dets if d not in FILTER_LAMBDA_UM]
+    if bad: raise KeyError(f"unknown instrument(s) {bad}; valid: {list(FILTER_LAMBDA_UM)} or a joint alias {list(JOINT_INSTRUMENTS)}")
+    if len(dets) < 1 or len(set(dets)) != len(dets): raise ValueError(f"a joint fit needs distinct detectors, got {dets}")
+    return dets if isinstance(instrument, (list, tuple)) else instrument
+
+def detector_label(instrument):
+    """Short label of a band for parameter names and panel titles: the part after the last '_' or '/' ("JWST_NIRSpec.G395H_NRS1" -> "NRS1", "MIRI/LRS" -> "LRS", "MIRI/F1280W" -> "F1280W")."""
+    return re.split(r"[_/]", instrument)[-1]
+
+def joint_name(detectors):
+    """File-name spelling of a joint fit: its JOINT_INSTRUMENTS alias if there is one, else 'joint-' + the detector labels joined by '+'."""
+    for alias, dets in JOINT_INSTRUMENTS.items():
+        if tuple(dets) == tuple(detectors): return alias
+    return "joint-" + "+".join(detector_label(d) for d in detectors)
 
 # Converted once at import
 FILTER_LAMBDA_M = {name: 1e-6 * np.array(r) for name, r in FILTER_LAMBDA_UM.items()}
