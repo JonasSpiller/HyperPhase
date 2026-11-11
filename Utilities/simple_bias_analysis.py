@@ -2069,7 +2069,7 @@ def evidence_table(cfg, planets, instruments, A_B_true, thresholds=(2.5, 5.), bo
     return out[["planet", "instrument", "fit", "sigma_1min", "A_B_fit", "bias_A_B", "sigma_A_B", "bias_sigma", "F_fit", "z_F", "chi2", "half_chi2", "lnB_mean", "lnB_sd"] + [f"P_lnB_gt_{x:g}" for x in thresholds] + ["verdict"]]
 
 
-# Per-bin evidence figure: one column per detector of every entry of `cases` ({label: FittingConfig or detector set}, e.g. MIRI/LRS next to the joint NIRSpec fit). Top: the residual
+# Per-bin evidence figure: one column per detector of every entry of `cases`, in wavelength order ({label: FittingConfig or detector set}, e.g. MIRI/LRS next to the joint NIRSpec fit). Top: the residual
 # truth - fitted point-source model (baseline removed) unbinned and per bin, against +- sigma_bin. Bottom: r_perp^2 per bin, which sums to chi2_min = 2 <ln B> over all bins of a fit,
 # with the transit and occultation windows shaded and the quadrature windows hatched (phase_windows). Returns fig, axes (2 x n_columns) and {label: evidence_residual} for the budgets.
 # kw: the model_pcurve keywords of truth and fit.
@@ -2083,6 +2083,7 @@ def plot_evidence_bins(cases, A_B_true, quad_half=0.1, title=None, figsize=None,
         for c, (t_, y), blk in zip(cfgs, truths, ev["blocks"]):
             fit = model_pcurve(c, "naive", ev["A_B_fit"], **kw)[1]
             cols.append((label, c, ev, blk, t_ / c.planet.period, y - fit - (y - fit).mean()))   # the mean of the unbinned residual is the baseline free_offset removes (bins of equal size)
+    cols.sort(key=lambda col: 0.5 * (col[1].l1 + col[1].l2))   # columns in wavelength order (NRS1, NRS2, LRS) whatever the order of `cases`; stable, so a joint fit's detectors stay together
     fig, axes = plt.subplots(2, len(cols), figsize=figsize or (5.6 * len(cols), 6.6), sharex=True, sharey="row", squeeze=False, gridspec_kw=dict(height_ratios=[1.25, 1.]))
     for k, (label, c, ev, blk, ph_hi, r_hi) in enumerate(cols):
         ax, axb = axes[:, k]
@@ -2134,13 +2135,21 @@ def _band_of(cfg):
 #   delta = argmin |y - X delta|^2 + sum (delta_nu / sigma_p)^2,   Cov = (X'X + Lambda)^-1,   sigma_A_B = sqrt(Cov_AA),   A_B_fit' = A_B_fit + delta_A,   chi2_min' = the minimum.
 # If the extended-source model carries the same nuisances with the same priors, <ln B> = chi2_min' / 2 to first order (the determinant terms cancel). The columns:
 # - geometry "a_rs", "rp_rs", "incl": central differences of the point-source model (the transit and the occultation are part of it, so their shape constrains the geometry too);
+# - geometry "b" (impact parameter) and "a_rs|b" (a/R* at fixed b, i = arccos(b / (a/R*)) following it), for a planet whose source fitted b and derived i (TOI-2431 b, Tas et al. 2026):
+#   both follow from the a_rs and incl columns by the chain rule, so they cost no model evaluation. A Gaussian prior on "a_rs" also applies to "a_rs|b";
 # - "stellar": the ellipsoidal variation of the STAR, -cos(4 pi phi) [ppm] in every bin including the occultation (the star stays visible), one free amplitude per detector
-#   ("stellar:1", "stellar:2", ...: limb and gravity darkening depend on the band);
-# - "planetary": the tidal elongation of the PLANET along the star-planet axis, which changes its projected area: F_p(phi) (1 - sin^2 i cos^2 2 pi phi), with F_p the point-source planet
-#   flux at the fitted A_B. One amplitude shared by all detectors (it is geometric), zero during the occultation, like the hyperillumination residual itself.
+#   ("stellar:1", "stellar:2", ...: limb and gravity darkening depend on the band). Free per band, it can follow the wavelength dependence of whatever it absorbs: the worst case;
+# - "stellar_shared": the same term with ONE amplitude for all detectors [ppm, in a band of ratio 1], each detector's column scaled by `stellar_ratios` (stellar_shared_column). The relative
+#   amplitude A_ell = alpha_ell (M_p / M_star) (R_star / a)^3 sin^2 i depends on the band only through alpha_ell(u, g), by ~10 % across the infrared, so this is its physical form, and
+#   with the Gaussian prior that the measured mass ratio implies (ellipsoidal_prior) the realistic one. Its prior is centred on the truth (no ellipsoidal term in truth or model);
+# - "planetary": the tidal deformation of the PLANET, as in Akinsanmi et al. (2024, A&A 682, A15, eq. 11): its flux F_p(phi) times its projected area relative to mid-transit,
+#   A(phi) / A(0), with A(phi) the projected area of a triaxial ellipsoid (their eq. 2, from Leconte et al. 2011) of the Correia (2014) shape r1 = r2 (1 + 3q), r3 = r2 (1 - q)
+#   (r1 towards the star, r2 along the orbit, r3 polar). Amplitude delta = (r1 - r2) / r2 = 3q; the column is the derivative at delta = 0, F_p(phi) sin^2 i sin^2(2 pi phi), and
+#   planetary_area_factor the exact factor (the nonlinear check). F_p is the point-source planet flux at the fitted A_B. One amplitude shared by all detectors (it is geometric),
+#   zero during the occultation, like the hyperillumination residual itself.
 # Not for the fit with redistribution: F sits at its F = 0 edge, where the response to F switches on very flat, so nothing linear in F is trustworthy.
 NUISANCE_STEPS = dict(a_rs=0.005, rp_rs=1e-4, incl=0.2)   # finite-difference steps of the geometry columns [a/R*, Rp/R*, deg]; nuisance_problem(steps=...) to test them
-NUISANCE_LABELS = dict(a_rs=r"$a/R_\star$", rp_rs=r"$R_p/R_\star$", incl=r"$i$", stellar="stellar ellipsoidal", planetary="planetary deformation")
+NUISANCE_LABELS = {"a_rs": r"$a/R_\star$", "rp_rs": r"$R_p/R_\star$", "incl": r"$i$", "b": r"$b$", "a_rs|b": r"$a/R_\star$ (fixed $b$)", "stellar": "stellar ellipsoidal (free per band)", "stellar_shared": "stellar ellipsoidal (shared)", "planetary": "planetary deformation"}
 
 
 # The whitened, mean-removed binned point-source model at a perturbed geometry: the building block of a geometry column. a_rs / rp_rs go to model_pcurve, incl into the planet.
@@ -2156,9 +2165,10 @@ def _geometry_model(cfg, A_B_, param, value, kw):
 
 
 # Everything the nuisance fits of one configuration share: y = r_perp of the noiseless A_B-only fit, the A_B column and every nuisance column (see above), whitened and mean-removed
-# per detector block. cfg: FittingConfig or detector set; truth: its noiseless truth curve(s); A_B_fit=None fits it. priors: {name: Gaussian sigma} for the geometry columns (a missing
-# name = flat). Returns dict(A_B_fit, chi2, y, j_A, columns {name: column}, priors, values {geometry name: the planet's value}, sigma, blocks, phase).
-def nuisance_problem(cfg, truth, A_B_fit=None, priors=None, steps=NUISANCE_STEPS, bounds=A_B_FIT_BOUNDS, **kw):
+# per detector block. cfg: FittingConfig or detector set; truth: its noiseless truth curve(s); A_B_fit=None fits it. priors: {name: Gaussian sigma} for any column (a missing
+# name = flat). stellar_ratios: the band ratios of "stellar_shared" (see stellar_shared_column). Returns dict(A_B_fit, chi2, y, j_A, columns {name: column}, priors,
+# values {geometry name: the planet's value}, sigma, blocks, phase, stellar_ratios [one per detector]).
+def nuisance_problem(cfg, truth, A_B_fit=None, priors=None, steps=NUISANCE_STEPS, bounds=A_B_FIT_BOUNDS, stellar_ratios=None, **kw):
     ev = evidence_residual(cfg, truth, A_B_fit=A_B_fit, bounds=bounds, **kw)
     A = ev["A_B_fit"]
     cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
@@ -2168,6 +2178,13 @@ def nuisance_problem(cfg, truth, A_B_fit=None, priors=None, steps=NUISANCE_STEPS
     for name, v in values.items():
         h = steps[name]
         cols[name] = (_geometry_model(cfg, A, name, v + h, kw) - _geometry_model(cfg, A, name, v - h, kw)) / (2. * h)
+    # b and a/R* at fixed b, from the incl column [per deg] by the chain rule: i = arccos(b / a) gives di/db = -(180/pi) / (a sin i) and di/da|_b = (180/pi) b / (a^2 sin i) [deg]
+    a0, i0 = values["a_rs"], np.radians(values["incl"])
+    values.update({"b": a0 * np.cos(i0), "a_rs|b": a0})
+    cols["b"] = -np.degrees(1.) / (a0 * np.sin(i0)) * cols["incl"]
+    cols["a_rs|b"] = cols["a_rs"] + np.degrees(1.) * values["b"] / (a0 ** 2 * np.sin(i0)) * cols["incl"]
+    priors = dict(priors or {})
+    if "a_rs" in priors: priors.setdefault("a_rs|b", priors["a_rs"])   # one prior on a/R*, whichever of i and b is held
     planetary = []
     for k, (c, blk) in enumerate(zip(cfgs, ev["blocks"])):
         t_ = model_times(c.planet.period, kw.get("n_t") or 50 * c.n_bins)
@@ -2177,11 +2194,42 @@ def nuisance_problem(cfg, truth, A_B_fit=None, priors=None, steps=NUISANCE_STEPS
         col[blk] = (ell - ell.mean()) / c.sigma_bin
         cols[f"stellar:{k + 1}"] = col
         fp = model_pcurve(replace(c, transit=False), "naive", A, **kw)[1]     # the planet's own flux [ppm]: thermal + reflected, zero in occultation
-        d = binned(c, fp * (1. - np.sin(np.radians(c.planet.incl)) ** 2 * np.cos(ph) ** 2))
+        d = binned(c, fp * np.sin(np.radians(c.planet.incl)) ** 2 * np.sin(ph) ** 2)   # d[F_p A(phi) / A(0)] / d delta at delta = 0 (planetary_area_factor)
         planetary.append((d - d.mean()) / c.sigma_bin)
     cols["planetary"] = np.concatenate(planetary)
-    return dict(A_B_fit=A, chi2=ev["chi2"], y=ev["r_perp"], j_A=whitened_jacobian(cfg, "naive", A, bounds=bounds, **kw)[:, 0], columns=cols, priors=dict(priors or {}), values=values,
-                sigma=ev["sigma"], blocks=ev["blocks"], phase=ev["phase"])
+    ratios = _stellar_ratios(cfgs, stellar_ratios)
+    cols["stellar_shared"] = stellar_shared_column(cols, ratios)
+    return dict(A_B_fit=A, chi2=ev["chi2"], y=ev["r_perp"], j_A=whitened_jacobian(cfg, "naive", A, bounds=bounds, **kw)[:, 0], columns=cols, priors=priors, values=values,
+                sigma=ev["sigma"], blocks=ev["blocks"], phase=ev["phase"], stellar_ratios=ratios)
+
+
+# The band ratios of the shared stellar term, one per detector of cfgs: None -> 1 for every detector (achromatic); a dict {band key of HItargets_utils: ratio} -> the ratio of each
+# detector's band (1 where the band is missing, which makes the amplitude that of a band of ratio 1); a sequence -> as given, in detector order.
+def _stellar_ratios(cfgs, stellar_ratios):
+    if stellar_ratios is None: return np.ones(len(cfgs))
+    r = np.array([float(stellar_ratios.get(_band_of(c), 1.)) for c in cfgs]) if isinstance(stellar_ratios, dict) else np.asarray(stellar_ratios, float).ravel()
+    if r.size != len(cfgs) or not np.all(np.isfinite(r) & (r > 0.)): raise ValueError(f"stellar_ratios: {len(cfgs)} positive values needed, got {r}")
+    return r
+
+
+# The stellar ellipsoidal column with ONE amplitude for all detectors: the per-detector columns "stellar:<k>" of a nuisance problem's `columns`, weighted by `ratios` (one per detector,
+# the band's alpha_ell relative to the reference) and added. The per-detector columns are zero outside their own block, so the sum is their concatenation.
+def stellar_shared_column(columns, ratios):
+    names = sorted((c for c in columns if c.startswith("stellar:")), key=lambda c: int(c.split(":")[1]))
+    r = np.asarray(ratios, float).ravel()
+    if r.size != len(names): raise ValueError(f"{len(names)} detectors but {r.size} ratios")
+    return np.sum([rk * columns[n] for rk, n in zip(r, names)], axis=0)
+
+
+# Projected area of the tidally deformed planet relative to mid-transit, A(phi) / A(0) (Akinsanmi et al. 2024, A&A 682, A15, eqs. 2 and 11; Leconte et al. 2011): the triaxial
+# ellipsoid of Correia (2014), r1 = r2 (1 + 3q), r3 = r2 (1 - q), with the amplitude delta = (r1 - r2) / r2 = 3q, at the orbital angle phi [rad, 0 = mid-transit] and the inclination
+# incl [deg]. To first order in delta it is 1 + delta sin^2 i sin^2 phi, the "planetary" column of nuisance_problem.
+def planetary_area_factor(delta, incl, phi):
+    q = delta / 3.
+    r1, r2, r3 = 1. + 3. * q, 1., 1. - q
+    ci2, si2 = np.cos(np.radians(incl)) ** 2, np.sin(np.radians(incl)) ** 2
+    area = lambda ph: np.sqrt(r1 ** 2 * r2 ** 2 * ci2 + r3 ** 2 * si2 * (r1 ** 2 * np.sin(ph) ** 2 + r2 ** 2 * np.cos(ph) ** 2))
+    return area(np.asarray(phi, float)) / area(0.)
 
 
 # The names of the columns a nuisance selection stands for: "stellar" expands to one amplitude per detector, every other name is its own column.
@@ -2211,15 +2259,20 @@ def nuisance_solve(problem, nuisances=()):
 
 # The nuisance table of one configuration: one row per entry of `rows` ({row label: tuple of nuisances}) with sigma_A_B, the bias dA_B = A_B_fit' - A_B_true and |dA_B| / sigma_A_B,
 # chi2_min' and <ln B> = chi2_min' / 2, and per nuisance of the row its sigma_post / sigma_prior ("shrink <name>"; "-" columns stay NaN) or, for a flat-prior amplitude, its fitted
-# value and sigma ("<name>", "sig <name>": stellar amplitudes in ppm, the planetary one as a fraction of the projected area).
+# value and sigma ("<name>", "sig <name>": stellar amplitudes in ppm, the planetary one as delta = (r1 - r2) / r2).
 def nuisance_table(problem, A_B_true, rows):
     out = []
     for label, nuis in rows.items():
         s = nuisance_solve(problem, nuis)
         row = {"row": label, "sigma_A_B": s["sigma_A_B"], "bias_A_B": s["A_B_fit"] - A_B_true, "bias_sigma": abs(s["A_B_fit"] - A_B_true) / s["sigma_A_B"], "chi2": s["chi2"], "lnB_mean": s["lnB_mean"]}
         for n in s["names"]:
-            if np.isfinite(s["shrinkage"][n]): row[f"shrink {n}"] = s["shrinkage"][n]
-            else: row[n], row[f"sig {n}"] = s["delta"][n], s["sigma_post"][n]
+            shrink = s["shrinkage"][n]
+            if n in problem["values"]:   # geometry: how far the data shrink its prior (the fitted shift and its sigma where it has none)
+                if np.isfinite(shrink): row[f"shrink {n}"] = shrink
+                else: row[n], row[f"sig {n}"] = s["delta"][n], s["sigma_post"][n]
+            else:                        # an amplitude, zero in the truth: what the fit gives it and its sigma, with a prior also the shrinkage
+                row[n], row[f"sig {n}"] = s["delta"][n], s["sigma_post"][n]
+                if np.isfinite(shrink): row[f"shrink {n}"] = shrink
         out.append(row)
     return pd.DataFrame(out)
 
@@ -2228,34 +2281,40 @@ def nuisance_table(problem, A_B_true, rows):
 # (geometry through model_pcurve / the planet's inclination, the planetary deformation as amplitude x F_p(theta) x shape, the stellar term per detector), each detector's baseline
 # removed by its mean and the Gaussian priors as residual rows (theta - theta_0) / sigma_p. sigma from the Jacobian at the solution. Returns dict(A_B_fit, sigma_A_B, chi2,
 # values {name: fitted value}, sigma_post {name}, nfev).
-def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, bounds=A_B_FIT_BOUNDS, **kw):
+def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, bounds=A_B_FIT_BOUNDS, stellar_ratios=None, **kw):
     from scipy.optimize import least_squares
     cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
     truths = list(truth) if is_detector_set(cfg) else [truth]
     pl = cfgs[0].planet
     start = dict(a_rs=pl.R / pl.r2, rp_rs=pl.r1 / pl.r2, incl=pl.incl)
+    start.update({"b": start["a_rs"] * np.cos(np.radians(pl.incl)), "a_rs|b": start["a_rs"]})   # b: i follows from b and a/R* (see nuisance_problem)
     names = []
     for n in nuisances: names += [f"stellar:{k + 1}" for k in range(len(cfgs))] if n == "stellar" else [n]
     priors = dict(priors or {})
+    if "a_rs" in priors: priors.setdefault("a_rs|b", priors["a_rs"])
+    ratios = _stellar_ratios(cfgs, stellar_ratios)
     yb = [binned(c, t) for c, t in zip(cfgs, truths)]
-    typical = dict(a_rs=0.04, rp_rs=3e-4, incl=1., planetary=0.02)   # typical size of a step per parameter (stellar amplitudes: 1 ppm), for the solver's scaling only
+    typical = {"a_rs": 0.04, "a_rs|b": 0.04, "rp_rs": 3e-4, "incl": 1., "b": 0.03, "planetary": 0.02}   # typical size of a step per parameter (stellar amplitudes: 1 ppm), for the solver's scaling only
     scale = np.array([0.05] + [priors.get(n, typical.get(n, 1.)) for n in names])
 
     def residuals(theta):
         p = dict(zip(names, theta[1:]))
         geom = {k: p[k] for k in ("a_rs", "rp_rs") if k in p}
+        if "a_rs|b" in p: geom["a_rs"] = p["a_rs|b"]
         out = []
         for k, (c, y) in enumerate(zip(cfgs, yb)):
             if "incl" in p: c = replace(c, planet=replace(c.planet, incl=p["incl"]))
+            elif "b" in p: c = replace(c, planet=replace(c.planet, incl=float(np.degrees(np.arccos(p["b"] / geom.get("a_rs", start["a_rs"]))))))
             t_, m = model_pcurve(c, "naive", theta[0], **geom, **kw)
             ph = 2. * np.pi * t_ / c.planet.period
             if "planetary" in p:
                 fp = model_pcurve(replace(c, transit=False), "naive", theta[0], **geom, **kw)[1]
-                m = m + p["planetary"] * fp * (1. - np.sin(np.radians(c.planet.incl)) ** 2 * np.cos(ph) ** 2)
+                m = m + fp * (planetary_area_factor(p["planetary"], c.planet.incl, ph) - 1.)   # the exact projected-area factor, not its linearisation
             if f"stellar:{k + 1}" in p: m = m - p[f"stellar:{k + 1}"] * np.cos(2. * ph)
+            if "stellar_shared" in p: m = m - p["stellar_shared"] * ratios[k] * np.cos(2. * ph)
             r = y - binned(c, m)
             out.append((r - r.mean()) / c.sigma_bin)
-        out.append(np.array([(p[n] - start[n]) / priors[n] for n in names if n in priors]))
+        out.append(np.array([(p[n] - start.get(n, 0.)) / priors[n] for n in names if n in priors]))   # amplitudes: prior centred on 0, the truth
         return np.concatenate(out)
 
     x0 = np.array([A_B_start if A_B_start is not None else fit_naive(cfg, truth, bounds=bounds, **kw)[0]] + [start.get(n, 0.) for n in names])
@@ -2269,6 +2328,18 @@ def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, b
 def ellipsoidal_amplitude(planet, mass_ratio, u, g):
     alpha = 0.15 * (15. + u) * (1. + g) / (3. - u)
     return 1e6 * alpha * mass_ratio * (planet.r2 / planet.R) ** 3 * np.sin(np.radians(planet.incl)) ** 2
+
+
+# The prior of the shared stellar term: the expected semi-amplitude A [ppm] (ellipsoidal_amplitude at the middle of the (u, g) bracket) and its fractional 1-sigma uncertainty, the
+# quadrature sum of the fractional errors of M_p / M_star (frac_q), of (R_star / a)^3 (3 sig_a_rs / (a/R*)), of sin^2 i (2 sig_incl [deg] / tan i) and of alpha_ell (half the bracket
+# range over its middle, taken as 1 sigma: generous for a bracket). Errors independent (the M_star - a/R* correlation through the stellar density is ignored).
+# Returns dict(A, frac, sigma = frac * A [ppm], parts {source: fractional error}).
+def ellipsoidal_prior(planet, mass_ratio, frac_q, u_range, g_range, sig_a_rs=0., sig_incl=0.):
+    lo, hi = ellipsoidal_amplitude(planet, mass_ratio, u_range[0], g_range[0]), ellipsoidal_amplitude(planet, mass_ratio, u_range[1], g_range[1])
+    parts = {"M_p / M_star": float(frac_q), "(R_star / a)^3": 3. * sig_a_rs / (planet.R / planet.r2), "sin^2 i": 2. * np.radians(sig_incl) / np.tan(np.radians(planet.incl)),
+             "alpha_ell (u, g)": (hi - lo) / (hi + lo)}
+    A, frac = 0.5 * (lo + hi), float(np.sqrt(sum(v ** 2 for v in parts.values())))
+    return dict(A=A, frac=frac, sigma=frac * A, parts=parts)
 
 
 ###########################################################################################################################

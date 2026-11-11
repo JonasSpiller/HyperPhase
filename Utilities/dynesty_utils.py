@@ -1,6 +1,6 @@
 import numpy as np
 import sys
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 import time
 import os
 import glob
@@ -272,12 +272,15 @@ class ParameterSet:
 # Geometry parameters model_pcurve accepts by name (its own kwarg spelling: a_rs = R/r2, rp_rs = r1/r2).
 _GEOMETRY = ("a_rs", "T_s", "rp_rs")
 # F (heat redistribution) belongs to insolation_model="naive_redist" alone: required there, rejected for the other models.
-_KNOWN = ("A_B", "offset", "F") + _GEOMETRY
+# The orbital inclination, sampled either directly ("incl" [deg]) or through the impact parameter ("b", with i = arccos(b / (a/R*)) at the sampled or the planet's own a/R*):
+# whichever the planet's source fitted (Tas et al. 2026 fit b for TOI-2431 b, Malavolta et al. 2018 fit i for K2-141 b). Not a model_pcurve keyword: _orbit_cfg puts it into the planet.
+_ORBIT = ("incl", "b")
+_KNOWN = ("A_B", "offset", "F") + _GEOMETRY + _ORBIT
 
 # Which sampled parameter invalidates which geometry-only cache. "naive_redist" reflects exactly like "naive" (F-independent),
 # and its thermal part is the analytic Louden model, so it has no insolation map to cache at all (the entry only lists the models).
 _CACHE_DEPS = {
-    "refl":  {"naive": ("a_rs", "rp_rs"),        "hyperillum": ("a_rs", "rp_rs"),        "naive_redist": ("a_rs", "rp_rs")},
+    "refl":  {"naive": ("a_rs", "rp_rs", "incl", "b"), "hyperillum": ("a_rs", "rp_rs", "incl", "b"), "naive_redist": ("a_rs", "rp_rs", "incl", "b")},   # the viewing geometry; the insolation map does not depend on i
     "insol": {"naive": ("a_rs", "T_s"),        "hyperillum": ("a_rs", "T_s", "rp_rs"),   "naive_redist": ()},
 }
 
@@ -320,7 +323,8 @@ class GaussianLogL:
         has_F = "F" in self.names or "F" in self.fixed
         if insolation_model == "naive_redist" and not has_F: raise ValueError('insolation_model="naive_redist" needs F either sampled (in `names`) or supplied in `fixed`')
         if has_F and insolation_model != "naive_redist": raise ValueError(f'F is only defined for insolation_model="naive_redist", not {insolation_model!r}')
-        geom_in_kw = [k for k in self.model_kw if k in _GEOMETRY]
+        if all(any(n in s for s in (self.names, self.fixed)) for n in _ORBIT): raise ValueError('give the inclination either as "incl" or as "b", not both')
+        geom_in_kw = [k for k in self.model_kw if k in _GEOMETRY + _ORBIT]
         if geom_in_kw: raise ValueError(f"pass geometry {geom_in_kw} via `fixed`, not as model_kw")
         if insolation_model not in _CACHE_DEPS["insol"]: raise ValueError(f"insolation_model must be one of {tuple(_CACHE_DEPS['insol'])}")
 
@@ -379,7 +383,7 @@ class GaussianLogL:
         """Binned model [ppm] for a parameter dict, WITHOUT the baseline offset. Split out from
         model() because the offset is purely additive: one curve serves every offset."""
         geom = {k: p[k] for k in _GEOMETRY if k in p}
-        _, y = model_pcurve(self.cfg, self.insolation_model, p["A_B"], F=p.get("F"), refl_unit=self.refl_unit, insol=self.insol, **geom, **self.model_kw)
+        _, y = model_pcurve(_orbit_cfg(self.cfg, p), self.insolation_model, p["A_B"], F=p.get("F"), refl_unit=self.refl_unit, insol=self.insol, **geom, **self.model_kw)
         return binned(self.cfg, y)
 
     def model(self, theta):
@@ -426,6 +430,18 @@ class GaussianLogL:
     def logl_profile_offsets(self, theta, offsets):
         """lnL at theta with the baseline MAXIMISED over `offsets`: the profile likelihood in the other parameters, the baseline treated as the nuisance it is. Free (one forward model)."""
         return float(np.max(self.logl_offsets(theta, offsets)))
+
+
+def _orbit_cfg(cfg, p):
+    """cfg at the inclination of the parameter dict p: "incl" [deg] as given, or "b" with i = arccos(|b| / (a/R*)), a/R* from p or the planet. cfg itself when p has neither.
+    A b at or beyond a/R* raises FloatingPointError, which GaussianLogL.__call__ turns into bad_logl."""
+    if "incl" in p: incl = float(p["incl"])
+    elif "b" in p:
+        x = abs(float(p["b"])) / float(p.get("a_rs", cfg.planet.R / cfg.planet.r2))
+        if not x < 1.: raise FloatingPointError(f"impact parameter b = {p['b']} >= a/R*")
+        incl = float(np.degrees(np.arccos(x)))
+    else: return cfg
+    return replace(cfg, planet=replace(cfg.planet, incl=incl))   # FittingConfig rebuilds its stellar grid from the lru cache: cheap
 
 
 class JointGaussianLogL:
@@ -771,7 +787,9 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
 
     # The geometry actually used: sampled, held fixed, or (the usual case) inherited from cfg.planet - an empty `fixed` on its own would not record which.
     pl = detector_cfgs(logl.cfg)[0].planet
-    meta["geometry"] = {k: ("sampled" if k in logl.names else float(logl.fixed.get(k, d))) for k, d in (("a_rs", pl.R / pl.r2), ("T_s", pl.T2_eff), ("rp_rs", pl.r1 / pl.r2))}
+    meta["geometry"] = {k: ("sampled" if k in logl.names else float(logl.fixed.get(k, d))) for k, d in (("a_rs", pl.R / pl.r2), ("T_s", pl.T2_eff), ("rp_rs", pl.r1 / pl.r2), ("incl", pl.incl), ("b", pl.R / pl.r2 * np.cos(np.radians(pl.incl))))}
+    for k, other in (("incl", "b"), ("b", "incl")):   # a sampled inclination makes the other spelling a derived quantity, not a fixed one
+        if other in logl.names: meta["geometry"][k] = f"derived from {other}"
 
     meta.update(run_status(res, scfg, stop_kwargs))
     if scfg.print_progress:
@@ -1037,10 +1055,10 @@ def derived_samples(logl, thetas, n_jobs=-1):
 
         depths = []
         for L in comps:   # one band per detector
-            pp = pcurve_params(L.cfg, m, A_B_, F=F_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=insol)
+            pp = pcurve_params(_orbit_cfg(L.cfg, p_), m, A_B_, F=F_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=insol)
             d_th = float(occultation_depth(pp, stellar_grid=L.cfg.stellar_grid, emissivity=L.cfg.emissivity))
             # Reflected part: linear in A, and its maximum over the orbit is the last point before ingress - within ~1% of the full-phase value, since reflected_unit itself carries the occultation.
-            ru = L.refl_unit if L.refl_unit is not None else (reflected_unit(L.cfg, m, n_t=logl.model_kw.get("n_t"), **geom) if L.cfg.reflected else None)
+            ru = L.refl_unit if L.refl_unit is not None else (reflected_unit(_orbit_cfg(L.cfg, p_), m, n_t=logl.model_kw.get("n_t"), **geom) if L.cfg.reflected else None)
             depths += [d_th, float(L.cfg.A_(A_B_) * np.max(ru)) if ru is not None else 0.]
         return T + depths
 
@@ -1479,7 +1497,7 @@ def run_kind(fits):
     sampled) or "" (the usual run: hyperillumination truth, fixed geometry). The subfolder a run sits in must say the same (series_table checks it)."""
     f = next(iter(fits.values()))
     if f.meta["data"]["truth"]["insolation_model"] != "hyperillum": return "null_test"
-    if any(n in f.pset.names for n in _GEOMETRY): return "free_geometry"
+    if any(n in f.pset.names for n in _GEOMETRY + _ORBIT): return "free_geometry"
     return ""
 
 
@@ -1495,7 +1513,7 @@ def evidence_reference(fits, fisher=True, floor=True, A_B_bounds=A_B_FIT_BOUNDS)
     sigma_A_B, all at the truth's resolution. floor: also the numerical floor, chi2 of the truth's own model at the injected parameters on the likelihood's coarser grid
     against the truth curve (model resolution, not model bias). Runs that differ only in seed and pfrac share it.
     A_B_bounds: the range of the noiseless fit (A_B_FIT_BOUNDS: the bias analysis; A_B_BOUNDS: held at the physical floor, where r_perp is no longer orthogonal to the A_B response).
-    A run that samples the geometry (a_rs, rp_rs with Gaussian priors, read from its ParameterSet) gets the prediction WITH those nuisances: the linear nuisance fit of
+    A run that samples the geometry (a_rs, rp_rs and incl or b with Gaussian priors, read from its ParameterSet) gets the prediction WITH those nuisances: the linear nuisance fit of
     simple_bias_analysis (nuisance_problem / nuisance_solve) around the fixed-geometry fit, so that A_B_fit, bias_A_B, chi2, sigma_fisher and r_perp (the data rows of the augmented
     residual) are those of the marginalised fit; the fixed-geometry numbers are kept as chi2_fixed and sigma_fisher_fixed, and `nuisance` holds {name: (prior sigma, predicted
     posterior sigma)}.
@@ -1510,19 +1528,21 @@ def evidence_reference(fits, fisher=True, floor=True, A_B_bounds=A_B_FIT_BOUNDS)
     y_true = np.concatenate(ref["y_true"])
     out = dict(alt=alt, A_B_true=float(data["truth"]["A_B"]), A_B_fit=nl["A_B"], bias_A_B=nl["A_B"] - float(data["truth"]["A_B"]), chi2=nl["chi2"], r_perp=ev["r_perp"], y_true=y_true,
                sigma_fisher=float(fisher_sigma(ref["fit_cfg"], alt, nl["A_B"], bounds=A_B_bounds, insol=ref["insols"][alt], **ref["truth_kw"])[0]) if fisher else np.nan, chi2_floor=np.nan)
-    geom = [n for n in f.pset.names if n in _GEOMETRY]
+    geom = [n for n in f.pset.names if n in _GEOMETRY + _ORBIT]
     if geom:
         prior = {p.name: p.prior for p in f.pset.params if p.name in geom}
-        bad = [n for n in geom if n not in ("a_rs", "rp_rs") or not isinstance(prior[n], (Normal, TruncNormal))]
-        if bad: raise ValueError(f"no linear prediction for the sampled geometry {bad}: only a_rs and rp_rs with a Normal / TruncNormal prior are supported")
-        prob = nuisance_problem(ref["fit_cfg"], ref["fit_truth"], A_B_fit=nl["A_B"], priors={n: prior[n].sd for n in geom}, bounds=A_B_bounds, insol=ref["insols"][alt], **ref["truth_kw"])
-        sol = nuisance_solve(prob, geom)
+        bad = [n for n in geom if n not in ("a_rs", "rp_rs", "incl", "b") or not isinstance(prior[n], (Normal, TruncNormal))]
+        if bad: raise ValueError(f"no linear prediction for the sampled geometry {bad}: only a_rs, rp_rs, incl and b with a Normal / TruncNormal prior are supported")
+        col = {n: ("a_rs|b" if n == "a_rs" and "b" in geom else n) for n in geom}   # the nuisance column of each sampled name: with b sampled, a/R* varies at fixed b
+        prob = nuisance_problem(ref["fit_cfg"], ref["fit_truth"], A_B_fit=nl["A_B"], priors={col[n]: prior[n].sd for n in geom}, bounds=A_B_bounds, insol=ref["insols"][alt], **ref["truth_kw"])
+        sol = nuisance_solve(prob, [col[n] for n in geom])   # a TruncNormal enters as its Gaussian: the truncation is ignored (5 sigma, or the one-sided i <= 90 deg of K2-141 b)
         out.update(chi2_fixed=out["chi2"], sigma_fisher_fixed=out["sigma_fisher"], A_B_fit=sol["A_B_fit"], bias_A_B=sol["A_B_fit"] - out["A_B_true"], chi2=sol["chi2"], r_perp=sol["r_perp"],
-                   sigma_fisher=sol["sigma_A_B"], nuisance={n: (float(prior[n].sd), float(sol["sigma_post"][n])) for n in geom})
+                   sigma_fisher=sol["sigma_A_B"], nuisance={n: (float(prior[n].sd), float(sol["sigma_post"][col[n]])) for n in geom})
     if floor and true_m in fits:
         L = logl_from_fit(fits[true_m])   # warns (stderr) if the forward model changed since the run; run_prediction also records it per run (grid_change)
         pl = detector_cfgs(cfg)[0].planet
-        base = dict(A_B=data["truth"]["A_B"], F=data["truth"].get("F") or 0., a_rs=pl.R / pl.r2, rp_rs=pl.r1 / pl.r2, T_s=pl.T2_eff, **{n: data["truth"]["offset"] for n in L.names if n.startswith("offset")})
+        base = dict(A_B=data["truth"]["A_B"], F=data["truth"].get("F") or 0., a_rs=pl.R / pl.r2, rp_rs=pl.r1 / pl.r2, T_s=pl.T2_eff, incl=pl.incl, b=pl.R / pl.r2 * np.cos(np.radians(pl.incl)),
+                    **{n: data["truth"]["offset"] for n in L.names if n.startswith("offset")})
         out["chi2_floor"] = float(np.sum(((L.model(theta_of(L, base)) - y_true) / np.asarray(data["sigma"], float)) ** 2))
     return out
 
