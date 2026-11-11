@@ -242,16 +242,21 @@ def _bounded_diff(fn, x, h, bounds):
     return (fn(hi) - fn(lo)) / (hi - lo)
 
 
-# Fisher covariance of (A_B) or (A_B, F), the baseline(s) marginalised (free_offset removes the mean from each detector's residual): C = (J' W J)^-1, W = diag(1 / sigma^2).
-# Its diagonal gives fisher_sigma; the off-diagonal is the A_B-F correlation that a DERIVED quantity (e.g. the occultation depth, fisher_depth) needs. cfg may be a detector set.
-def fisher_covariance(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A=1e-3, h_F=1e-3, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, refl_unit=None, **kw):
-    # truth=None: the residual is (truth - model), so any constant truth cancels in a central difference
+# Whitened Jacobian of the binned model in (A_B) or (A_B, F): J = d(model) / d(parameter) / sigma_bin per bin, detector blocks concatenated, each column with its mean removed per
+# block (free_offset: that is what marginalises the baseline). Central differences, one-sided at a bound. Shared by fisher_covariance and the nuisance columns (nuisance_problem).
+def whitened_jacobian(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A=1e-3, h_F=1e-3, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, refl_unit=None, **kw):
+    # truth=None: the residual is (truth - model) = -model, so any constant truth cancels in a central difference
     resid, _, sigma = _chi2_problem(cfg, None, insolation_model, free_offset=free_offset, refl_unit=refl_unit, **kw)
-
     cols = [_bounded_diff(lambda a: resid(a, F), A_B_, h_A, bounds)]
     if F is not None:
         cols.append(_bounded_diff(lambda f: resid(A_B_, f), F, h_F, F_bounds))
-    J = np.column_stack(cols) / sigma[:, None]   # whitened Jacobian
+    return -np.column_stack(cols) / sigma[:, None]
+
+
+# Fisher covariance of (A_B) or (A_B, F), the baseline(s) marginalised (free_offset removes the mean from each detector's residual): C = (J' W J)^-1, W = diag(1 / sigma^2).
+# Its diagonal gives fisher_sigma; the off-diagonal is the A_B-F correlation that a DERIVED quantity (e.g. the occultation depth, fisher_depth) needs. cfg may be a detector set.
+def fisher_covariance(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A=1e-3, h_F=1e-3, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, refl_unit=None, **kw):
+    J = whitened_jacobian(cfg, insolation_model, A_B_, F=F, free_offset=free_offset, h_A=h_A, h_F=h_F, bounds=bounds, F_bounds=F_bounds, refl_unit=refl_unit, **kw)
     try:
         return np.linalg.inv(J.T @ J)   # the inverse is what marginalises; 1/F_ii would instead fix the other parameters
     except np.linalg.LinAlgError:
@@ -2012,3 +2017,151 @@ def _band_of(cfg):
     import os
     name = os.path.basename(str(cfg.filter_path))
     return next((k for k, f in FILTER_FILES.items() if f == name), name)
+
+
+###########################################################################################################################
+#####
+#####   Robustness to nuisance parameters: one linear least-squares problem (Nuisance_Robustness.ipynb)
+#####
+###########################################################################################################################
+
+# sigma_A_B and chi2_min of the A_B-only fit assume a fixed geometry and no other phase-curve terms. A real analysis marginalises over the geometry and fits ellipsoidal terms, and
+# every such nuisance is one more column of the same linear least-squares problem. Linearised around the noiseless A_B-only fit, in whitened units and with each column's mean removed
+# per detector block (the free baseline): y = r_perp (evidence_residual), X = [j_A, j_nu1, ...] with j = d(model) / d(theta) / sigma_bin, a Gaussian prior N(nu_0, sigma_p) on a
+# nuisance as the penalty (delta_nu / sigma_p)^2 and a flat prior as no penalty:
+#   delta = argmin |y - X delta|^2 + sum (delta_nu / sigma_p)^2,   Cov = (X'X + Lambda)^-1,   sigma_A_B = sqrt(Cov_AA),   A_B_fit' = A_B_fit + delta_A,   chi2_min' = the minimum.
+# If the extended-source model carries the same nuisances with the same priors, <ln B> = chi2_min' / 2 to first order (the determinant terms cancel). The columns:
+# - geometry "a_rs", "rp_rs", "incl": central differences of the point-source model (the transit and the occultation are part of it, so their shape constrains the geometry too);
+# - "stellar": the ellipsoidal variation of the STAR, -cos(4 pi phi) [ppm] in every bin including the occultation (the star stays visible), one free amplitude per detector
+#   ("stellar:1", "stellar:2", ...: limb and gravity darkening depend on the band);
+# - "planetary": the tidal elongation of the PLANET along the star-planet axis, which changes its projected area: F_p(phi) (1 - sin^2 i cos^2 2 pi phi), with F_p the point-source planet
+#   flux at the fitted A_B. One amplitude shared by all detectors (it is geometric), zero during the occultation, like the hyperillumination residual itself.
+# Not for the fit with redistribution: F sits at its F = 0 edge, where the response to F switches on very flat, so nothing linear in F is trustworthy.
+NUISANCE_STEPS = dict(a_rs=0.005, rp_rs=1e-4, incl=0.2)   # finite-difference steps of the geometry columns [a/R*, Rp/R*, deg]; nuisance_problem(steps=...) to test them
+NUISANCE_LABELS = dict(a_rs=r"$a/R_\star$", rp_rs=r"$R_p/R_\star$", incl=r"$i$", stellar="stellar ellipsoidal", planetary="planetary deformation")
+
+
+# The whitened, mean-removed binned point-source model at a perturbed geometry: the building block of a geometry column. a_rs / rp_rs go to model_pcurve, incl into the planet.
+def _geometry_model(cfg, A_B_, param, value, kw):
+    if param == "incl":
+        cfg = [replace(c, planet=replace(c.planet, incl=value)) for c in cfg] if is_detector_set(cfg) else replace(cfg, planet=replace(cfg.planet, incl=value))
+    else:
+        kw = {**kw, param: value}
+    resid, _, sigma = _chi2_problem(cfg, None, "naive", **kw)
+    return -resid(A_B_) / sigma
+
+
+# Everything the nuisance fits of one configuration share: y = r_perp of the noiseless A_B-only fit, the A_B column and every nuisance column (see above), whitened and mean-removed
+# per detector block. cfg: FittingConfig or detector set; truth: its noiseless truth curve(s); A_B_fit=None fits it. priors: {name: Gaussian sigma} for the geometry columns (a missing
+# name = flat). Returns dict(A_B_fit, chi2, y, j_A, columns {name: column}, priors, values {geometry name: the planet's value}, sigma, blocks, phase).
+def nuisance_problem(cfg, truth, A_B_fit=None, priors=None, steps=NUISANCE_STEPS, bounds=A_B_FIT_BOUNDS, **kw):
+    ev = evidence_residual(cfg, truth, A_B_fit=A_B_fit, bounds=bounds, **kw)
+    A = ev["A_B_fit"]
+    cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
+    pl = cfgs[0].planet
+    values = dict(a_rs=pl.R / pl.r2, rp_rs=pl.r1 / pl.r2, incl=pl.incl)
+    cols = {}
+    for name, v in values.items():
+        h = steps[name]
+        cols[name] = (_geometry_model(cfg, A, name, v + h, kw) - _geometry_model(cfg, A, name, v - h, kw)) / (2. * h)
+    planetary = []
+    for k, (c, blk) in enumerate(zip(cfgs, ev["blocks"])):
+        t_ = model_times(c.planet.period, kw.get("n_t") or 50 * c.n_bins)
+        ph = 2. * np.pi * t_ / c.planet.period
+        ell = -binned(c, np.cos(2. * ph))                                    # -cos(4 pi phi), bin-averaged [per ppm of amplitude]
+        col = np.zeros(ev["r_perp"].size)
+        col[blk] = (ell - ell.mean()) / c.sigma_bin
+        cols[f"stellar:{k + 1}"] = col
+        fp = model_pcurve(replace(c, transit=False), "naive", A, **kw)[1]     # the planet's own flux [ppm]: thermal + reflected, zero in occultation
+        d = binned(c, fp * (1. - np.sin(np.radians(c.planet.incl)) ** 2 * np.cos(ph) ** 2))
+        planetary.append((d - d.mean()) / c.sigma_bin)
+    cols["planetary"] = np.concatenate(planetary)
+    return dict(A_B_fit=A, chi2=ev["chi2"], y=ev["r_perp"], j_A=whitened_jacobian(cfg, "naive", A, bounds=bounds, **kw)[:, 0], columns=cols, priors=dict(priors or {}), values=values,
+                sigma=ev["sigma"], blocks=ev["blocks"], phase=ev["phase"])
+
+
+# The names of the columns a nuisance selection stands for: "stellar" expands to one amplitude per detector, every other name is its own column.
+def nuisance_names(problem, nuisances):
+    out = []
+    for n in nuisances:
+        out += [c for c in problem["columns"] if c.startswith("stellar:")] if n == "stellar" else [n]
+    return out
+
+
+# One nuisance fit: the A_B-only fit of `problem` (nuisance_problem) with the columns of `nuisances` added (names as in nuisance_names; () = the fixed-geometry fit itself).
+# Returns dict(sigma_A_B, delta_A_B [shift of the fitted A_B], A_B_fit, chi2, lnB_mean = chi2 / 2, names, delta {name: fitted shift}, sigma_post {name}, shrinkage {name:
+# sigma_post / sigma_prior; NaN for a flat prior; 1 = the data add nothing to the prior}, r_perp [the augmented whitened residual y - X delta, without the prior rows], cov).
+def nuisance_solve(problem, nuisances=()):
+    names = nuisance_names(problem, nuisances)
+    X = np.column_stack([problem["j_A"]] + [problem["columns"][n] for n in names])
+    prior = np.array([np.nan] + [problem["priors"].get(n, np.nan) for n in names])
+    lam = np.where(np.isfinite(prior), 1. / prior ** 2, 0.)
+    cov = np.linalg.inv(X.T @ X + np.diag(lam))
+    delta = cov @ (X.T @ problem["y"])
+    r = problem["y"] - X @ delta
+    chi2 = float(r @ r + np.sum(lam * delta ** 2))
+    sd = np.sqrt(np.diag(cov))
+    return dict(sigma_A_B=float(sd[0]), delta_A_B=float(delta[0]), A_B_fit=float(problem["A_B_fit"] + delta[0]), chi2=chi2, lnB_mean=0.5 * chi2, names=names,
+                delta=dict(zip(names, delta[1:])), sigma_post=dict(zip(names, sd[1:])), shrinkage=dict(zip(names, sd[1:] / prior[1:])), r_perp=r, cov=cov)
+
+
+# The nuisance table of one configuration: one row per entry of `rows` ({row label: tuple of nuisances}) with sigma_A_B, the bias dA_B = A_B_fit' - A_B_true and |dA_B| / sigma_A_B,
+# chi2_min' and <ln B> = chi2_min' / 2, and per nuisance of the row its sigma_post / sigma_prior ("shrink <name>"; "-" columns stay NaN) or, for a flat-prior amplitude, its fitted
+# value and sigma ("<name>", "sig <name>": stellar amplitudes in ppm, the planetary one as a fraction of the projected area).
+def nuisance_table(problem, A_B_true, rows):
+    out = []
+    for label, nuis in rows.items():
+        s = nuisance_solve(problem, nuis)
+        row = {"row": label, "sigma_A_B": s["sigma_A_B"], "bias_A_B": s["A_B_fit"] - A_B_true, "bias_sigma": abs(s["A_B_fit"] - A_B_true) / s["sigma_A_B"], "chi2": s["chi2"], "lnB_mean": s["lnB_mean"]}
+        for n in s["names"]:
+            if np.isfinite(s["shrinkage"][n]): row[f"shrink {n}"] = s["shrinkage"][n]
+            else: row[n], row[f"sig {n}"] = s["delta"][n], s["sigma_post"][n]
+        out.append(row)
+    return pd.DataFrame(out)
+
+
+# Nonlinear counterpart of nuisance_solve, as a check of the linearisation: scipy least_squares over (A_B, the nuisances), the point-source model re-evaluated at every step
+# (geometry through model_pcurve / the planet's inclination, the planetary deformation as amplitude x F_p(theta) x shape, the stellar term per detector), each detector's baseline
+# removed by its mean and the Gaussian priors as residual rows (theta - theta_0) / sigma_p. sigma from the Jacobian at the solution. Returns dict(A_B_fit, sigma_A_B, chi2,
+# values {name: fitted value}, sigma_post {name}, nfev).
+def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, bounds=A_B_FIT_BOUNDS, **kw):
+    from scipy.optimize import least_squares
+    cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
+    truths = list(truth) if is_detector_set(cfg) else [truth]
+    pl = cfgs[0].planet
+    start = dict(a_rs=pl.R / pl.r2, rp_rs=pl.r1 / pl.r2, incl=pl.incl)
+    names = []
+    for n in nuisances: names += [f"stellar:{k + 1}" for k in range(len(cfgs))] if n == "stellar" else [n]
+    priors = dict(priors or {})
+    yb = [binned(c, t) for c, t in zip(cfgs, truths)]
+    typical = dict(a_rs=0.04, rp_rs=3e-4, incl=1., planetary=0.02)   # typical size of a step per parameter (stellar amplitudes: 1 ppm), for the solver's scaling only
+    scale = np.array([0.05] + [priors.get(n, typical.get(n, 1.)) for n in names])
+
+    def residuals(theta):
+        p = dict(zip(names, theta[1:]))
+        geom = {k: p[k] for k in ("a_rs", "rp_rs") if k in p}
+        out = []
+        for k, (c, y) in enumerate(zip(cfgs, yb)):
+            if "incl" in p: c = replace(c, planet=replace(c.planet, incl=p["incl"]))
+            t_, m = model_pcurve(c, "naive", theta[0], **geom, **kw)
+            ph = 2. * np.pi * t_ / c.planet.period
+            if "planetary" in p:
+                fp = model_pcurve(replace(c, transit=False), "naive", theta[0], **geom, **kw)[1]
+                m = m + p["planetary"] * fp * (1. - np.sin(np.radians(c.planet.incl)) ** 2 * np.cos(ph) ** 2)
+            if f"stellar:{k + 1}" in p: m = m - p[f"stellar:{k + 1}"] * np.cos(2. * ph)
+            r = y - binned(c, m)
+            out.append((r - r.mean()) / c.sigma_bin)
+        out.append(np.array([(p[n] - start[n]) / priors[n] for n in names if n in priors]))
+        return np.concatenate(out)
+
+    x0 = np.array([A_B_start if A_B_start is not None else fit_naive(cfg, truth, bounds=bounds, **kw)[0]] + [start.get(n, 0.) for n in names])
+    res = least_squares(residuals, x0, x_scale=scale, diff_step=1e-3, xtol=1e-10, ftol=1e-12, gtol=1e-12)
+    sd = np.sqrt(np.diag(np.linalg.inv(res.jac.T @ res.jac)))
+    return dict(A_B_fit=float(res.x[0]), sigma_A_B=float(sd[0]), chi2=float(2. * res.cost), values=dict(zip(names, res.x[1:])), sigma_post=dict(zip(names, sd[1:])), nfev=int(res.nfev))
+
+
+# Expected semi-amplitude [ppm] of the star's ellipsoidal variation, A_ell = alpha_ell (M_p / M_star) (R_star / a)^3 sin^2 i with alpha_ell = 0.15 (15 + u) (1 + g) / (3 - u)
+# (Morris & Naftilan 1993; Shporer 2017, PASP 129, 072001, eqs. 7-8): u the linear limb-darkening and g the gravity-darkening coefficient of the band, mass_ratio = M_p / M_star.
+def ellipsoidal_amplitude(planet, mass_ratio, u, g):
+    alpha = 0.15 * (15. + u) * (1. + g) / (3. - u)
+    return 1e6 * alpha * mass_ratio * (planet.r2 / planet.R) ** 3 * np.sin(np.radians(planet.incl)) ** 2
