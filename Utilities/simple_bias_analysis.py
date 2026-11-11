@@ -99,13 +99,19 @@ def _chi2_problem(cfg, truth, insolation_model, free_offset=True, refl_unit=None
     return resid, cost, sigma
 
 
-# Best-fit naive Bond albedo A_B against a hyperillumination-generated truth, returning (A_fit, chi2, resid_rms); the band albedo A follows from cfg.A_.
-def fit_naive(cfg, truth, free_offset=True, bounds=A_B_FIT_BOUNDS, xatol=1e-4, **kw):
-    resid, cost, _ = _chi2_problem(cfg, truth, "naive", free_offset=free_offset, **kw)
+# Best-fit Bond albedo A_B of the one-parameter model `insolation_model` against a noiseless truth, returning (A_fit, chi2, resid_rms); the band albedo A follows from cfg.A_.
+# "naive" against a hyperillumination truth is fit_naive; "hyperillum" against a point-source truth is the null test (the extended-source model fitted to data without hyperillumination).
+def fit_AB_only(cfg, truth, insolation_model, free_offset=True, bounds=A_B_FIT_BOUNDS, xatol=1e-4, **kw):
+    resid, cost, _ = _chi2_problem(cfg, truth, insolation_model, free_offset=free_offset, **kw)
     res = minimize_scalar(cost, bounds=bounds, method="bounded", options={"xatol": xatol})
     r = resid(res.x)
     resid_rms = np.sqrt(np.mean(r ** 2))
     return res.x, res.fun, resid_rms # chi2 = cost(A_fit) = weighted sum of squared residuals (this χ² is not a goodness-of-fit to an observation — it's the squared distance between two noiseless models, expressed in units of the observational noise)
+
+
+# Best-fit naive Bond albedo A_B against a hyperillumination-generated truth, returning (A_fit, chi2, resid_rms): fit_AB_only with the point-source model.
+def fit_naive(cfg, truth, free_offset=True, bounds=A_B_FIT_BOUNDS, xatol=1e-4, **kw):
+    return fit_AB_only(cfg, truth, "naive", free_offset=free_offset, bounds=bounds, xatol=xatol, **kw)
 
 
 # F nodes of fit_redist's profile scan, as fractions of the F_bounds width: dense near F = 0, where the joint optimum usually sits (F ~ 0.005 for a hyperillum truth).
@@ -1331,6 +1337,18 @@ def _detector_cfgs(cfg, planet, instrument, sigma_1min):
     return cfgs[0] if len(cfgs) == 1 else cfgs
 
 
+# The FittingConfig (one band) or detector set (a tuple of bands, fitted jointly) of one planet in one retrieval mode at the planet's own noise: what instrument_retrievals fits per
+# row, for code that needs the cfg itself (per-bin residuals, sweeps, nuisance columns). sigma_1min: {detector: ppm/min}; None looks the levels up (HItargets_utils.noise_levels:
+# PandExo cache or CUSTOM_SIGMA_1MIN) and raises NoNoiseLevelError where a detector has none.
+def retrieval_cfg(cfg, planet, instrument, sigma_1min=None):
+    from HItargets_utils import noise_levels, NoNoiseLevelError
+    dets = detectors(instrument)
+    if sigma_1min is None: sigma_1min = noise_levels(planet, dets)
+    missing = [d for d in dets if d not in sigma_1min]
+    if missing: raise NoNoiseLevelError(f"no noise level for {planet.name} on {', '.join(missing)}")
+    return _detector_cfgs(cfg, planet, instrument, sigma_1min)
+
+
 def _instrument_row(cfg, A_B_true, pl, instrument, sigma_1min, redist, bounds, F_bounds, kw):
     dets = detectors(instrument)
     has_noise = all(d in sigma_1min for d in dets)   # False only for a single detector (joint fits without every noise level are left out): fitted at cfg's own sigma_1min, no Fisher sigma
@@ -1846,3 +1864,151 @@ def plot_sg_comparison(sg, band_label="MIRI/LRS"):
     fig.suptitle(r"Sadh & Gavassino (2026) Table 2 against consistent hemisphere definitions ($A_B$ = 0)", fontsize=12)
     fig.tight_layout(rect=(0., 0.14, 1., 1.))   # room for the figure legend: lay out with tight=False in paper_figure
     return fig
+
+
+###########################################################################################################################
+#####
+#####   Expected evidence: where the Bayes factor comes from (Evidence_Prediction.ipynb)
+#####
+###########################################################################################################################
+
+# For two models with the same parameters and priors (extended source vs point source, both A_B + baselines) the Occam factors nearly cancel, so the Bayes factor follows the likelihood
+# ratio. Linearised around the truth, with the noise d = truth + sigma z: ln B(ext vs ps) = chi2_min / 2 + zeta sqrt(chi2_min), zeta = r_perp_hat . z ~ N(0, 1), where
+# r_perp = (truth - m_ps(A_fit) - baseline) / sigma_bin is the whitened residual of the NOISELESS A_B-only fit and chi2_min = |r_perp|^2 the chi2 that fit_naive returns.
+# So <ln B> = chi2_min / 2 with scatter sqrt(chi2_min) over noise realisations, and r_perp^2 says at which orbital phases the expected evidence arises.
+# Only for equal parameter counts: against the fit with redistribution the F prior adds an Occam term of ~3 nats and F's posterior is one-sided, so chi2 / 2 is then only the likelihood part.
+
+
+# The whitened residual r_perp of the noiseless A_B-only fit of `insolation_model` to `truth`, bin by bin (detector blocks concatenated, each with its own baseline removed and its own
+# sigma_bin). A_B_fit=None fits it (fit_AB_only); sum(r_perp^2) is that fit's chi2. Returns dict(A_B_fit, chi2, resid [ppm], sigma [ppm], r_perp, phase [bin centres, 0 = transit],
+# blocks [one slice per detector]). kw: the model_pcurve keywords of the fit, so the dynesty comparison can evaluate it at the truth's own resolution.
+def evidence_residual(cfg, truth, insolation_model="naive", A_B_fit=None, free_offset=True, bounds=A_B_FIT_BOUNDS, **kw):
+    if A_B_fit is None: A_B_fit = fit_AB_only(cfg, truth, insolation_model, free_offset=free_offset, bounds=bounds, **kw)[0]
+    resid, _, sigma = _chi2_problem(cfg, truth, insolation_model, free_offset=free_offset, **kw)
+    r = resid(A_B_fit)
+    cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
+    edges = np.cumsum([0] + [c.n_bins for c in cfgs])
+    return dict(A_B_fit=float(A_B_fit), chi2=float(np.sum((r / sigma) ** 2)), resid=r, sigma=sigma, r_perp=r / sigma,
+                phase=np.concatenate([(np.arange(c.n_bins) + 0.5) / c.n_bins for c in cfgs]),   # model_pcurve runs from t = 0 (mid-transit) over one period and binned() averages consecutive samples
+                blocks=[slice(int(a), int(b)) for a, b in zip(edges[:-1], edges[1:])])
+
+
+# Half-duration of the transit / occultation in orbital phase (first to fourth contact; a circular orbit, so the two last equally long): occultation_durations at the planet's geometry.
+def eclipse_half_phase(planet):
+    from types import SimpleNamespace
+    T14, _ = occultation_durations(SimpleNamespace(inc=planet.incl, a=planet.R / planet.r2, rp=planet.r1 / planet.r2, per=planet.period))
+    return 0.5 * T14 / planet.period
+
+
+# The phase windows of an evidence budget as boolean masks over bin centres `phase` (0 = mid-transit): occultation and transit (every bin that overlaps the eclipse, i.e. whose
+# bin average the eclipse touches: centre within the half-duration plus half a bin), the quadratures (centre within quad_half of 0.25 or 0.75) and the rest. Disjoint, in that priority.
+def phase_windows(planet, phase, n_bins, quad_half=0.1):
+    dist = lambda p0: np.abs((np.asarray(phase, float) - p0 + 0.5) % 1. - 0.5)   # phase distance on the circle
+    h = eclipse_half_phase(planet) + 0.5 / n_bins
+    occ = dist(0.5) < h
+    tra = (dist(0.) < h) & ~occ
+    quad = ((dist(0.25) < quad_half) | (dist(0.75) < quad_half)) & ~occ & ~tra
+    return {"occultation": occ, "transit": tra, "quadratures": quad, "rest": ~(occ | tra | quad)}
+
+
+# Where in phase the expected evidence of an evidence_residual arises: chi2 and its share of the total chi2_min per phase window (phase_windows), one row per detector block plus "all".
+# labels: the detectors' names (default: block numbers). The shares of the "all" row sum to 1; 2 <ln B> = chi2_min, so they are also the shares of the expected ln B.
+def evidence_budget(ev, cfg, labels=None, quad_half=0.1):
+    cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
+    labels = list(labels) if labels is not None else [f"detector {k + 1}" for k in range(len(cfgs))]
+    rows, total = [], {}
+    for c, blk, lab in zip(cfgs, ev["blocks"], labels):
+        r2 = ev["r_perp"][blk] ** 2
+        win = phase_windows(c.planet, ev["phase"][blk], c.n_bins, quad_half)
+        part = {name: float(r2[m].sum()) for name, m in win.items()}
+        for name, v in part.items(): total[name] = total.get(name, 0.) + v
+        rows.append(dict(detector=lab, chi2=float(r2.sum()), **part))
+    if len(rows) > 1: rows.append(dict(detector="all", chi2=ev["chi2"], **total))
+    tab = pd.DataFrame(rows)
+    for name in total: tab[name + " [%]"] = 100. * tab[name] / ev["chi2"]   # share of the TOTAL chi2_min, so a detector's row sums to its own share
+    tab["share [%]"] = 100. * tab["chi2"] / ev["chi2"]
+    return tab
+
+
+# P(ln B > threshold) over noise realisations for extended source vs point source, in the linear prediction ln B ~ N(chi2_min / 2, chi2_min). chi2 scales with the observing time,
+# so time_factor = n_orbits / (the n_orbits chi2 was computed at) gives another number of orbits without a refit (e.g. 2 / 5 for one visit instead of five orbits).
+def evidence_probability(chi2, threshold, time_factor=1.):
+    from scipy.stats import norm
+    c = time_factor * np.asarray(chi2, dtype=float)
+    return norm.sf((threshold - 0.5 * c) / np.sqrt(c))
+
+
+# The expected-evidence table: every planet of `planets` on every entry of `instruments` (instrument_retrievals per planet: own geometry, own noise, joint detector fits as tuples) with
+# both point-source fits, one tidy row per (planet, instrument, fit). Columns: planet, instrument, fit ("naive" / "naive_redist"), A_B_fit, bias_A_B, sigma_A_B, bias_sigma, F_fit, chi2,
+# half_chi2 = chi2 / 2, and for the A_B-only fit lnB_mean = chi2 / 2, lnB_sd = sqrt(chi2) and P_lnB_gt_<x> = P(ln B > x) at cfg.n_orbits for each x of `thresholds`.
+# For "naive_redist" half_chi2 is only the LIKELIHOOD part of ln B(ext vs ps+F) (no Occam term of the F prior), so it gets no lnB columns; its z_F = sqrt(chi2_naive - chi2) is the
+# significance of the spurious F. Rows without a noise level (MIRI imaging for most planets) keep the fitted values and NaN in everything that needs the noise.
+def evidence_table(cfg, planets, instruments, A_B_true, thresholds=(2.5, 5.), bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
+    parts = []
+    for pl in planet_list(planets):
+        tab = instrument_retrievals(cfg, pl, instruments, A_B_true, bounds=bounds, F_bounds=F_bounds, n_jobs=n_jobs, **kw)
+        with contextlib.redirect_stdout(io.StringIO()):   # the same notes as the first call
+            tab_J = instrument_retrievals(cfg, pl, instruments, A_B_true, redist=True, sigma_1min=tab.attrs["sigma_1min"], bounds=bounds, F_bounds=F_bounds, n_jobs=n_jobs, **kw)
+        tab_J["z_F"] = np.sqrt(np.clip(tab["chi2"].to_numpy() - tab_J["chi2"].to_numpy(), 0., None))   # same rows in the same order: both tables come from the same instruments and noise levels
+        for model, t in (("naive", tab), ("naive_redist", tab_J)):
+            t = t.copy(); t.insert(0, "fit", model); t.insert(0, "planet", pl.name)
+            parts.append(t)
+    out = pd.concat(parts, ignore_index=True)
+    out["half_chi2"] = 0.5 * out["chi2"]
+    ps = out["fit"] == "naive"
+    out["lnB_mean"], out["lnB_sd"] = np.where(ps, 0.5 * out["chi2"], np.nan), np.where(ps, np.sqrt(out["chi2"]), np.nan)
+    for x in thresholds: out[f"P_lnB_gt_{x:g}"] = np.where(ps, evidence_probability(out["chi2"], x), np.nan)
+    out.attrs.update(A_B_true=A_B_true, n_orbits=cfg.n_orbits, thresholds=tuple(thresholds))
+    return out[["planet", "instrument", "fit", "sigma_1min", "A_B_fit", "bias_A_B", "sigma_A_B", "bias_sigma", "F_fit", "z_F", "chi2", "half_chi2", "lnB_mean", "lnB_sd"] + [f"P_lnB_gt_{x:g}" for x in thresholds] + ["verdict"]]
+
+
+# Per-bin evidence figure: one column per detector of every entry of `cases` ({label: FittingConfig or detector set}, e.g. MIRI/LRS next to the joint NIRSpec fit). Top: the residual
+# truth - fitted point-source model (baseline removed) unbinned and per bin, against +- sigma_bin. Bottom: r_perp^2 per bin, which sums to chi2_min = 2 <ln B> over all bins of a fit,
+# with the transit and occultation windows shaded and the quadrature windows hatched (phase_windows). Returns fig, axes (2 x n_columns) and {label: evidence_residual} for the budgets.
+# kw: the model_pcurve keywords of truth and fit.
+def plot_evidence_bins(cases, A_B_true, quad_half=0.1, title=None, figsize=None, **kw):
+    evs, cols = {}, []
+    for label, cfg in cases.items():
+        cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
+        truths = [model_pcurve(c, "hyperillum", A_B_true, **kw) for c in cfgs]
+        ev = evidence_residual(cfg, [y for _, y in truths] if is_detector_set(cfg) else truths[0][1], **kw)
+        evs[label] = ev
+        for c, (t_, y), blk in zip(cfgs, truths, ev["blocks"]):
+            fit = model_pcurve(c, "naive", ev["A_B_fit"], **kw)[1]
+            cols.append((label, c, ev, blk, t_ / c.planet.period, y - fit - (y - fit).mean()))   # the mean of the unbinned residual is the baseline free_offset removes (bins of equal size)
+    fig, axes = plt.subplots(2, len(cols), figsize=figsize or (5.6 * len(cols), 6.6), sharex=True, sharey="row", squeeze=False, gridspec_kw=dict(height_ratios=[1.25, 1.]))
+    for k, (label, c, ev, blk, ph_hi, r_hi) in enumerate(cols):
+        ax, axb = axes[:, k]
+        ph, r, r2, sb = ev["phase"][blk], ev["resid"][blk], ev["r_perp"][blk] ** 2, c.sigma_bin
+        win = phase_windows(c.planet, ph, c.n_bins, quad_half)
+        h_ecl = eclipse_half_phase(c.planet)
+        for a_ in (ax, axb):
+            for p0, col in ((0., "#e3e2dc"), (1., "#e3e2dc"), (0.5, "#f3d9cc")):   # transit (grey, at both ends of the orbit) and occultation (light orange)
+                a_.axvspan(p0 - h_ecl, p0 + h_ecl, color=col, lw=0, zorder=0)
+            for p0 in (0.25, 0.75): a_.axvspan(p0 - quad_half, p0 + quad_half, facecolor="none", edgecolor="#d9d8d1", hatch="///", lw=0, zorder=0)
+            a_.grid(False); a_.set_xlim(0., 1.)
+        ax.axhspan(-sb, sb, color=INK_2, alpha=0.10, lw=0, zorder=1, label=rf"$\pm\sigma_{{\rm bin}}$")
+        ax.axhline(0., color=AXIS, lw=.8, zorder=1)
+        ax.plot(ph_hi, r_hi, color=C_HI, lw=1.2, zorder=3, label="truth $-$ fitted point source")
+        ax.plot(ph, r, "o", ms=4, color=INK, zorder=4, label="per bin")
+        ax.set_title(f"{instrument_label(_band_of(c), oneline=True)}" + (f"\n{label}" if label else "") + rf"  ($\sigma_{{\rm bin}}$ = {sb:.1f} ppm)", fontsize=10)
+        axb.bar(ph, r2, width=0.8 / c.n_bins, color=C_HI, zorder=3)
+        share = {name: 100. * r2[m].sum() / ev["chi2"] for name, m in win.items()}
+        axb.text(0.5, 0.97, rf"$\Sigma$ = {r2.sum():.2f} of $\chi^2_{{\min}}$ = {ev['chi2']:.2f}" + "\n" + ", ".join(f"{n} {v:.0f} %" for n, v in share.items()), transform=axb.transAxes, ha="center", va="top", fontsize=8,
+                 bbox=dict(facecolor="#fcfcfb", edgecolor="none", alpha=0.85, pad=1.5), zorder=5)
+        axb.set_xlabel("orbital phase (0 = transit)")
+    axes[0, 0].set_ylabel("residual [ppm]"); axes[1, 0].set_ylabel(r"$r_\perp^2$ per bin  (sums to $2\,\langle\ln B\rangle$)")
+    axes[0, 0].legend(fontsize=8, loc="lower left")
+    axes[1, 0].set_ylim(0., 1.45 * max(float((ev["r_perp"] ** 2).max()) for ev in evs.values()))   # head room for the budget text
+    c0 = cols[0][1]
+    fig.suptitle(title or rf"{c0.planet.name}: where the expected evidence arises ($A_B$ = {A_B_true:.2f}, {c0.n_orbits} orbits, {c0.n_bins} bins)", y=0.995)
+    fig.tight_layout()
+    return fig, axes, evs
+
+
+# The FILTER_LAMBDA_UM key of a FittingConfig's band (matched on its throughput file), for labels; the file name itself where no key matches.
+def _band_of(cfg):
+    from HItargets_utils import FILTER_FILES
+    import os
+    name = os.path.basename(str(cfg.filter_path))
+    return next((k for k, f in FILTER_FILES.items() if f == name), name)
