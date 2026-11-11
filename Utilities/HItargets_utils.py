@@ -767,21 +767,24 @@ def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
     return value
 
 
-# sigma_1min [ppm] for a whole sample of archive planets on ONE instrument: rms_1min per target, keyed by PlanetParams.name.
+# sigma_1min [ppm] for a whole sample of archive planets on ONE instrument: rms_1min per target, keyed by PlanetParams.name. For a joint fit (the detector tuple or a JOINT_INSTRUMENTS
+# alias) the value per planet is {detector: ppm/min}, the form planet_bias_table takes for a detector set.
 # Served from the PandExo cache where possible; only a planet's first run on a PandExo mode takes seconds. A target the archive cannot supply (no T14, no magnitude) or that PandExo
 # fails on raises (KeyError / ValueError from pandexo_params, or PandExo's own error) rather than yielding NaN: a NaN sigma_1min would silently corrupt the fits downstream (planet_bias_table).
-# Only planets with no noise level at all (instrument without a PandExo mode and no CUSTOM_SIGMA_1MIN entry) are left out of the dict, with a note (possibly all of them: then {}).
-# planet_bias_table fits them without a noise level (no Fisher sigma); the false-positive tables, which need one, leave them out.
+# Only planets with no noise level at all (instrument without a PandExo mode and no CUSTOM_SIGMA_1MIN entry; for a joint fit: on any of its detectors, since the fit weights them by their
+# noise) are left out of the dict, with a note (possibly all of them: then {}). planet_bias_table fits them without a noise level (no Fisher sigma); the false-positive tables, which need one, leave them out.
 def rms_1min_pandexo_sample(names, instrument, verbose=False, **overrides):
+    dets = resolve_instrument(instrument)
+    joint = not isinstance(dets, str)
     out, missing = {}, []
     for nm in names:
         pl = hi_planets_by_name(nm)
         try:
-            out[pl.name] = rms_1min(pl, instrument, verbose=verbose, **overrides)
+            out[pl.name] = {d: rms_1min(pl, d, verbose=verbose, **overrides) for d in dets} if joint else rms_1min(pl, dets, verbose=verbose, **overrides)
         except NoNoiseLevelError:
             missing.append(pl.name)
     if missing:
-        print(f"no noise level on {instrument} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry) for {len(missing)} of {len(missing) + len(out)} planets: {', '.join(missing)}")
+        print(f"no noise level on {joint_name(dets) if joint else dets} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry) for {len(missing)} of {len(missing) + len(out)} planets: {', '.join(missing)}")
     return out
 
 

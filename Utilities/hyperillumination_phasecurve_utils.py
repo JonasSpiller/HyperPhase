@@ -575,9 +575,9 @@ class FittingConfig:
     """Fixed physical + instrument context for the bias analysis."""
     planet: object          # PlanetParams for the reference system (e.g. K2-141b); single source of
                             # truth for geometry (r1, r2, R, a_AU), orbit (period, incl, ecc, w) and the star (T2_eff, logg, feh)
-    filter_path: str        # SPIDERMAN throughput file
-    l1: float               # filter blue edge [m]
-    l2: float               # filter red edge [m]
+    filter_path: str = None   # SPIDERMAN throughput file. Left out (with l1, l2) it is a band-less template, which simple_bias_analysis.instrument_cfg completes with the band(s) of an instrument
+    l1: float = np.nan      # filter blue edge [m]
+    l2: float = np.nan      # filter red edge [m]
     A_: object = ConstantBandAlbedo()   # band-integrated albedo A as a function of the Bond albedo A_B (only needed when reflected=True)
     emissivity_B: float = DEFAULT_EMISSIVITY_B   # bolometric emissivity: sets the temperature map with A_B (exactly degenerate with it)
     emissivity: float = DEFAULT_EMISSIVITY       # band-integrated emissivity: scales the thermal planet flux
