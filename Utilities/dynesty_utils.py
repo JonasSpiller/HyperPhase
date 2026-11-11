@@ -12,12 +12,12 @@ from datetime import datetime
 import dynesty
 from dynesty.pool import Pool
 from joblib import Parallel, delayed
-import contextlib
+import contextlib, io
 from hyperillumination_phasecurve_utils import DEFAULT_N_LO, DEFAULT_N_LA, model_pcurve, reflected_unit, insolation_cache, pcurve_params, occultation_depth, custom_temperature_grid, swept_planet, stellar_spidergrid, FittingConfig, ConstantBandAlbedo  # forward model, its geometry-only caches, and the pieces the derived quantities need
 import astro_utils   # T_bright
 from dynesty import utils as dyfunc
 from scipy.ndimage import gaussian_filter
-from simple_bias_analysis import binned, fit_naive, fit_redist, fisher_sigma, measurability, temperature_bias, is_detector_set   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth compares the sampler with
+from simple_bias_analysis import binned, fit_naive, fit_AB_only, fit_redist, fisher_sigma, measurability, temperature_bias, is_detector_set, evidence_residual, pmap   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth and the series table compare the sampler with
 from hyperillumination_utils import surface_temperature   # the nightside temperature a fitted F implies
 from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS, DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS, resolve_instrument, joint_name   # the parameter ranges: priors (physical) and the least-squares fit range of A_B; the baseline settings and instrument spellings of the dataset tags
 from scipy.stats import norm, truncnorm
@@ -826,7 +826,10 @@ DATASET_TAG = "{planet}_{instrument}_{A_label}_AB{A_B:g}_nbins{n_bins}_norbits{n
 _RESULT_FILE_RE = re.compile(r"^(?P<planet>[^_]+)_(?P<instrument>.+?)_(?P<A_label>(?:fixed|scaled)A[\d.]+)_AB(?P<A_B>[\d.]+)_nbins(?P<n_bins>\d+)_norbits(?P<n_orbits>\d+)"
                              r"_rms1min(?P<rms>[\d.+]+)_sigmascale(?P<sigma_scaling>[\d.]+)_seed(?P<seed>\d+)_pfrac(?P<pfrac>[\d.]+)"
                              r"_(?P<insolation_model>hyperillum|naive_redist|naive)_priors-(?P<priors>.+)\.pkl$")
-DATASET_COLUMNS = ["planet", "instrument", "A_B", "n_bins", "n_orbits", "seed", "pfrac", "sigma_scaling", "A_label", "rms", "models", "tag"]
+DATASET_COLUMNS = ["planet", "instrument", "A_B", "n_bins", "n_orbits", "seed", "pfrac", "sigma_scaling", "A_label", "rms", "models", "subfolder", "tag"]
+# Runs whose difference from the baseline is NOT in the tag sit in a subfolder of the results folder: the truth model ("null_test": data drawn from the point-source model) and the
+# sampled geometry ("free_geometry": a/R* and Rp/R* free in every model). A dataset entry names it with the keyword subfolder= (find_dataset, check_datasets); list_datasets lists the
+# main folder and every subfolder. run_kind reads the same two properties from the pickles themselves.
 
 
 def _planet_name(planet):
@@ -863,40 +866,45 @@ def parse_result_file(path):
 
 
 def list_datasets(results_dir):
-    """Every dataset in `results_dir` as a DataFrame, one row per tag (DATASET_COLUMNS: the settings, the noise levels 'rms' per detector, the insolation models sampled, the
-    tag) - the menu of find_dataset. Files that are not result files are ignored."""
+    """Every dataset in `results_dir` and its subfolders as a DataFrame, one row per folder and tag (DATASET_COLUMNS: the settings, the noise levels 'rms' per detector, the
+    insolation models sampled, the subfolder - '' for the main folder - and the tag) - the menu of find_dataset. Files that are not result files are ignored."""
     rows = {}
-    for f in sorted(glob.glob(os.path.join(results_dir, "*.pkl"))):
+    for f in sorted(glob.glob(os.path.join(results_dir, "*.pkl")) + glob.glob(os.path.join(results_dir, "*", "*.pkl"))):
         d = parse_result_file(f)
         if d is None: continue
-        rows.setdefault(d["tag"], {**{k: d[k] for k in DATASET_COLUMNS if k != "models"}, "models": []})["models"].append(d["insolation_model"])
+        sub = os.path.relpath(os.path.dirname(f), results_dir)
+        d["subfolder"] = "" if sub == "." else sub
+        rows.setdefault((d["subfolder"], d["tag"]), {**{k: d[k] for k in DATASET_COLUMNS if k != "models"}, "models": []})["models"].append(d["insolation_model"])
     df = pd.DataFrame(list(rows.values()), columns=DATASET_COLUMNS)
     df["models"] = [", ".join(m) for m in df["models"]]
-    return df.sort_values(["planet", "instrument", "A_label", "A_B", "n_bins", "n_orbits", "sigma_scaling", "seed", "pfrac"], ignore_index=True)
+    return df.sort_values(["subfolder", "planet", "instrument", "A_label", "A_B", "n_bins", "n_orbits", "sigma_scaling", "seed", "pfrac"], ignore_index=True)
 
 
-def find_dataset(results_dir, planet, instrument, **settings):
-    """The tag of the ONE stored dataset of `planet` and `instrument` with these settings (dataset_tag's keywords; unset ones are the baseline), whatever noise levels the
-    run had - what plot_dynesty.ipynb globs on. Raises when none or several match, listing what `results_dir` holds for the planet."""
+def find_dataset(results_dir, planet, instrument, subfolder=None, **settings):
+    """The ONE stored dataset of `planet` and `instrument` with these settings (dataset_tag's keywords; unset ones are the baseline), whatever noise levels the run had, as the
+    stem plot_dynesty.ipynb globs on: its tag, or 'subfolder/tag' for a run in a subfolder of `results_dir` (subfolder='null_test', 'free_geometry'), so that
+    f"{results_dir}/{stem}_*.pkl" finds its files either way. Raises when none or several match, listing what `results_dir` holds for the planet."""
     pattern = dataset_tag(planet, instrument, None, **settings)
-    parsed = [parse_result_file(f) for f in glob.glob(os.path.join(results_dir, pattern + "_*.pkl"))]
+    folder = os.path.join(results_dir, subfolder) if subfolder else results_dir
+    parsed = [parse_result_file(f) for f in glob.glob(os.path.join(folder, pattern + "_*.pkl"))]
     tags = sorted({d["tag"] for d in parsed if d})
-    if len(tags) == 1: return tags[0]
+    if len(tags) == 1: return os.path.join(subfolder, tags[0]) if subfolder else tags[0]
     have = list_datasets(results_dir)
     have = have[have.planet == _planet_name(planet)].drop(columns="tag")
-    msg = (f"{len(tags) or 'no'} dataset(s) in {results_dir} match {pattern}" + ("".join("\n   " + t for t in tags)) +
+    msg = (f"{len(tags) or 'no'} dataset(s) in {folder} match {pattern}" + ("".join("\n   " + t for t in tags)) +
            f"\n{results_dir} holds for {_planet_name(planet)}:\n" + (have.to_string(index=False) if len(have) else "   (nothing)"))
     raise (ValueError if tags else FileNotFoundError)(msg)
 
 
 def check_datasets(results_dir, datasets):
-    """Keep a notebook's list of datasets, {key: the keywords of find_dataset}, and `results_dir` in step: prints the entries that have no run and the runs that are not on
-    the list, and returns {key: tag} of the entries found. An entry matching several runs raises (find_dataset)."""
+    """Keep a notebook's list of datasets, {key: the keywords of find_dataset}, and `results_dir` (with its subfolders) in step: prints the entries that have no run and the
+    runs that are not on the list, and returns {key: stem} of the entries found (find_dataset's return). An entry matching several runs raises (find_dataset)."""
     found = {}
     for key, kw in datasets.items():
         try: found[key] = find_dataset(results_dir, **kw)
         except FileNotFoundError: print(f"no run for {key!r}")
-    for tag in sorted(set(list_datasets(results_dir).tag) - set(found.values())): print(f"run not listed: {tag}")
+    have = list_datasets(results_dir)
+    for stem in sorted({os.path.join(sub, tag) if sub else tag for sub, tag in zip(have.subfolder, have.tag)} - set(found.values())): print(f"run not listed: {stem}")
     return found
 
 
@@ -1262,6 +1270,47 @@ def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=
     return fig, axes
 
 
+def noiseless_reference(cfg, data, models, A_B_true=None, insolation_truth=None, A_B_bounds=A_B_FIT_BOUNDS, xatol=None, truth_kw=None):
+    """The noiseless counterpart of a simulated dataset: the truth curve simulate_data drew the data from, re-evaluated at the truth's own resolution (truth_model_kw), and the
+    misspecified `models` fitted to it with the least-squares fits of the bias analysis, offset free (fit_AB_only for a one-parameter model: "naive" against a hyperillumination
+    truth, "hyperillum" against a point-source truth; fit_redist, jointly in (A_B, F), for "naive_redist"; for a detector set the joint fit with one baseline per detector).
+    Deterministic: no seed, no noise. Shared by plot_noisy_vs_truth and the series table (evidence_reference).
+
+    A_B_true / insolation_truth default to what simulate_data recorded in data["truth"]; xatol=None keeps the fitters' own tolerances, so the numbers are those of the bias analysis.
+    Returns dict(t_hi, y_hi [one unbinned curve per detector], y_true [binned, with the injected baseline, per detector], s_bin [per detector], fit_cfg, fit_truth [what the
+    bias-analysis fitters take], truth_kw [model_pcurve keywords of the truth, without F], F_truth, off_inj, insols {model: insolation cache at the truth's resolution or None},
+    noiseless {model: dict(A_B, F, chi2, rms)})."""
+    cfgs = detector_cfgs(cfg)
+    cfg0, joint = cfgs[0], len(cfgs) > 1
+    tr = dict(data.get("truth") or {})
+    A_B_true = tr["A_B"] if A_B_true is None else A_B_true
+    insolation_truth = tr.get("insolation_model", "hyperillum") if insolation_truth is None else insolation_truth
+    truth_kw = truth_model_kw(data, cfg0) if truth_kw is None else dict(truth_kw)
+    F_truth = truth_kw.pop("F", None)                                 # only a "naive_redist" truth has one
+    off_inj = float(tr.get("offset", 0.))                             # the injected baseline, if any
+    fit_kw = {} if xatol is None else dict(xatol=xatol)
+
+    # --- the noiseless reference per detector: exactly the curves simulate_data drew the data from -------------
+    hi = [model_pcurve(c, insolation_truth, A_B_true, F=F_truth, **truth_kw) for c in cfgs]
+    t_hi, y_hi = hi[0][0], [y for _, y in hi]
+    y_true = [binned(c, y) + off_inj for c, y in zip(cfgs, y_hi)]                 # the noiseless data
+    fit_cfg, fit_truth = (tuple(cfgs), y_hi) if joint else (cfg0, y_hi[0])        # what the bias-analysis fitters take: a detector set with one truth per detector
+
+    # --- the misspecified models fitted to the NOISELESS truth: the deterministic bias, no seed involved (the fits of the bias analysis, at the truth's resolution) ---
+    noiseless, insols = {}, {}
+    for m in models:
+        if m == "naive_redist":
+            insols[m] = None                                               # the Louden model has no map to cache
+            A0, F0, chi2_0, rms0 = fit_redist(fit_cfg, fit_truth, free_offset=True, bounds=A_B_bounds, F_bounds=F_BOUNDS, **({} if xatol is None else dict(xatol=xatol, F_xatol=xatol)), **truth_kw)
+            noiseless[m] = dict(A_B=float(A0), F=float(F0), chi2=float(chi2_0), rms=float(rms0))
+        else:
+            insols[m] = insolation_cache(cfg0, m, n_lo=truth_kw.get("n_lo", DEFAULT_N_LO), n_la=truth_kw.get("n_la", DEFAULT_N_LA))   # A_B only rescales the map (geometry-only, so one for all detectors)
+            A0, chi2_0, rms0 = fit_AB_only(fit_cfg, fit_truth, m, free_offset=True, bounds=A_B_bounds, insol=insols[m], **fit_kw, **truth_kw)
+            noiseless[m] = dict(A_B=float(A0), F=None, chi2=float(chi2_0), rms=float(rms0))
+    return dict(t_hi=t_hi, y_hi=y_hi, y_true=y_true, s_bin=[c.sigma_bin for c in cfgs], fit_cfg=fit_cfg, fit_truth=fit_truth, truth_kw=truth_kw, F_truth=F_truth, off_inj=off_inj,
+                insols=insols, noiseless=noiseless)
+
+
 def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth="hyperillum",
                         A_B_bounds=A_B_FIT_BOUNDS, xatol=None, truth_kw=None, fisher=True, colors=None, figsize=None, verbose=False):
     """The one-seed fits against the noiseless truth: what you would report vs. what the bias actually is. One column per detector for a joint fit.
@@ -1294,31 +1343,13 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     n_det, cfg0, joint = len(cfgs), detector_cfgs(cfg)[0], len(detector_cfgs(cfg)) > 1
     L0 = next(iter(logls.values()))
     labels = list(getattr(L0, "labels", None) or [None] * n_det)
-    tr = dict(data.get("truth") or {})
-    truth_kw = truth_model_kw(data, cfg0) if truth_kw is None else dict(truth_kw)
-    F_truth = truth_kw.pop("F", None)                                 # only a "naive_redist" truth has one
-    off_inj = float(tr.get("offset", 0.))                             # the injected baseline, if any
-    fit_kw = {} if xatol is None else dict(xatol=xatol)
     blocks = _blocks([c.n_bins for c in cfgs])
 
-    # --- the noiseless reference per detector: exactly the curves simulate_data drew the data from -------------
-    hi = [model_pcurve(c, insolation_truth, A_B_true, F=F_truth, **truth_kw) for c in cfgs]
-    t_hi, y_hi = hi[0][0], [y for _, y in hi]
-    y_true = [binned(c, y) + off_inj for c, y in zip(cfgs, y_hi)]                 # the noiseless data
-    s_bin = [c.sigma_bin for c in cfgs]
+    # --- the noiseless reference (the truth curves at their own resolution) and the misspecified models fitted to it: the deterministic bias, no seed involved ---
+    ref = noiseless_reference(cfg, data, [m for m in ("naive", "naive_redist") if m in fits], A_B_true=A_B_true, insolation_truth=insolation_truth, A_B_bounds=A_B_bounds, xatol=xatol, truth_kw=truth_kw)
+    t_hi, y_hi, y_true, s_bin, fit_cfg, fit_truth = (ref[k] for k in ("t_hi", "y_hi", "y_true", "s_bin", "fit_cfg", "fit_truth"))
+    truth_kw, F_truth, off_inj, insols, noiseless = (ref[k] for k in ("truth_kw", "F_truth", "off_inj", "insols", "noiseless"))
     y_true_all, sig_all = np.concatenate(y_true), np.concatenate([np.full(c.n_bins, sb) for c, sb in zip(cfgs, s_bin)])
-    fit_cfg, fit_truth = (tuple(cfgs), y_hi) if joint else (cfg0, y_hi[0])        # what the bias-analysis fitters take: a detector set with one truth per detector
-
-    # --- the misspecified models fitted to the NOISELESS truth: the deterministic bias, no seed involved (the fits of the bias analysis, at the truth's resolution) ---
-    noiseless, insols = {}, {}
-    if "naive" in fits:
-        insols["naive"] = insolation_cache(cfg0, "naive", n_lo=truth_kw.get("n_lo", DEFAULT_N_LO), n_la=truth_kw.get("n_la", DEFAULT_N_LA))   # A_B only rescales the map (geometry-only, so one for all detectors)
-        A0, chi2_0, rms0 = fit_naive(fit_cfg, fit_truth, free_offset=True, bounds=A_B_bounds, insol=insols["naive"], **fit_kw, **truth_kw)
-        noiseless["naive"] = dict(A_B=float(A0), F=None, chi2=float(chi2_0), rms=float(rms0))
-    if "naive_redist" in fits:
-        insols["naive_redist"] = None                                      # the Louden model has no map to cache
-        A0, F0, chi2_0, rms0 = fit_redist(fit_cfg, fit_truth, free_offset=True, bounds=A_B_bounds, F_bounds=F_BOUNDS, **({} if xatol is None else dict(xatol=xatol, F_xatol=xatol)), **truth_kw)
-        noiseless["naive_redist"] = dict(A_B=float(A0), F=float(F0), chi2=float(chi2_0), rms=float(rms0))
     for m, d in noiseless.items():
         ys, offs = [], []
         for c, yt in zip(cfgs, y_true):   # each detector's own baseline, as free_offset absorbed it
@@ -1431,3 +1462,184 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     return (fig, (axes[0, 0], axes[1, 0]), out) if n_det == 1 else (fig, axes, out)
 
 
+###########################################################################################################################
+#####
+#####   Retrievals against the linear prediction of the Bayes factor (dynesty_series.ipynb)
+#####
+###########################################################################################################################
+
+# The prediction (simple_bias_analysis, "Expected evidence"): for two models with the same parameters and priors, ln B(true vs alt) = chi2_min / 2 + zeta sqrt(chi2_min), with chi2_min
+# and r_perp from the NOISELESS A_B-only fit of the misspecified model `alt` to the truth and zeta = r_perp_hat . z. In a simulation the standardised noise z = (y_obs - y_true) / sigma
+# is known exactly, so every stored run has a prediction of its own, without sampling. Only for extended source vs point source; Bayes factors against the fit with redistribution carry
+# the Occam term of the F prior and are reported as measured.
+
+
+def run_kind(fits):
+    """What a stored run is beyond its tag, read from the pickles themselves: "null_test" (the data were drawn from the point-source model), "free_geometry" (a/R*, Rp/R* or T_s
+    sampled) or "" (the usual run: hyperillumination truth, fixed geometry). The subfolder a run sits in must say the same (series_table checks it)."""
+    f = next(iter(fits.values()))
+    if f.meta["data"]["truth"]["insolation_model"] != "hyperillum": return "null_test"
+    if any(n in f.pset.names for n in _GEOMETRY): return "free_geometry"
+    return ""
+
+
+def alternative_model(fits):
+    """(truth model, misspecified one-parameter model) of a run: the point-source model for a hyperillumination truth, the extended-source model for a point-source truth (null test)."""
+    true_m = next(iter(fits.values())).meta["data"]["truth"]["insolation_model"]
+    return true_m, ("naive" if true_m == "hyperillum" else "hyperillum")
+
+
+def evidence_reference(fits, fisher=True, floor=True, A_B_bounds=A_B_FIT_BOUNDS):
+    """The seed-independent half of run_prediction, for the configuration of a stored run {model: NestedFit}: the noiseless truth regenerated at its own resolution
+    (noiseless_reference), the misspecified model (alternative_model) fitted to it with FIXED geometry, its whitened residual r_perp (simple_bias_analysis.evidence_residual) and
+    its Fisher sigma_A_B, all at the truth's resolution. floor: also the numerical floor, chi2 of the truth's own model at the injected parameters on the likelihood's coarser grid
+    against the truth curve (model resolution, not model bias). Runs that differ only in seed and pfrac share it.
+    Returns dict(alt, A_B_true, A_B_fit, bias_A_B, chi2, r_perp, y_true [concatenated], sigma_fisher, chi2_floor)."""
+    true_m, alt = alternative_model(fits)
+    f = fits[alt]
+    cfg, data = f.meta["cfg"], f.meta["data"]
+    ref = noiseless_reference(cfg, data, [alt], A_B_bounds=A_B_bounds)
+    nl = ref["noiseless"][alt]
+    ev = evidence_residual(ref["fit_cfg"], ref["fit_truth"], alt, A_B_fit=nl["A_B"], insol=ref["insols"][alt], **ref["truth_kw"])
+    if not np.isclose(ev["chi2"], nl["chi2"], rtol=1e-9): raise ValueError(f"the residual's chi2 {ev['chi2']} is not the fit's {nl['chi2']}")
+    y_true = np.concatenate(ref["y_true"])
+    out = dict(alt=alt, A_B_true=float(data["truth"]["A_B"]), A_B_fit=nl["A_B"], bias_A_B=nl["A_B"] - float(data["truth"]["A_B"]), chi2=nl["chi2"], r_perp=ev["r_perp"], y_true=y_true,
+               sigma_fisher=float(fisher_sigma(ref["fit_cfg"], alt, nl["A_B"], bounds=A_B_bounds, insol=ref["insols"][alt], **ref["truth_kw"])[0]) if fisher else np.nan, chi2_floor=np.nan)
+    if floor and true_m in fits:
+        L = logl_from_fit(fits[true_m])   # warns (stderr) if the forward model changed since the run; run_prediction also records it per run (grid_change)
+        pl = detector_cfgs(cfg)[0].planet
+        base = dict(A_B=data["truth"]["A_B"], F=data["truth"].get("F") or 0., a_rs=pl.R / pl.r2, rp_rs=pl.r1 / pl.r2, T_s=pl.T2_eff, **{n: data["truth"]["offset"] for n in L.names if n.startswith("offset")})
+        out["chi2_floor"] = float(np.sum(((L.model(theta_of(L, base)) - y_true) / np.asarray(data["sigma"], float)) ** 2))
+    return out
+
+
+def run_prediction(fits, ref=None, K=200, seed=0, z_tol=1e-6):
+    """One stored run {model: NestedFit} against the linear prediction of its Bayes factor, as a row (dict).
+
+    ref   : evidence_reference(fits) (computed here if None; pass it to share it between the seeds of one configuration, or to replace chi2 / r_perp by a prediction with
+            nuisance parameters, e.g. for the free-geometry runs).
+    K     : jittered realisations for the sampler error of ln B (bayes_factor); 0 skips it.
+    z_tol : the standardised noise z = (y_obs - regenerated truth) / sigma must reproduce the draws of default_rng(seed) to this absolute tolerance - which checks the regenerated
+            truth against the one the data were drawn from (a forward model changed since the run fails here).
+    Columns: grid_change (check_fit_current: 0 unless the stellar grid changed since the run, i.e. the pickle is stale), chi2_min, lnB_expected = chi2_min / 2, lnB_sd = sqrt(chi2_min), zeta = r_perp_hat . z (direct), lnB_pred = chi2_min / 2 + zeta sqrt(chi2_min); lnB (measured, truth's
+    model vs the misspecified one), lnB_err (analytic), lnB_err_jitter, dlnL_max and zeta_inferred = (2 dlnL_max - chi2_min) / (2 sqrt(chi2_min)), dH (information, truth - alt);
+    A_B medians of both models, dA_median = alt - truth's model (the paired difference: the noise largely cancels) against dA_noiseless (the noiseless bias); sigma_post (half the
+    16-84 % width of A_B under alt) against sigma_fisher. lnB_ext_vs_ps is ln B in the fixed orientation extended source vs point source (= -lnB for a null test). With a
+    "naive_redist" fit: lnB_vs_redist (truth's model vs ps+F), lnB_redist_vs_ps, F_med, F_sigma (half width), F_95 (upper limit) - measured only, no prediction."""
+    true_m, alt = alternative_model(fits)
+    if alt not in fits or true_m not in fits: raise KeyError(f"the run has {tuple(fits)}; the prediction needs {true_m!r} and {alt!r}")
+    if ref is None: ref = evidence_reference(fits)
+    f_t, f_a = fits[true_m], fits[alt]
+    data = f_a.meta["data"]
+    tr = data["truth"]
+    c0 = detector_cfgs(f_a.meta["cfg"])[0]
+
+    z = (np.asarray(data["y_obs"], float) - ref["y_true"]) / np.asarray(data["sigma"], float)
+    z_dev = float(np.max(np.abs(z - np.random.default_rng(tr["seed"]).normal(0., 1., z.size))))   # one stream across the detectors of a joint dataset
+    if z_dev > z_tol: raise ValueError(f"the regenerated truth does not reproduce the data of seed {tr['seed']}: max |z - z_rng| = {z_dev:.3g} (forward model changed since the run?)")
+    chi2, r = ref["chi2"], ref["r_perp"]
+    with contextlib.redirect_stderr(io.StringIO()): grid_change = max(check_fit_current(f) for f in (f_t, f_a))   # recorded in the row instead of printed from a worker
+    zeta = float(r @ z / np.sqrt(r @ r))
+    dlnL = float(np.max(f_t.results.logl) - np.max(f_a.results.logl))
+    lnB = f_t.meta["lnZ"] - f_a.meta["lnZ"]
+    sign = 1. if true_m == "hyperillum" else -1.
+    s_t, s_a = (posterior_summary(f, verbose=False)["params"]["A_B"] for f in (f_t, f_a))
+    row = dict(planet=c0.planet.name, instrument=joint_name([_band_key(c) for c in detector_cfgs(f_a.meta["cfg"])]) if is_detector_set(f_a.meta["cfg"]) else _band_key(c0),
+               kind=run_kind(fits), truth=true_m, alt=alt, A_B_true=float(tr["A_B"]), n_bins=c0.n_bins, n_orbits=c0.n_orbits, seed=int(tr["seed"]), pfrac=float(f_a.scfg.pfrac),
+               converged=bool(f_t.meta.get("converged", True) and f_a.meta.get("converged", True)), z_dev=z_dev, grid_change=float(grid_change),
+               chi2_min=float(chi2), chi2_floor=float(ref.get("chi2_floor", np.nan)), lnB_expected=float(0.5 * chi2), lnB_sd=float(np.sqrt(chi2)), zeta=zeta, lnB_pred=float(0.5 * chi2 + zeta * np.sqrt(chi2)),
+               lnB=float(lnB), lnB_err=float(np.hypot(f_t.meta["lnZ_err"], f_a.meta["lnZ_err"])), lnB_err_jitter=np.nan,
+               dlnL_max=dlnL, zeta_inferred=float((2. * dlnL - chi2) / (2. * np.sqrt(chi2))), dH=float(f_t.meta["information"] - f_a.meta["information"]),
+               A_B_med_truth=s_t["med"], A_B_med_alt=s_a["med"], dA_median=s_a["med"] - s_t["med"], dA_noiseless=ref["bias_A_B"],
+               sigma_post=0.5 * (s_a["hi"] - s_a["lo"]), sigma_post_truth=0.5 * (s_t["hi"] - s_t["lo"]), sigma_fisher=ref["sigma_fisher"])
+    row["lnB_ext_vs_ps"], row["lnB_pred_ext_vs_ps"] = sign * row["lnB"], sign * row["lnB_pred"]
+    if K: row["lnB_err_jitter"] = bayes_factor(fits, true_m, alt, K=K, seed=seed, verbose=False)["err_jitter"]
+    if "naive_redist" in fits:
+        f_r = fits["naive_redist"]
+        w, iF = f_r.results.importance_weights(), f_r.pset.names.index("F")
+        q16, q50, q84, q95 = dyfunc.quantile(f_r.results.samples[:, iF], [0.16, 0.5, 0.84, 0.95], weights=w)
+        row.update(lnB_vs_redist=float(f_t.meta["lnZ"] - f_r.meta["lnZ"]), lnB_redist_vs_ps=float(f_r.meta["lnZ"] - fits["naive"].meta["lnZ"]) if "naive" in fits else np.nan,
+                   F_med=float(q50), F_sigma=float(0.5 * (q84 - q16)), F_95=float(q95))
+    return row
+
+
+def _band_key(cfg):
+    """The FILTER_LAMBDA_UM key of a FittingConfig's band, matched on its throughput file (the file name itself where none matches)."""
+    from HItargets_utils import FILTER_FILES
+    name = os.path.basename(str(cfg.filter_path))
+    return next((k for k, v in FILTER_FILES.items() if v == name), name)
+
+
+def _reference_of(pattern):
+    return evidence_reference(load_fits(pattern))
+
+def _prediction_of(pattern, ref, K):
+    return run_prediction(load_fits(pattern), ref=ref, K=K)
+
+
+def series_table(results_dir, series, K=200, n_jobs=-1):
+    """Every stored run of `series` against its prediction (run_prediction), one row per run with its series name and dataset stem in front.
+
+    series : {series name: [find_dataset keyword dicts]} (planet, instrument, the settings that deviate from the baseline, and subfolder= for the runs in a subfolder).
+    Runs that are not there (still queued) or lack one of the two models are listed and skipped, so the table can be rebuilt as the queue finishes. A run whose pickles contradict
+    its subfolder (run_kind) raises. The noiseless reference is computed once per configuration (the runs of one planet, instrument and setting that differ only in seed and pfrac
+    share it), configurations and runs in parallel. Returns (table, missing) with missing = [(series name, keywords, reason)]."""
+    runs, missing = [], []
+    for name, entries in series.items():
+        for kw in entries:
+            try: stem = find_dataset(results_dir, **kw)
+            except FileNotFoundError: missing.append((name, kw, "no run")); continue
+            pattern = os.path.join(results_dir, stem + "_*.pkl")
+            models = sorted(d["insolation_model"] for d in map(parse_result_file, glob.glob(pattern)) if d)
+            if not {"hyperillum", "naive"} <= set(models): missing.append((name, kw, f"incomplete: only {', '.join(models)}")); continue
+            runs.append((name, kw, stem, pattern))
+    if not runs: return pd.DataFrame(), missing
+    config = lambda stem: re.sub(r"_seed\d+_pfrac[\d.]+$", "", stem)   # the tag without seed and pfrac (with its subfolder): what the noiseless reference depends on
+    first = {}
+    for _, _, stem, pattern in runs: first.setdefault(config(stem), pattern)
+    refs = dict(zip(first, pmap(_reference_of, [(p,) for p in first.values()], n_jobs)))
+    rows = pmap(_prediction_of, [(pattern, refs[config(stem)], K) for _, _, stem, pattern in runs], n_jobs)
+    for (name, kw, stem, _), row in zip(runs, rows):
+        if row["kind"] != (kw.get("subfolder") or ""): raise ValueError(f"{stem}: the pickles say {row['kind'] or 'a baseline run'!r}, the entry says subfolder={kw.get('subfolder')!r}")
+    tab = pd.DataFrame([dict(series=name, stem=stem, **row) for (name, _, stem, _), row in zip(runs, rows)])
+    return tab, missing
+
+
+def series_summary(tab):
+    """Mean and standard deviation over the runs of each series of a series_table (sd NaN for a single run): n, the measured and predicted ln B (extended source vs point source) and
+    their difference, zeta, the paired median difference against the noiseless bias, and sigma_post / sigma_fisher."""
+    t = tab.assign(dlnB=tab["lnB"] - tab["lnB_pred"], dzeta=tab["zeta"] - tab["zeta_inferred"], sigma_ratio=tab["sigma_post"] / tab["sigma_fisher"])
+    cols = dict(lnB_ext_vs_ps="lnB", lnB_pred_ext_vs_ps="lnB_pred", lnB_expected="lnB_expected", dlnB="lnB - pred", zeta="zeta", dzeta="zeta - zeta_inferred", dA_median="dA_median", dA_noiseless="dA_noiseless", sigma_ratio="sigma_post/sigma_F")
+    g = t.groupby("series", sort=False)
+    out = pd.DataFrame({"n": g.size(), "seeds": g["seed"].agg(lambda s: ",".join(str(v) for v in sorted(set(s)))), "pfrac": g["pfrac"].agg(lambda s: "/".join(f"{v:g}" for v in sorted(set(s))))})
+    for col, name in cols.items():
+        out[name], out[name + " sd"] = g[col].mean(), g[col].std(ddof=1)
+    return out
+
+
+def plot_ns_check(tab, groups=None, figsize=(17., 5.2)):
+    """The retrievals against the noiseless predictions, three panels over the rows of a series_table: (a) the paired posterior-median difference (misspecified model minus the
+    truth's model, same data) against the noiseless bias; (b) the posterior width of A_B under the misspecified model against the Fisher sigma; (c) the measured ln B (extended
+    source vs point source) against the per-run prediction chi2_min / 2 + zeta sqrt(chi2_min), with the sampler's error (jitter where available, else analytic) as error bars.
+    Dashed: the one-to-one lines. groups: {legend label: boolean mask over tab} for the marker groups (default: one per series). Returns fig, axes."""
+    groups = groups or {name: (tab["series"] == name).to_numpy() for name in dict.fromkeys(tab["series"])}
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    mk = ("o", "s", "D", "^", "v", "P", "X", "<", ">", "*", "h", "p")
+    panels = [("dA_noiseless", "dA_median", r"noiseless bias $\Delta A_B$", r"paired median difference $\tilde A_B^{\rm alt} - \tilde A_B^{\rm true}$", "(a) bias"),
+              ("sigma_fisher", "sigma_post", r"Fisher $\sigma_{A_B}$", r"posterior $\sigma_{A_B}$ (misspecified model)", "(b) uncertainty"),
+              ("lnB_pred_ext_vs_ps", "lnB_ext_vs_ps", r"predicted $\ln B = \chi^2_{\min}/2 + \zeta\sqrt{\chi^2_{\min}}$", r"measured $\ln B$ (extended vs point source)", "(c) evidence")]
+    for ax, (xc, yc, xl, yl, ttl) in zip(axes, panels):
+        for k, (label, m) in enumerate(groups.items()):
+            t = tab[m]
+            if not len(t): continue
+            yerr = np.where(np.isfinite(t["lnB_err_jitter"]), t["lnB_err_jitter"], t["lnB_err"]) if yc == "lnB_ext_vs_ps" else None
+            ax.errorbar(t[xc], t[yc], yerr=yerr, fmt=mk[k % len(mk)], ms=6, color=f"C{k % 10}", mec="k", mew=.5, elinewidth=1., capsize=2, label=f"{label} ({len(t)})", zorder=3)
+        lo, hi = np.nanmin([tab[xc].min(), tab[yc].min()]), np.nanmax([tab[xc].max(), tab[yc].max()])
+        pad = 0.06 * (hi - lo) or 1e-3
+        ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="0.4", lw=1., ls="--", zorder=1)
+        if xc == "sigma_fisher": ax.set_xscale("log"); ax.set_yscale("log")
+        else: ax.set_xlim(lo - pad, hi + pad); ax.set_ylim(lo - pad, hi + pad)
+        ax.set_xlabel(xl); ax.set_ylabel(yl); ax.set_title(ttl, fontsize=10)
+    axes[2].legend(frameon=False, fontsize=7, loc="upper left")
+    fig.tight_layout()
+    return fig, axes
