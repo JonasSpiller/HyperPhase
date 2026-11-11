@@ -2042,7 +2042,9 @@ NUISANCE_LABELS = dict(a_rs=r"$a/R_\star$", rp_rs=r"$R_p/R_\star$", incl=r"$i$",
 
 
 # The whitened, mean-removed binned point-source model at a perturbed geometry: the building block of a geometry column. a_rs / rp_rs go to model_pcurve, incl into the planet.
+# The geometry-only caches a caller may pass (insol, refl_unit) belong to the unperturbed geometry and are dropped here.
 def _geometry_model(cfg, A_B_, param, value, kw):
+    kw = {k: v for k, v in kw.items() if k not in ("insol", "refl_unit")}
     if param == "incl":
         cfg = [replace(c, planet=replace(c.planet, incl=value)) for c in cfg] if is_detector_set(cfg) else replace(cfg, planet=replace(cfg.planet, incl=value))
     else:
@@ -2165,3 +2167,77 @@ def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, b
 def ellipsoidal_amplitude(planet, mass_ratio, u, g):
     alpha = 0.15 * (15. + u) * (1. + g) / (3. - u)
     return 1e6 * alpha * mass_ratio * (planet.r2 / planet.R) ** 3 * np.sin(np.radians(planet.incl)) ** 2
+
+
+###########################################################################################################################
+#####
+#####   One-parameter sweeps of the bias (AB_Bias.ipynb, F_AB_Bias.ipynb: inclination, u_B)
+#####
+###########################################################################################################################
+
+# A sweep changes ONE setting of the configuration and repeats the whole bias pipeline (fit_truth: truth, fits, Fisher sigmas) at every value. The setting is a transform
+# (cfg, value) -> cfg, applied to every detector of a set, so anything a FittingConfig or its planet holds can be swept without a function of its own.
+# cfg_with_incl: the orbital inclination [deg] (truth and fits; the noise level stays the planet's own). cfg_with_u_B: the bolometric limb darkening of the irradiance, which only the
+# hyperillumination truth uses (the point-source models have no u_B), so it is a sweep of the truth alone.
+def cfg_with_incl(cfg, incl):
+    return replace(cfg, planet=replace(cfg.planet, incl=float(incl)))
+
+def cfg_with_u_B(cfg, u_B):
+    return replace(cfg, u_B=float(u_B))
+
+
+def _bias_sweep_point(cfg, A_B_true, transform, value, models, bounds, F_bounds, kw):
+    c = [transform(d, value) for d in cfg] if is_detector_set(cfg) else transform(cfg, value)
+    fit = fit_truth(c, A_B_true, models=models, free_offset=True, bounds=bounds, F_bounds=F_bounds, fisher=True, **kw)
+    row = dict(value=float(value))
+    if "naive" in fit:
+        n = fit["naive"]
+        row.update(A_B_fit=n["A_B_fit"], bias=n["bias_A_B"], sigma=n["sigma_A_B"], bias_sigma=abs(n["bias_A_B"]) / n["sigma_A_B"], chi2=n["chi2"], lnB_mean=0.5 * n["chi2"], railed=fit_railed(n, bounds, F_bounds))
+    if "naive_redist" in fit:
+        j = fit["naive_redist"]
+        row.update(A_B_fit_J=j["A_B_fit"], bias_J=j["bias_A_B"], sigma_J=j["sigma_A_B"], bias_sigma_J=abs(j["bias_A_B"]) / j["sigma_A_B"], F_fit=j["F_fit"], chi2_J=j["chi2"], railed_J=fit_railed(j, bounds, F_bounds))
+        if "naive" in fit: row["z_F"] = float(np.sqrt(max(fit["naive"]["chi2"] - j["chi2"], 0.)))
+    return row
+
+
+# fit_truth (Fisher sigmas included) at every value of a one-parameter sweep, points in parallel, as a DataFrame. cfg: FittingConfig or detector set; transform: (cfg, value) -> cfg
+# (cfg_with_incl, cfg_with_u_B, or any function of that form). Columns: value; A_B_fit, bias, sigma, bias_sigma, chi2, lnB_mean = chi2 / 2, railed (A_B-only fit); A_B_fit_J, bias_J,
+# sigma_J, bias_sigma_J, F_fit, chi2_J, railed_J and z_F = sqrt(chi2 - chi2_J) (fit with redistribution; z_F needs both models), as in bias_vs_a_rs.
+def bias_sweep(cfg, A_B_true, values, transform, models=("naive", "naive_redist"), bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
+    return pd.DataFrame(pmap(_bias_sweep_point, [(cfg, A_B_true, transform, v, models, bounds, F_bounds, kw) for v in values], n_jobs))
+
+
+# A bias_sweep per mode on shared axes: sweeps = {mode label: DataFrame}. joint=False (A_B-only fit): the bias (right axis: in % of the true A_B), |bias| / sigma, and
+# <ln B> = chi2_min / 2. joint=True (the sweep was run with both models): the bias of the fit with redistribution (solid) next to the A_B-only fit (dashed), the spurious F, and
+# z_F = sqrt(dchi2_F) (solid) next to |bias| / sigma of the fit with redistribution (dashed). mark: the x value of the planet's own setting, drawn as the green star on every curve.
+def plot_bias_sweep(sweeps, A_B_true, xlabel, joint=False, mark=None, mark_label=None, title=None, figsize=(18., 5.)):
+    fig, axs = plt.subplots(1, 3, figsize=figsize)
+    colors = (C_HI, C_REDIST, INK_2, F_COLORS[0])
+    star = lambda ax, t, col, **k: ax.plot(mark, np.interp(mark, t["value"].to_numpy()[np.argsort(t["value"].to_numpy())], t[col].to_numpy()[np.argsort(t["value"].to_numpy())]), **{**TARGET, "ms": 14, **k}) if mark is not None else None
+    for (label, t), c in zip(sweeps.items(), colors):
+        b, s, sig = ("bias_J", "sigma_J", "bias_sigma_J") if joint else ("bias", "sigma", "bias_sigma")
+        axs[0].plot(t["value"], t[b], "o-", color=c, lw=1.5, ms=5, label=label + (", $A_B$ + $F$ fit" if joint else ""))
+        if joint: axs[0].plot(t["value"], t["bias"], "o--", color=c, lw=1.1, ms=4, mfc="#fcfcfb", label=label + ", $A_B$-only fit")
+        star(axs[0], t, b)
+        if joint:
+            axs[1].plot(t["value"], t["F_fit"], "o-", color=c, lw=1.5, ms=5, label=label); star(axs[1], t, "F_fit")
+            axs[2].plot(t["value"], t["z_F"], "o-", color=c, lw=1.5, ms=5, label=label + r": $z_F = \sqrt{\Delta\chi^2_F}$"); star(axs[2], t, "z_F")
+            axs[2].plot(t["value"], t[sig], "o--", color=c, lw=1.1, ms=4, mfc="#fcfcfb", label=label + r": $|\Delta A_B|/\sigma_{A_B}$")
+        else:
+            axs[1].plot(t["value"], t[sig], "o-", color=c, lw=1.5, ms=5, label=label); star(axs[1], t, sig)
+            axs[2].plot(t["value"], t["lnB_mean"], "o-", color=c, lw=1.5, ms=5, label=label); star(axs[2], t, "lnB_mean")
+    axs[0].axhline(0., color=AXIS, lw=.8)
+    axs[0].set_ylabel(r"bias $\Delta A_B = A_{B,\rm fit} - A_B$"); axs[0].set_title(r"Bias in recovered $A_B$")
+    sec = axs[0].secondary_yaxis("right", functions=(lambda v: 100. * v / A_B_true, lambda v: v * A_B_true / 100.)); sec.set_ylabel(r"[% of $A_B$]"); axs[0].spines["right"].set_visible(True)
+    if joint:
+        axs[1].set_ylabel(r"fitted $F$  (truth: $F$ = 0)"); axs[1].set_title("Spurious heat redistribution")
+        axs[2].set_ylabel(r"significance [$\sigma$]"); axs[2].set_title("Significance of the spurious $F$ and of the bias")
+    else:
+        axs[1].axhline(1., color=INK, lw=.9, ls="--")
+        axs[1].set_ylabel(r"$|\Delta A_B|\,/\,\sigma_{A_B}^{\rm Fisher}$"); axs[1].set_title("Significance of the bias")
+        axs[2].set_ylabel(r"$\langle\ln B\rangle = \chi^2_{\min}/2$"); axs[2].set_title("Expected evidence for the extended source")
+    if mark is not None: axs[0].plot([], [], label=mark_label or "the planet's own value", **{**TARGET, "ms": 14})
+    for a_ in axs: a_.set_xlabel(xlabel); a_.legend(fontsize=8)
+    if title: fig.suptitle(title, y=1.02)
+    fig.tight_layout()
+    return fig, axs
