@@ -115,12 +115,10 @@ def run_instrument(instrument):
     if missing: raise ValueError(f"no pset for model(s) {missing}; PSETS has {tuple(PSETS)}")
     logls = {m: make_logl(cfg, data, m, PSETS[m], labels=labels) for m in MODELS}
 
-    # Dynesty. `tag` is everything the models share - it is the DATASET, and it is what plot_dynesty.ipynb is pasted with.
-    # The free parameters differ per model, so "priors-..." goes LAST, after {insolation_model} (which run_nested_fit fills in):
-    # one glob on tag then picks up every model of this dataset whatever it was sampled with, while runs with different free
-    # parameters still cannot overwrite each other. A joint fit lists the noise levels of its detectors joined by "+".
-    tag = (f"{planet.name}_{name}_{A_model.label}_AB{A_B_true:g}"
-           f"_nbins{n_bins}_norbits{n_orbits}_rms1min{'+'.join(f'{s_:.1f}' for s_ in sigmas)}_sigmascale{sigma_1min_scaling:g}_seed{seed}").replace("/", "-").replace(" ", "")
+    # Dynesty. `tag` is everything the models share - it is the DATASET (dynesty_utils.DATASET_TAG), which plot_dynesty.ipynb finds again with find_dataset.
+    # The free parameters differ per model, so "priors-..." goes LAST, after {insolation_model} (which run_nested_fit fills in): one glob on tag then picks up
+    # every model of this dataset whatever it was sampled with, while runs with different free parameters still cannot overwrite each other.
+    tag = dataset_tag(planet, instrument, sigmas, A_label=A_model.label, A_B=A_B_true, n_bins=n_bins, n_orbits=n_orbits, sigma_scaling=sigma_1min_scaling, seed=seed, pfrac=sampler["pfrac"])
 
     def outfile_of(pset):
         return os.path.join(OUTDIR, tag + "_{insolation_model}" + f"_priors-{'+'.join(pset.names)}.pkl")   # {insolation_model} stays a placeholder for run_nested_fit

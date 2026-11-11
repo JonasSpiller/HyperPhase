@@ -4,20 +4,22 @@ from dataclasses import dataclass, fields
 import time
 import os
 import glob
+import re
 import pickle
+import pandas as pd
 import copy
 from datetime import datetime
 import dynesty
 from dynesty.pool import Pool
 from joblib import Parallel, delayed
 import contextlib
-from hyperillumination_phasecurve_utils import DEFAULT_N_LO, DEFAULT_N_LA, model_pcurve, reflected_unit, insolation_cache, pcurve_params, occultation_depth, custom_temperature_grid, swept_planet, stellar_spidergrid, FittingConfig  # forward model, its geometry-only caches, and the pieces the derived quantities need
+from hyperillumination_phasecurve_utils import DEFAULT_N_LO, DEFAULT_N_LA, model_pcurve, reflected_unit, insolation_cache, pcurve_params, occultation_depth, custom_temperature_grid, swept_planet, stellar_spidergrid, FittingConfig, ConstantBandAlbedo  # forward model, its geometry-only caches, and the pieces the derived quantities need
 import astro_utils   # T_bright
 from dynesty import utils as dyfunc
 from scipy.ndimage import gaussian_filter
 from simple_bias_analysis import binned, fit_naive, fit_redist, fisher_sigma, measurability, temperature_bias, is_detector_set   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth compares the sampler with
 from hyperillumination_utils import surface_temperature   # the nightside temperature a fitted F implies
-from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS   # the parameter ranges: priors (physical) and the least-squares fit range of A_B
+from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS, DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS, resolve_instrument, joint_name   # the parameter ranges: priors (physical) and the least-squares fit range of A_B; the baseline settings and instrument spellings of the dataset tags
 from scipy.stats import norm, truncnorm
 import warnings
 from dynesty.dynamicsampler import stopping_function   # re-evaluated post-run to tell convergence from budget truncation
@@ -808,6 +810,94 @@ def load_fits(paths):
         if m in out: raise ValueError(f"two files for insolation_model={m!r}: {out[m].meta.get('file')} and {p}")
         out[m] = f
     return out
+
+
+###########################################################################################################################
+#####
+#####   Dataset tags: the file names run_dynesty.py writes, and finding a stored dataset again
+#####
+###########################################################################################################################
+
+# A dataset is one simulated observation (planet, instrument, albedos, binning, noise, seed) sampled with every model at one pfrac; its tag is everything the models
+# share, and a result file is tag + "_{insolation_model}_priors-<sampled names>.pkl". The free parameters come LAST, so one glob on the tag picks up every model of the
+# dataset whatever each was sampled with, while runs with different free parameters cannot overwrite each other. A joint fit lists the noise levels of its detectors
+# joined by "+". pfrac (the sampler's posterior/evidence weighting, shared by every model of a run) ends the tag: the same data sampled with another pfrac is another run.
+DATASET_TAG = "{planet}_{instrument}_{A_label}_AB{A_B:g}_nbins{n_bins}_norbits{n_orbits}_rms1min{rms}_sigmascale{sigma_scaling:g}_seed{seed}_pfrac{pfrac:g}"
+_RESULT_FILE_RE = re.compile(r"^(?P<planet>[^_]+)_(?P<instrument>.+?)_(?P<A_label>(?:fixed|scaled)A[\d.]+)_AB(?P<A_B>[\d.]+)_nbins(?P<n_bins>\d+)_norbits(?P<n_orbits>\d+)"
+                             r"_rms1min(?P<rms>[\d.+]+)_sigmascale(?P<sigma_scaling>[\d.]+)_seed(?P<seed>\d+)_pfrac(?P<pfrac>[\d.]+)"
+                             r"_(?P<insolation_model>hyperillum|naive_redist|naive)_priors-(?P<priors>.+)\.pkl$")
+DATASET_COLUMNS = ["planet", "instrument", "A_B", "n_bins", "n_orbits", "seed", "pfrac", "sigma_scaling", "A_label", "rms", "models", "tag"]
+
+
+def _planet_name(planet):
+    """File-name spelling of a planet: its PlanetParams name or the string given, without spaces ("TOI-2431 b" -> "TOI-2431b")."""
+    return (planet.name if hasattr(planet, "name") else str(planet)).replace(" ", "")
+
+
+def _instrument_name(instrument):
+    """File-name spelling of an `instruments` entry of run_dynesty.py: the band ("MIRI/LRS" -> "MIRI-LRS"), or the joint alias / 'joint-<labels>' of a detector tuple."""
+    dets = resolve_instrument(instrument)
+    return (joint_name(dets) if isinstance(dets, tuple) else dets).replace("/", "-")
+
+
+def dataset_tag(planet, instrument, sigmas=None, *, A_label=None, A_B=DEFAULT_A_B, n_bins=DEFAULT_N_BINS, n_orbits=DEFAULT_N_ORBITS, sigma_scaling=1., seed=42, pfrac=SamplerConfig.pfrac):
+    """The tag of a dataset (DATASET_TAG). `planet` is a PlanetParams or its name, `instrument` an entry of run_dynesty.py's `instruments` (a band, a joint alias or a
+    detector tuple), `sigmas` the noise levels sigma_1min [ppm] per detector - None puts the glob wildcard in their place, to find a stored run without knowing them
+    (find_dataset). The keywords are the data settings and the sampler's pfrac; unset ones are the baseline (the DEFAULT_* of HItargets_utils, seed 42, SamplerConfig's
+    pfrac). `A_label` is the band albedo's label (A_model.label, e.g. 'fixedA0.1'); None -> ConstantBandAlbedo(DEFAULT_A)."""
+    rms = "*" if sigmas is None else "+".join(f"{s:.1f}" for s in np.atleast_1d(sigmas))
+    return DATASET_TAG.format(planet=_planet_name(planet), instrument=_instrument_name(instrument), A_label=A_label or ConstantBandAlbedo(DEFAULT_A).label, A_B=A_B,
+                              n_bins=n_bins, n_orbits=n_orbits, rms=rms, sigma_scaling=sigma_scaling, seed=seed, pfrac=pfrac)
+
+
+def parse_result_file(path):
+    """The fields of a result file's name as a dict: dataset_tag's keywords (as numbers), 'rms' (the noise levels, '+'-joined), 'insolation_model', 'priors' (the sampled
+    names) and the dataset 'tag'. None for a file that is not a result file."""
+    name = os.path.basename(path)
+    m = _RESULT_FILE_RE.match(name)
+    if not m: return None
+    d = m.groupdict()
+    d.update(A_B=float(d["A_B"]), n_bins=int(d["n_bins"]), n_orbits=int(d["n_orbits"]), sigma_scaling=float(d["sigma_scaling"]), seed=int(d["seed"]), pfrac=float(d["pfrac"]))
+    d["tag"] = name[:m.start("insolation_model") - 1]
+    return d
+
+
+def list_datasets(results_dir):
+    """Every dataset in `results_dir` as a DataFrame, one row per tag (DATASET_COLUMNS: the settings, the noise levels 'rms' per detector, the insolation models sampled, the
+    tag) - the menu of find_dataset. Files that are not result files are ignored."""
+    rows = {}
+    for f in sorted(glob.glob(os.path.join(results_dir, "*.pkl"))):
+        d = parse_result_file(f)
+        if d is None: continue
+        rows.setdefault(d["tag"], {**{k: d[k] for k in DATASET_COLUMNS if k != "models"}, "models": []})["models"].append(d["insolation_model"])
+    df = pd.DataFrame(list(rows.values()), columns=DATASET_COLUMNS)
+    df["models"] = [", ".join(m) for m in df["models"]]
+    return df.sort_values(["planet", "instrument", "A_label", "A_B", "n_bins", "n_orbits", "sigma_scaling", "seed", "pfrac"], ignore_index=True)
+
+
+def find_dataset(results_dir, planet, instrument, **settings):
+    """The tag of the ONE stored dataset of `planet` and `instrument` with these settings (dataset_tag's keywords; unset ones are the baseline), whatever noise levels the
+    run had - what plot_dynesty.ipynb globs on. Raises when none or several match, listing what `results_dir` holds for the planet."""
+    pattern = dataset_tag(planet, instrument, None, **settings)
+    parsed = [parse_result_file(f) for f in glob.glob(os.path.join(results_dir, pattern + "_*.pkl"))]
+    tags = sorted({d["tag"] for d in parsed if d})
+    if len(tags) == 1: return tags[0]
+    have = list_datasets(results_dir)
+    have = have[have.planet == _planet_name(planet)].drop(columns="tag")
+    msg = (f"{len(tags) or 'no'} dataset(s) in {results_dir} match {pattern}" + ("".join("\n   " + t for t in tags)) +
+           f"\n{results_dir} holds for {_planet_name(planet)}:\n" + (have.to_string(index=False) if len(have) else "   (nothing)"))
+    raise (ValueError if tags else FileNotFoundError)(msg)
+
+
+def check_datasets(results_dir, datasets):
+    """Keep a notebook's list of datasets, {key: the keywords of find_dataset}, and `results_dir` in step: prints the entries that have no run and the runs that are not on
+    the list, and returns {key: tag} of the entries found. An entry matching several runs raises (find_dataset)."""
+    found = {}
+    for key, kw in datasets.items():
+        try: found[key] = find_dataset(results_dir, **kw)
+        except FileNotFoundError: print(f"no run for {key!r}")
+    for tag in sorted(set(list_datasets(results_dir).tag) - set(found.values())): print(f"run not listed: {tag}")
+    return found
 
 
 def check_fit_current(fit, cfg=None, rtol=1e-6):
