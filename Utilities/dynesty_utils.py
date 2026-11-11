@@ -17,7 +17,7 @@ from hyperillumination_phasecurve_utils import DEFAULT_N_LO, DEFAULT_N_LA, model
 import astro_utils   # T_bright
 from dynesty import utils as dyfunc
 from scipy.ndimage import gaussian_filter
-from simple_bias_analysis import binned, fit_naive, fit_AB_only, fit_redist, fisher_sigma, measurability, temperature_bias, is_detector_set, evidence_residual, pmap   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth and the series table compare the sampler with
+from simple_bias_analysis import binned, fit_naive, fit_AB_only, fit_redist, fisher_sigma, measurability, temperature_bias, is_detector_set, evidence_residual, nuisance_problem, nuisance_solve, pmap   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth and the series table compare the sampler with
 from hyperillumination_utils import surface_temperature   # the nightside temperature a fitted F implies
 from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS, DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS, resolve_instrument, joint_name   # the parameter ranges: priors (physical) and the least-squares fit range of A_B; the baseline settings and instrument spellings of the dataset tags
 from scipy.stats import norm, truncnorm
@@ -1491,10 +1491,15 @@ def alternative_model(fits):
 
 def evidence_reference(fits, fisher=True, floor=True, A_B_bounds=A_B_FIT_BOUNDS):
     """The seed-independent half of run_prediction, for the configuration of a stored run {model: NestedFit}: the noiseless truth regenerated at its own resolution
-    (noiseless_reference), the misspecified model (alternative_model) fitted to it with FIXED geometry, its whitened residual r_perp (simple_bias_analysis.evidence_residual) and
-    its Fisher sigma_A_B, all at the truth's resolution. floor: also the numerical floor, chi2 of the truth's own model at the injected parameters on the likelihood's coarser grid
+    (noiseless_reference), the misspecified model (alternative_model) fitted to it, its whitened residual r_perp (simple_bias_analysis.evidence_residual) and its Fisher
+    sigma_A_B, all at the truth's resolution. floor: also the numerical floor, chi2 of the truth's own model at the injected parameters on the likelihood's coarser grid
     against the truth curve (model resolution, not model bias). Runs that differ only in seed and pfrac share it.
-    Returns dict(alt, A_B_true, A_B_fit, bias_A_B, chi2, r_perp, y_true [concatenated], sigma_fisher, chi2_floor)."""
+    A_B_bounds: the range of the noiseless fit (A_B_FIT_BOUNDS: the bias analysis; A_B_BOUNDS: held at the physical floor, where r_perp is no longer orthogonal to the A_B response).
+    A run that samples the geometry (a_rs, rp_rs with Gaussian priors, read from its ParameterSet) gets the prediction WITH those nuisances: the linear nuisance fit of
+    simple_bias_analysis (nuisance_problem / nuisance_solve) around the fixed-geometry fit, so that A_B_fit, bias_A_B, chi2, sigma_fisher and r_perp (the data rows of the augmented
+    residual) are those of the marginalised fit; the fixed-geometry numbers are kept as chi2_fixed and sigma_fisher_fixed, and `nuisance` holds {name: (prior sigma, predicted
+    posterior sigma)}.
+    Returns dict(alt, A_B_true, A_B_fit, bias_A_B, chi2, r_perp, y_true [concatenated], sigma_fisher, chi2_floor[, chi2_fixed, sigma_fisher_fixed, nuisance])."""
     true_m, alt = alternative_model(fits)
     f = fits[alt]
     cfg, data = f.meta["cfg"], f.meta["data"]
@@ -1505,6 +1510,15 @@ def evidence_reference(fits, fisher=True, floor=True, A_B_bounds=A_B_FIT_BOUNDS)
     y_true = np.concatenate(ref["y_true"])
     out = dict(alt=alt, A_B_true=float(data["truth"]["A_B"]), A_B_fit=nl["A_B"], bias_A_B=nl["A_B"] - float(data["truth"]["A_B"]), chi2=nl["chi2"], r_perp=ev["r_perp"], y_true=y_true,
                sigma_fisher=float(fisher_sigma(ref["fit_cfg"], alt, nl["A_B"], bounds=A_B_bounds, insol=ref["insols"][alt], **ref["truth_kw"])[0]) if fisher else np.nan, chi2_floor=np.nan)
+    geom = [n for n in f.pset.names if n in _GEOMETRY]
+    if geom:
+        prior = {p.name: p.prior for p in f.pset.params if p.name in geom}
+        bad = [n for n in geom if n not in ("a_rs", "rp_rs") or not isinstance(prior[n], (Normal, TruncNormal))]
+        if bad: raise ValueError(f"no linear prediction for the sampled geometry {bad}: only a_rs and rp_rs with a Normal / TruncNormal prior are supported")
+        prob = nuisance_problem(ref["fit_cfg"], ref["fit_truth"], A_B_fit=nl["A_B"], priors={n: prior[n].sd for n in geom}, bounds=A_B_bounds, insol=ref["insols"][alt], **ref["truth_kw"])
+        sol = nuisance_solve(prob, geom)
+        out.update(chi2_fixed=out["chi2"], sigma_fisher_fixed=out["sigma_fisher"], A_B_fit=sol["A_B_fit"], bias_A_B=sol["A_B_fit"] - out["A_B_true"], chi2=sol["chi2"], r_perp=sol["r_perp"],
+                   sigma_fisher=sol["sigma_A_B"], nuisance={n: (float(prior[n].sd), float(sol["sigma_post"][n])) for n in geom})
     if floor and true_m in fits:
         L = logl_from_fit(fits[true_m])   # warns (stderr) if the forward model changed since the run; run_prediction also records it per run (grid_change)
         pl = detector_cfgs(cfg)[0].planet
@@ -1539,7 +1553,7 @@ def run_prediction(fits, ref=None, K=200, seed=0, z_tol=1e-6):
     if z_dev > z_tol: raise ValueError(f"the regenerated truth does not reproduce the data of seed {tr['seed']}: max |z - z_rng| = {z_dev:.3g} (forward model changed since the run?)")
     chi2, r = ref["chi2"], ref["r_perp"]
     with contextlib.redirect_stderr(io.StringIO()): grid_change = max(check_fit_current(f) for f in (f_t, f_a))   # recorded in the row instead of printed from a worker
-    zeta = float(r @ z / np.sqrt(r @ r))
+    zeta = float(r @ z / np.sqrt(chi2))   # chi2 = |r_perp|^2, except with prior rows (free geometry): there r_perp holds the data rows only and chi2 the whole augmented residual, so that ln B = chi2 / 2 + r_perp . z
     dlnL = float(np.max(f_t.results.logl) - np.max(f_a.results.logl))
     lnB = f_t.meta["lnZ"] - f_a.meta["lnZ"]
     sign = 1. if true_m == "hyperillum" else -1.
@@ -1554,6 +1568,12 @@ def run_prediction(fits, ref=None, K=200, seed=0, z_tol=1e-6):
                sigma_post=0.5 * (s_a["hi"] - s_a["lo"]), sigma_post_truth=0.5 * (s_t["hi"] - s_t["lo"]), sigma_fisher=ref["sigma_fisher"])
     row["lnB_ext_vs_ps"], row["lnB_pred_ext_vs_ps"] = sign * row["lnB"], sign * row["lnB_pred"]
     if K: row["lnB_err_jitter"] = bayes_factor(fits, true_m, alt, K=K, seed=seed, verbose=False)["err_jitter"]
+    if "chi2_fixed" in ref: row.update(chi2_min_fixed=float(ref["chi2_fixed"]), sigma_fisher_fixed=float(ref["sigma_fisher_fixed"]))
+    for n, (s_prior, s_pred) in ref.get("nuisance", {}).items():   # sampled geometry: the posterior width under the misspecified model against its prior and against the linear prediction
+        w, k = f_a.results.importance_weights(), f_a.pset.names.index(n)
+        lo, med, hi = dyfunc.quantile(f_a.results.samples[:, k], [0.16, 0.5, 0.84], weights=w)
+        row.update({f"{n}_med": float(med), f"{n}_prior": s_prior, f"{n}_shrink": float(0.5 * (hi - lo) / s_prior), f"{n}_shrink_pred": s_pred / s_prior})
+    row.update(lnB_vs_redist=np.nan, lnB_redist_vs_ps=np.nan, F_med=np.nan, F_sigma=np.nan, F_95=np.nan)   # always present, so a table of runs without a fit with redistribution keeps the columns
     if "naive_redist" in fits:
         f_r = fits["naive_redist"]
         w, iF = f_r.results.importance_weights(), f_r.pset.names.index("F")
