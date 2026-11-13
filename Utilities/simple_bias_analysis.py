@@ -1361,14 +1361,14 @@ def plot_false_F_bars(tab, title=None, figsize=None, ax=None):
     if "name" in tab: raise TypeError("a per-planet table: use plot_planet_false_F_bars(tab, planets=...)")
     return _false_F_bars(tab, title, figsize, ax)
 
-# The per-planet bar plots show one delivered and one critical noise per planet, which a joint fit of several detectors does not have (one level per detector, sigma_1min:<label>).
+# plot_planet_bias_bars shows one delivered and one critical noise per planet, which a joint fit of several detectors does not have (one level per detector, sigma_1min:<label>);
+# the false-positive bars (_false_F_bars) list them per detector instead.
 def _one_noise_level(tab):
     if any(c.startswith("sigma_1min:") for c in tab.columns):
         raise ValueError("a joint fit of several detectors has one noise level per detector (sigma_1min:<label> columns), not the single sigma_1min the bars show: print the table (noise_cols) or use plot_planet_retrievals")
 
 
 def plot_planet_false_F_bars(tab, title=None, figsize=None, ax=None, *, planets):
-    _one_noise_level(tab)
     return _false_F_bars(select_planets(tab, planets), title, figsize, ax)
 
 def _false_F_bars(tab, title, figsize, ax):
@@ -1393,10 +1393,12 @@ def _false_F_bars(tab, title, figsize, ax):
         ax.set_xticks(x, [instrument_label(ins) for ins in tab["instrument"]], fontsize=8)
     ax.set_xlim(-0.6, len(tab) - 0.4)
     ax.grid(axis="x", visible=False)
+    def noise_label(col):   # "sigma_1min" / "sigma_1min_crit", or the per-detector column of a joint fit's per-planet table ("sigma_1min:NRS1")
+        base, _, det = col.partition(":")
+        return (r"$\sigma_{1\,\rm min,\,crit}$" if base.endswith("_crit") else r"$\sigma_{1\,\rm min}$") + (f" {det}" if det else "") + " [ppm/min]"
     rows = [(r"fitted $F$", tab["F_fit"], "{:.4f}"),
             (r"implied $T_{\rm night}$ [K]", tab["T_night_fit"], "{:.0f}"),
-            (r"$\sigma_{1\,\rm min}$ [ppm/min]", tab["sigma_1min"], "{:.0f}"),
-            (r"$\sigma_{1\,\rm min,\,crit}$ [ppm/min]", tab["sigma_1min_crit"], "{:.0f}"),
+            *[(noise_label(c), tab[c], "{:.0f}") for c in noise_cols(tab)],   # the delivered and the critical noise, per detector for a joint fit's per-planet table
             (r"$t_{\rm crit}$ [h]", tab["t_crit"], "{:.0f}")]
     below = _param_rows(ax, x, rows, y0=-0.17, dy=0.055)
     handles = [plt.Rectangle((0, 0), 1, 1, color=C_HI, label=f"{FALSE_POSITIVE} ($\\geq$ {z:g}$\\sigma$)"), plt.Rectangle((0, 0), 1, 1, color=C_NAIVE, label=NO_FALSE_POSITIVE),
