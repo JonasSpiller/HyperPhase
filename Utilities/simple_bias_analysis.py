@@ -74,7 +74,7 @@ def fit_residual(cfg, yb_truth, insolation_model, A_B_, free_offset=True, **kw):
 
 
 # A detector set: several FittingConfigs fitted JOINTLY with one shared (A_B, F) and a separate baseline per detector (e.g. the two NIRSpec/G395H arrays). Wherever a fit takes `cfg`,
-# a list/tuple of configs means such a set; `truth` is then a list of one truth curve per detector. The configs must share the geometry (planet, n_bins, u_B, A_) and differ only in
+# a list/tuple of configs means such a set; `truth` is then a list of one truth curve per detector. The configs must share the geometry (planet, n_bins, u_bol, A_) and differ only in
 # band (stellar_grid, filter_path, l1, l2) and noise. The per-detector baseline is the free_offset of each detector's own residual block, which is what the Fisher matrix marginalises too.
 def is_detector_set(cfg):
     return isinstance(cfg, (list, tuple))
@@ -308,7 +308,7 @@ def model_depth(cfg, insolation_model, A_B_, F=None, n_layers=DEPTH_N_LAYERS, **
     if cfg.reflected:
         planet = swept_planet(cfg, **geom)
         eps_occultation = np.arccos(np.sin(np.radians(planet.incl)))   # epsilon at full phase, as in reflected_PhaseCurve
-        depth += 1e6 * float(reflected_lightcurve(eps_occultation, planet, u_B=cfg.u_B, A=cfg.A_(A_B_), insolation_model=insolation_model))
+        depth += 1e6 * float(reflected_lightcurve(eps_occultation, planet, u_bol=cfg.u_bol, A=cfg.A_(A_B_), insolation_model=insolation_model))
     return float(depth)
 
 
@@ -431,17 +431,17 @@ def false_F_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_
 def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, **kw):
     fit = fit_truth(cfg, A_B_true, models=("naive", "naive_redist"), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)
     c0 = cfg[0] if is_detector_set(cfg) else cfg
-    return _false_F_result(fit["naive"], fit["naive_redist"], c0.planet, c0.emissivity_B, bounds, F_bounds, rail_tol)
+    return _false_F_result(fit["naive"], fit["naive_redist"], c0.planet, c0.emissivity_bol, bounds, F_bounds, rail_tol)
 
 
 # The dict of false_F_fit from its two fits n (A_B-only) and r (joint), given as fit_truth results (A_B_fit, chi2, and F_fit for r). Shared with the fits= path of the false-positive tables,
-# which takes the two fits from the bias tables instead of refitting. planet, emissivity_B: those of the fit's cfg (its first detector), for the implied nightside temperature.
-def _false_F_result(n, r, planet, emissivity_B, bounds, F_bounds, rail_tol=RAIL_TOL):
+# which takes the two fits from the bias tables instead of refitting. planet, emissivity_bol: those of the fit's cfg (its first detector), for the implied nightside temperature.
+def _false_F_result(n, r, planet, emissivity_bol, bounds, F_bounds, rail_tol=RAIL_TOL):
     from hyperillumination_utils import surface_temperature
     railed = fit_railed(n, bounds, F_bounds, rail_tol) or fit_railed(r, bounds, F_bounds, rail_tol)
     return dict(A_B_fit_naive=n["A_B_fit"], chi2_naive=n["chi2"], A_B_fit=r["A_B_fit"], F_fit=np.nan if railed else r["F_fit"], chi2_joint=r["chi2"],
                 dchi2_F=np.nan if railed else max(n["chi2"] - r["chi2"], 0.), railed=bool(railed),
-                T_night_fit=np.nan if railed else float(surface_temperature(np.pi, planet, "naive_redist", A_B=r["A_B_fit"], emissivity_B=emissivity_B, F=r["F_fit"])))
+                T_night_fit=np.nan if railed else float(surface_temperature(np.pi, planet, "naive_redist", A_B=r["A_B_fit"], emissivity_bol=emissivity_bol, F=r["F_fit"])))
 
 
 def _false_F_cell_at(cfg, A_B_true, a_rs, y_param, y, kw):
@@ -810,12 +810,12 @@ def _mark_limits(ax, contact, roche_a_rs, anchors):
 
 
 # The limit curve: a bias_vs_a_rs sweep (both models) on a log a/Rs axis, three stacked panels - the geometry of sweep_geometry (area fractions, stellar angular radius on the right axis),
-# the biases (Delta A_B of both fits, the spurious F on the right axis, hollow markers where a fit railed, the fitted A_B = 0 line where a fit goes below it, and sweep_uB0's
+# the biases (Delta A_B of both fits, the spurious F on the right axis, hollow markers where a fit railed, the fitted A_B = 0 line where a fit goes below it, and sweep_ubol0's
 # A_B-only bias as the limb-darkening sensitivity, if given)
 # and the measurability (|Delta A_B| / sigma of both fits, sqrt(dchi2_F) of the spurious F, sqrt(chi2) of the best A_B-only fit; all four scale as 1 / sigma_1min and as sqrt(n_orbits), so
 # another noise level is a vertical shift of every curve on the log axis). _mark_limits on every panel; roche_a_rs {label: a/R*} are the Roche lines, anchors {name: PlanetParams} the planets marked.
 # cfg: the sweep's config (sigma_1min, n_orbits, n_bins for the labels and the right axis); rp_rs: the sweep's Rp/Rs (the contact limit). titles: (geometry, bias, measurability) panel titles.
-def plot_limit_curve(sweep, geo, cfg, rp_rs, roche_a_rs, anchors, sweep_uB0=None, u_B=None, titles=(None, None, None), suptitle=None):
+def plot_limit_curve(sweep, geo, cfg, rp_rs, roche_a_rs, anchors, sweep_ubol0=None, u_bol=None, titles=(None, None, None), suptitle=None):
     contact = 1. + rp_rs
     bad, badJ = sweep["railed"], sweep["railed_J"]
     fig, axs = plt.subplots(3, 1, figsize=(13, 15), sharex=True)
@@ -841,15 +841,15 @@ def plot_limit_curve(sweep, geo, cfg, rp_rs, roche_a_rs, anchors, sweep_uB0=None
     A_B_true = float((sweep["A_B_fit"] - sweep["bias"]).iloc[0])
     if (sweep[["bias", "bias_J"]].min().min() < -A_B_true):   # some fit below A_B = 0: the reference line where it crosses
         h.append(a1.axhline(-A_B_true, zorder=1.5, label=rf"fitted $A_B$ = 0  ($\Delta A_B = -A_B$ = {-A_B_true:g})", **FIT_ZERO))
-    if sweep_uB0 is not None:
-        h.append(a1.plot(sweep_uB0["a_rs"], sweep_uB0["bias"], ":", color=C_NAIVE, lw=1.4, label=r"$\Delta A_B$, $A_B$-only fit, uniform stellar disc ($u_B$ = 0)")[0])
+    if sweep_ubol0 is not None:
+        h.append(a1.plot(sweep_ubol0["a_rs"], sweep_ubol0["bias"], ":", color=C_NAIVE, lw=1.4, label=r"$\Delta A_B$, $A_B$-only fit, uniform stellar disc ($u_{\rm bol}$ = 0)")[0])
     h.append(a1.plot(sweep["a_rs"], sweep["bias_J"], "s-", color=C_REDIST, lw=1.5, ms=5, label=r"$\Delta A_B$, joint $A_B$ + $F$ fit")[0])
     a1.plot(sweep["a_rs"][badJ], sweep["bias_J"][badJ], "s", color=C_REDIST, mfc="#fcfcfb", ms=7)
     a1.set_ylabel(r"bias $\Delta A_B = A_{B,\rm fit} - A_B$")
     a1r = a1.twinx()
     h.append(a1r.plot(sweep["a_rs"], sweep["F_fit"], "^--", color=F_COLORS[-1], lw=1.2, ms=5, label="spurious $F$ of the joint fit, right axis (truth: $F$ = 0)")[0])
     a1r.set_ylabel("fitted $F$"); a1r.grid(False)
-    a1.set_title(titles[1] or "Bias from neglecting hyperillumination" + (rf"  ($u_B$ = {u_B:g})" if u_B is not None else ""))
+    a1.set_title(titles[1] or "Bias from neglecting hyperillumination" + (rf"  ($u_{{\rm bol}}$ = {u_bol:g})" if u_bol is not None else ""))
     a1.legend(handles=h, fontsize=9, loc="lower right")
 
     a2 = axs[2]
@@ -877,8 +877,8 @@ def plot_limit_curve(sweep, geo, cfg, rp_rs, roche_a_rs, anchors, sweep_uB0=None
     return fig, axs
 
 
-# The printed summary of a limit curve: the rail boundaries, the largest non-railed biases, the u_B sensitivity (if sweep_uB0 is given) and the sweep read off at each Roche limit of roche_a_rs.
-def print_limit_curve(sweep, A_B_true, roche_a_rs, sweep_uB0=None, u_B=None):
+# The printed summary of a limit curve: the rail boundaries, the largest non-railed biases, the u_bol sensitivity (if sweep_ubol0 is given) and the sweep read off at each Roche limit of roche_a_rs.
+def print_limit_curve(sweep, A_B_true, roche_a_rs, sweep_ubol0=None, u_bol=None):
     ok, okJ = ~sweep["railed"], ~sweep["railed_J"]
     print(f"A_B-only fit railed at {int((~ok).sum())} of {len(sweep)} points" + (f" (a/Rs <= {sweep.loc[~ok, 'a_rs'].max():.3f})" if (~ok).any() else "")
           + f";  joint fit railed at {int((~okJ).sum())}" + (f" (a/Rs <= {sweep.loc[~okJ, 'a_rs'].max():.3f})" if (~okJ).any() else ""))
@@ -891,9 +891,9 @@ def print_limit_curve(sweep, A_B_true, roche_a_rs, sweep_uB0=None, u_B=None):
     if okJ.any():
         i = np.abs(sweep.loc[okJ, "bias_J"]).idxmax()
         print(f"largest non-railed |Delta A_B|, joint:     {sweep.loc[i, 'bias_J']:+.3f} ({100 * sweep.loc[i, 'bias_J'] / A_B_true:+.1f} % of A_B) at a/Rs = {sweep.loc[i, 'a_rs']:.3f};  largest spurious F = {sweep.loc[okJ, 'F_fit'].max():.4f}")
-    if sweep_uB0 is not None:
-        both = ok & ~sweep_uB0["railed"]
-        print(f"u_B sensitivity: max |bias(u_B = {u_B:g}) - bias(u_B = 0)| = {np.max(np.abs(sweep.loc[both, 'bias'] - sweep_uB0.loc[both, 'bias'])):.4f} over the {int(both.sum())} points where neither fit railed" if both.any() else "u_B sensitivity: no point where neither fit railed")
+    if sweep_ubol0 is not None:
+        both = ok & ~sweep_ubol0["railed"]
+        print(f"u_bol sensitivity: max |bias(u_bol = {u_bol:g}) - bias(u_bol = 0)| = {np.max(np.abs(sweep.loc[both, 'bias'] - sweep_ubol0.loc[both, 'bias'])):.4f} over the {int(both.sum())} points where neither fit railed" if both.any() else "u_bol sensitivity: no point where neither fit railed")
     for lab, a_R in roche_a_rs.items():   # linear interpolation of the sweep at each Roche limit (NaN outside the sweep range)
         at = lambda col: np.interp(a_R, sweep["a_rs"], sweep[col], left=np.nan, right=np.nan)
         print(f"at the Roche limit, {lab} (a/Rs = {a_R:.2f}): Delta A_B = {at('bias'):+.3f} (A_B-only), {at('bias_J'):+.3f} (joint), F = {at('F_fit'):.4f}, misfit {np.sqrt(at('chi2')):.2f} sigma")
@@ -1276,7 +1276,7 @@ def _planet_false_F_row_from(tabs, cfg, pl, s1, bounds, F_bounds):
     for tab, row in zip(tabs, rows):
         for col, lv in noise.items():   # the scalar level, or the per-detector levels of a detector set (its scalar column is NaN on both sides)
             if np.isfinite(lv) and not _same_noise(row[col], lv): raise ValueError(f"fits: {pl.name} was fitted at {col} = {row[col]} ppm/min in the {tab.attrs['model']} table, this call has {lv}")
-    return dict(name=pl.name, a_rs=pl.R / pl.r2, period=pl.period, T_eff=pl.T2_eff, **noise, **_false_F_result(n, r, pl, template_cfg(cfg).emissivity_B, bounds, F_bounds))
+    return dict(name=pl.name, a_rs=pl.R / pl.r2, period=pl.period, T_eff=pl.T2_eff, **noise, **_false_F_result(n, r, pl, template_cfg(cfg).emissivity_bol, bounds, F_bounds))
 
 
 # False-positive F for a SAMPLE of planets on one instrument, each at its own geometry and noise (the counterpart of planet_bias_table; same inputs, same handling of planets without a noise
@@ -1320,7 +1320,7 @@ def _instrument_false_F_row_from(tabs, cfg, pl, instrument, sigma_1min, bounds, 
         for d in dets:
             s_tab = tab.attrs["sigma_1min"].get(d, np.nan)
             if not _same_noise(s_tab, sigma_1min[d]): raise ValueError(f"fits: {d} was fitted at sigma_1min = {s_tab} ppm/min in the {tab.attrs['model']} table, this call has {sigma_1min[d]}")
-    return dict(instrument=instrument, sigma_1min=float(sigma_1min[dets[0]]) if len(dets) == 1 else np.nan, **_false_F_result(n, r, pl, template_cfg(cfg).emissivity_B, bounds, F_bounds))
+    return dict(instrument=instrument, sigma_1min=float(sigma_1min[dets[0]]) if len(dets) == 1 else np.nan, **_false_F_result(n, r, pl, template_cfg(cfg).emissivity_bol, bounds, F_bounds))
 
 
 # False-positive F for one planet on several instruments (the counterpart of instrument_retrievals: same `instruments` entries incl. tuples for a joint fit of several detectors, same
@@ -2346,19 +2346,19 @@ def ellipsoidal_prior(planet, mass_ratio, frac_q, u_range, g_range, sig_a_rs=0.,
 
 ###########################################################################################################################
 #####
-#####   One-parameter sweeps of the bias (AB_Bias.ipynb, F_AB_Bias.ipynb: inclination, u_B)
+#####   One-parameter sweeps of the bias (AB_Bias.ipynb, F_AB_Bias.ipynb: inclination, u_bol)
 #####
 ###########################################################################################################################
 
 # A sweep changes ONE setting of the configuration and repeats the whole bias pipeline (fit_truth: truth, fits, Fisher sigmas) at every value. The setting is a transform
 # (cfg, value) -> cfg, applied to every detector of a set, so anything a FittingConfig or its planet holds can be swept without a function of its own.
-# cfg_with_incl: the orbital inclination [deg] (truth and fits; the noise level stays the planet's own). cfg_with_u_B: the bolometric limb darkening of the irradiance, which only the
-# hyperillumination truth uses (the point-source models have no u_B), so it is a sweep of the truth alone.
+# cfg_with_incl: the orbital inclination [deg] (truth and fits; the noise level stays the planet's own). cfg_with_u_bol: the bolometric limb darkening of the irradiance, which only the
+# hyperillumination truth uses (the point-source models have no u_bol), so it is a sweep of the truth alone.
 def cfg_with_incl(cfg, incl):
     return replace(cfg, planet=replace(cfg.planet, incl=float(incl)))
 
-def cfg_with_u_B(cfg, u_B):
-    return replace(cfg, u_B=float(u_B))
+def cfg_with_u_bol(cfg, u_bol):
+    return replace(cfg, u_bol=float(u_bol))
 
 
 def _bias_sweep_point(cfg, A_B_true, transform, value, models, bounds, F_bounds, kw):
@@ -2376,7 +2376,7 @@ def _bias_sweep_point(cfg, A_B_true, transform, value, models, bounds, F_bounds,
 
 
 # fit_truth (Fisher sigmas included) at every value of a one-parameter sweep, points in parallel, as a DataFrame. cfg: FittingConfig or detector set; transform: (cfg, value) -> cfg
-# (cfg_with_incl, cfg_with_u_B, or any function of that form). Columns: value; A_B_fit, bias, sigma, bias_sigma, chi2, lnB_mean = chi2 / 2, railed (A_B-only fit); A_B_fit_J, bias_J,
+# (cfg_with_incl, cfg_with_u_bol, or any function of that form). Columns: value; A_B_fit, bias, sigma, bias_sigma, chi2, lnB_mean = chi2 / 2, railed (A_B-only fit); A_B_fit_J, bias_J,
 # sigma_J, bias_sigma_J, F_fit, chi2_J, railed_J and z_F = sqrt(chi2 - chi2_J) (fit with redistribution; z_F needs both models), as in bias_vs_a_rs.
 def bias_sweep(cfg, A_B_true, values, transform, models=("naive", "naive_redist"), bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
     return pd.DataFrame(pmap(_bias_sweep_point, [(cfg, A_B_true, transform, v, models, bounds, F_bounds, kw) for v in values], n_jobs))

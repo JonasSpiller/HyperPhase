@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "Utilities"))
 import contextlib, io
 with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
     import fspiderman as sp
-from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, rms_1min, NoNoiseLevelError, resolve_instrument, detector_label, joint_name, JOINT_INSTRUMENTS, DEFAULT_A_B, DEFAULT_A, DEFAULT_U_B, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS, A_B_BOUNDS, F_BOUNDS, OFFSET_BOUNDS
+from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, rms_1min, NoNoiseLevelError, resolve_instrument, detector_label, joint_name, JOINT_INSTRUMENTS, DEFAULT_A_B, DEFAULT_A, DEFAULT_U_BOL, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS, A_B_BOUNDS, F_BOUNDS, OFFSET_BOUNDS
 from hyperillumination_phasecurve_utils import FittingConfig, ConstantBandAlbedo, ScaledBandAlbedo   # ScaledBandAlbedo(1.): A = A_B, the A_B-coupled alternative (only within the physical prior A_B_BOUNDS, where A >= 0)
 from dynesty_utils import *
 
@@ -30,7 +30,7 @@ from dynesty_utils import *
 # Planet data
 planet = hi_planets_by_name("TOI-2431 b") # "TOI-2431 b", "K2-141 b", "TOI-2260 b", "K2-157 b", KOI-1843.03
 
-u, u_B = DEFAULT_U, DEFAULT_U_B   # transit and irradiance limb darkening (baseline settings, HItargets_utils.py)
+u, u_bol = DEFAULT_U, DEFAULT_U_BOL   # transit and irradiance limb darkening (baseline settings, HItargets_utils.py)
 
 A_B_true = DEFAULT_A_B   # injected Bond albedo (baseline settings, HItargets_utils.py)
 
@@ -97,7 +97,7 @@ def run_instrument(instrument):
 
     # context for simulating data functions: one FittingConfig per band; a tuple of them is a detector set (fitted jointly)
     cfgs = [FittingConfig(planet=planet, filter_path=filter_loc(b), l1=filter_lambda(b)[0], l2=filter_lambda(b)[1], A_=A_model,
-                          sigma_1min=s_, n_orbits=n_orbits, n_bins=n_bins, reflected=True, u_B=u_B, u=u) for b, s_ in zip(bands, sigmas)]
+                          sigma_1min=s_, n_orbits=n_orbits, n_bins=n_bins, reflected=True, u_bol=u_bol, u=u) for b, s_ in zip(bands, sigmas)]
     cfg = tuple(cfgs) if joint else cfgs[0]
 
     print(f"\n{planet.name}   a/Rs = {planet.R/planet.r2:.3f}, Rp/Rs = {planet.r1/planet.r2:.4f}, T_eff = {planet.T2_eff:.0f} K" + ("   JOINT fit of " + " + ".join(labels) if joint else ""))

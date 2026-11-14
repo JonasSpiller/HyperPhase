@@ -346,7 +346,7 @@ def quad_ld(planet, bands, ld_model, interpolate_type="nearest", mu_min=LD_MU_MI
     return rows, profiles
 
 
-# Bolometric intensity profile I_bol(mu)/I_bol(1) of one host star (PlanetParams: T2_eff, logg, feh) from an ExoTiC-LD grid, to compare with the linear law of u_B (the irradiance).
+# Bolometric intensity profile I_bol(mu)/I_bol(1) of one host star (PlanetParams: T2_eff, logg, feh) from an ExoTiC-LD grid, to compare with the linear law of u_bol (the irradiance).
 # ExoTiC-LD intensities are photon rates per Angstrom, so the energy weight is 1/lambda (constants cancel in the normalisation); integrated over the whole wavelength range of
 # the grid on its own samples. Returns (mu ascending, I_bol(mu)/I_bol(1), u_lin, f_out): u_lin is the least-squares linear coefficient over mu >= mu_min, f_out the fraction
 # of a blackbody's sigma T_eff^4 outside the grid's wavelength range (what the profile misses; PHOENIX stops at 5.5 um, MPS-ATLAS reaches 160 um).

@@ -111,7 +111,7 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
                   k_truth=TRUTH_KW["k_truth"], n_layers=TRUTH_KW["n_layers"], n_lo=TRUTH_KW["n_lo"], n_la=TRUTH_KW["n_la"], plotting=True, labels=None, _rng=None, **model_kw):
     """Simulated phase-folded observation: binned(truth) + N(0, sigma_bin).
 
-    cfg          : FittingConfig — the only mandatory input; supplies planet, filter, stellar_grid, A_(A_B), sigma_1min, n_orbits, n_bins, u_B, reflected.
+    cfg          : FittingConfig — the only mandatory input; supplies planet, filter, stellar_grid, A_(A_B), sigma_1min, n_orbits, n_bins, u_bol, reflected.
                    Or a detector set (list/tuple of FittingConfigs sharing the planet and binning, differing in band and noise, as in the bias analysis): one dataset per detector from the
                    same truth, with ONE noise stream continued across the detectors - the first detector's draws are exactly those of its single-detector dataset with the same seed, the
                    next detector's the following, independent ones. The output then carries the per-detector dicts in data["detectors"] next to the concatenated "t", "y_obs", "sigma".
@@ -1031,7 +1031,7 @@ def bayes_factor(fits, num="hyperillum", den="naive", K=200, seed=0, verbose=Tru
 def derived_samples(logl, thetas, n_jobs=-1):
     """Posterior draws pushed through to physical quantities -> {key: array of length n_draws}.
 
-    T_sub / T_term / T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point. Under "naive" T_anti is the 0 K nightside and T_term is only np.interp of the grid between the last dayside and the first nightside node; under "hyperillum" the extended star pushes real flux past 90 deg, which is exactly the physical difference the Bayes factor is measuring. Under "naive_redist" T_anti is the redistributed nightside, T_anti^4 = (1-A_B) F S / (2 emissivity_B sigma) - the nightside temperature an observer would infer from that model, and 0 K in the truth.
+    T_sub / T_term / T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point. Under "naive" T_anti is the 0 K nightside and T_term is only np.interp of the grid between the last dayside and the first nightside node; under "hyperillum" the extended star pushes real flux past 90 deg, which is exactly the physical difference the Bayes factor is measuring. Under "naive_redist" T_anti is the redistributed nightside, T_anti^4 = (1-A_B) F S / (2 emissivity_bol sigma) - the nightside temperature an observer would infer from that model, and 0 K in the truth.
     depth_th / depth_refl / depth : occultation depth [ppm], thermal / reflected / total, in the fit's band. For a joint fit (JointGaussianLogL) the temperatures are band-independent and computed once; the depths come per detector as "depth_th:<label>", "depth_refl:<label>", "depth:<label>", with the un-suffixed keys those of the first detector. Feed depth_th to brightness_temperature() with that detector's cfg.
     """
     comps = logl.components if isinstance(logl, JointGaussianLogL) else [logl]
@@ -1049,7 +1049,7 @@ def derived_samples(logl, thetas, n_jobs=-1):
         geom = {k: p_[k] for k in _GEOMETRY if k in p_}
         A_B_, F_ = p_["A_B"], p_.get("F")
 
-        lo, la, Tg = custom_temperature_grid(swept_planet(cfg, **geom), u_B=cfg.u_B, n_lo=n_lo, n_la=n_la, insolation_model=m, F=F_, A_B=A_B_, emissivity_B=cfg.emissivity_B, insol=insol)
+        lo, la, Tg = custom_temperature_grid(swept_planet(cfg, **geom), u_bol=cfg.u_bol, n_lo=n_lo, n_la=n_la, insolation_model=m, F=F_, A_B=A_B_, emissivity_bol=cfg.emissivity_bol, insol=insol)
         eq = int(np.argmin(np.abs(la)))   # equator row; Tg has shape (n_la, n_lo)
         T = list(np.interp([0., 90., 180.], lo, Tg[eq]))   # interpolated, not nearest-cell: T falls steeply through the terminator, so the nearest grid longitude is off by hundreds of K there
 
@@ -1376,7 +1376,7 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
         d["y"], d["offset"] = (ys if joint else ys[0]), (offs if joint else offs[0])
         d["bias_A_B"] = d["A_B"] - A_B_true
         d["dT_over_T"] = float(temperature_bias(A_B_true, d["bias_A_B"], d["F"] or 0.))   # substellar temperature
-        if d["F"] is not None: d["T_night"] = float(surface_temperature(np.pi, cfg0.planet, "naive_redist", A_B=d["A_B"], emissivity_B=cfg0.emissivity_B, F=d["F"]))   # the nightside the false-positive F implies (0 K in the truth)
+        if d["F"] is not None: d["T_night"] = float(surface_temperature(np.pi, cfg0.planet, "naive_redist", A_B=d["A_B"], emissivity_bol=cfg0.emissivity_bol, F=d["F"]))   # the nightside the false-positive F implies (0 K in the truth)
 
     # --- the noisy fits: posterior median (what you would report) and max-lnL (= MAP, uniform priors) -------------
     summ   = {m: posterior_summary(f, base, verbose=False)["params"] for m, f in fits.items()}
