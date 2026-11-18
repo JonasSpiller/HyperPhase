@@ -1991,10 +1991,11 @@ def plot_sg_comparison(sg, band_label="MIRI/LRS"):
 # The whitened residual r_perp of the noiseless A_B-only fit of `insolation_model` to `truth`, bin by bin (detector blocks concatenated, each with its own baseline removed and its own
 # sigma_bin). A_B_fit=None fits it (fit_AB_only); sum(r_perp^2) is that fit's chi2. Returns dict(A_B_fit, chi2, resid [ppm], sigma [ppm], r_perp, phase [bin centres, 0 = transit],
 # blocks [one slice per detector]). kw: the model_pcurve keywords of the fit, so the dynesty comparison can evaluate it at the truth's own resolution.
-def evidence_residual(cfg, truth, insolation_model="naive", A_B_fit=None, free_offset=True, bounds=A_B_FIT_BOUNDS, **kw):
+# F: the fitted redistribution of "naive_redist" (with its A_B_fit, both from fit_redist); the residual is then that of the joint fit, and r_perp(A_B-only) - r_perp(with F) the part F absorbs.
+def evidence_residual(cfg, truth, insolation_model="naive", A_B_fit=None, F=None, free_offset=True, bounds=A_B_FIT_BOUNDS, **kw):
     if A_B_fit is None: A_B_fit = fit_AB_only(cfg, truth, insolation_model, free_offset=free_offset, bounds=bounds, **kw)[0]
     resid, _, sigma = _chi2_problem(cfg, truth, insolation_model, free_offset=free_offset, **kw)
-    r = resid(A_B_fit)
+    r = resid(A_B_fit, F)
     cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
     edges = np.cumsum([0] + [c.n_bins for c in cfgs])
     return dict(A_B_fit=float(A_B_fit), chi2=float(np.sum((r / sigma) ** 2)), resid=r, sigma=sigma, r_perp=r / sigma,
