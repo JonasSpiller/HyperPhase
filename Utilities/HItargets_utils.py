@@ -51,6 +51,11 @@ DEFAULT_N_ORBITS = 5
 # Bins per orbit of the phase-folded light curve: 12 min for TOI-2431 b, 15 min for K2-141 b. The width is derived from the period, so the bins tile the orbit exactly.
 DEFAULT_N_BINS = 27
 
+# Reference Rp/R* of the (a/R*, T_eff) bias maps (simple_bias_analysis.reference_planet; Bias_Maps.ipynb, HypotheticalExtremePlanet.ipynb, PaperPlots.ipynb): the median of the nine
+# PAPER_PLANETS (0.0158; they span 0.012-0.021). The bias barely depends on it, because the mismatch and the response to A_B both scale with the planet's flux: between 0.0075 and
+# 0.03 it changes by less than 3 % (A_B-only fit) and 5 % (with F) (PaperPlots.ipynb, res-maps-code). Map outputs from before 2026-11-14 used 0.015.
+DEFAULT_MAP_RP_RS = 0.016
+
 # Parameter ranges, shared by the least-squares bias analysis (simple_bias_analysis) and the nested sampling (dynesty_utils, run_dynesty.py).
 # A_B_BOUNDS, F_BOUNDS: the physical ranges of A_B and of the Kreidberg & Loeb (2016) redistribution F. They are the uniform priors of every dynesty fit, and their flat-prior std
 # defines an "unconstrained" fit (a Fisher sigma at or above it: the data add nothing to the physical range). F_BOUNDS is also the least-squares range of F.

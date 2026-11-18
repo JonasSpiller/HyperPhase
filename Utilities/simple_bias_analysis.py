@@ -4,7 +4,7 @@ from scipy.optimize import minimize_scalar
 from scipy.interpolate import RegularGridInterpolator
 from hyperillumination_phasecurve_utils import *
 from astro_utils import roche_period_h, roche_proximity, rocky_mean_density, kepler_period_days, kepler_a_rs, rho_star
-from HItargets_utils import ROCKY_MAX_RADE, A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, ROCHE_CASES, ROCHE_R_P, hi_planets_by_name, apply_custom, resolve_instrument, detector_label
+from HItargets_utils import ROCKY_MAX_RADE, DEFAULT_MAP_RP_RS, A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, ROCHE_CASES, ROCHE_R_P, hi_planets_by_name, apply_custom, resolve_instrument, detector_label
 from functools import lru_cache
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -551,7 +551,7 @@ def target_marker(ax, planet, ykey, AGG=None, **kw):
 # so the period drops out of the bias, and the stellar radius only sets a_AU for the (tiny) light-travel-time correction.
 # T14 is NaN: it is only needed by PandExo, which never runs on the reference geometry.
 # The star keeps PlanetParams' default log g = 4.5 and [Fe/H] = 0 for every T_eff (a hypothetical star; see swept_planet for what that does at M-dwarf T_eff).
-def reference_planet(a_rs=2.5, rp_rs=0.015, T_eff=4000., incl=90., period=0.3, R_star_Rsun=0.6, name="reference geometry"):
+def reference_planet(a_rs=2.5, rp_rs=DEFAULT_MAP_RP_RS, T_eff=4000., incl=90., period=0.3, R_star_Rsun=0.6, name="reference geometry"):
     return PlanetParams(name=name, period=period, incl=incl, ecc=0., w=90., r1=rp_rs, r2=1., R=a_rs, T2_eff=T_eff,
                         a_AU=a_rs * R_star_Rsun * float(const.R_sun / const.au), T14=np.nan)
 
