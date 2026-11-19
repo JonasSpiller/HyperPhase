@@ -1419,7 +1419,7 @@ def instrument_cfg(cfg, instrument, sigma_1min=None):
     from HItargets_utils import filter_loc, filter_lambda
     c0, cfgs = template_cfg(cfg), []
     for d in detectors(instrument):
-        l1, l2 = filter_lambda(d)
+        l1, l2 = filter_lambda(d, c0.planet)   # the planet's own part of the band where its host saturates the rest (PARTIAL_BANDS)
         s = c0.sigma_1min if sigma_1min is None else (sigma_1min[d] if isinstance(sigma_1min, dict) else sigma_1min)
         cfgs.append(replace(c0, filter_path=filter_loc(d), l1=l1, l2=l2, sigma_1min=float(s)))
     return cfgs[0] if len(cfgs) == 1 else cfgs

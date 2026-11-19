@@ -93,10 +93,10 @@ def run_instrument(instrument):
     name = joint_name(bands) if joint else dets   # the instrument part of the file names
 
     # Noise level per band, straight from PandExo (served from the cache), or CUSTOM_SIGMA_1MIN where PandExo has no mode
-    sigmas = [sigma_1min_scaling * rms_1min(planet, b, filter_lambda(b)) for b in bands]
+    sigmas = [sigma_1min_scaling * rms_1min(planet, b, filter_lambda(b, planet)) for b in bands]   # filter_lambda(b, planet): the planet's own part of the band where its host saturates the rest (PARTIAL_BANDS)
 
     # context for simulating data functions: one FittingConfig per band; a tuple of them is a detector set (fitted jointly)
-    cfgs = [FittingConfig(planet=planet, filter_path=filter_loc(b), l1=filter_lambda(b)[0], l2=filter_lambda(b)[1], A_=A_model,
+    cfgs = [FittingConfig(planet=planet, filter_path=filter_loc(b), l1=filter_lambda(b, planet)[0], l2=filter_lambda(b, planet)[1], A_=A_model,
                           sigma_1min=s_, n_orbits=n_orbits, n_bins=n_bins, reflected=True, u_bol=u_bol, u=u) for b, s_ in zip(bands, sigmas)]
     cfg = tuple(cfgs) if joint else cfgs[0]
 

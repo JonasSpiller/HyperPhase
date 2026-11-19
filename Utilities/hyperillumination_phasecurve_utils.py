@@ -592,6 +592,10 @@ class FittingConfig:
     stellar_grid: object = field(init=False, repr=False, default=None)   # DERIVED from planet (logg, feh) and the band in __post_init__, so every replace(cfg, planet=..., l1=..., ...) rebuilds it (cached in stellar_spidergrid) and it can never belong to another star or band
 
     def __post_init__(self):
+        # l1, l2 on an instrument's standard band become the PLANET's band of it (HItargets_utils.observed_band): the clean part where its host saturates the rest (PARTIAL_BANDS; 55 Cnc e
+        # on MIRI/LRS), else the band itself. So a config moved to another planet takes that planet's band, like its stellar grid. Any other (l1, l2) is kept as given.
+        from HItargets_utils import observed_band   # here, not at the top: it is defined late in HItargets_utils, which may still be loading (it imports hyperillumination_utils back)
+        self.l1, self.l2 = observed_band(self.filter_path, self.l1, self.l2, self.planet)
         if np.isfinite(self.l1) and np.isfinite(self.l2): self.stellar_grid = stellar_spidergrid((self.l1, self.l2), self.filter_path, self.planet.logg, self.planet.feh, stellar_model=self.stellar_model)   # l1 = l2 = nan: a band-less template cfg, instrument_cfg fills the band
 
     @property

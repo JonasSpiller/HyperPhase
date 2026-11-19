@@ -334,7 +334,7 @@ def quad_ld(planet, bands, ld_model, interpolate_type="nearest", mu_min=LD_MU_MI
     rows, profiles = [], {}
     for band in bands:
         lam, T = load_filter(full_lambda(band), filter_loc(band))          # [m], electrons per photon, as in the forward model
-        wl_band = filter_lambda(band) * A_PER_M
+        wl_band = filter_lambda(band, planet) * A_PER_M                     # the planet's own part of the band (HItargets_utils.PARTIAL_BANDS)
         try:
             u1, u2 = sld.compute_quadratic_ld_coeffs(wl_band, "custom", custom_wavelengths=lam * A_PER_M, custom_throughput=T, mu_min=mu_min)
             profiles[band] = (sld.mus.copy(), sld.I_mu.copy())              # I_mu is set by the call above

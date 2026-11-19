@@ -19,8 +19,9 @@ from dynesty import utils as dyfunc
 from scipy.ndimage import gaussian_filter
 from simple_bias_analysis import binned, fit_naive, fit_AB_only, fit_redist, fisher_sigma, measurability, temperature_bias, is_detector_set, evidence_residual, nuisance_problem, nuisance_solve, pmap, C_HI, C_NAIVE, C_REDIST, MUTED   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth and the series table compare the sampler with
 from hyperillumination_utils import surface_temperature   # the nightside temperature a fitted F implies
-from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS, DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS, resolve_instrument, joint_name   # the parameter ranges: priors (physical) and the least-squares fit range of A_B; the baseline settings and instrument spellings of the dataset tags
+from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS, DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS, resolve_instrument, joint_name, observed_band   # the parameter ranges: priors (physical) and the least-squares fit range of A_B; the baseline settings and instrument spellings of the dataset tags
 from scipy.stats import norm, truncnorm
+from scipy.stats import chi2 as chi2_dist   # p-value of a best-fit chi2 (run_prediction)
 import warnings
 from dynesty.dynamicsampler import stopping_function   # re-evaluated post-run to tell convergence from budget truncation
 from dynesty.utils import get_neff_from_logwt
@@ -930,12 +931,18 @@ def check_fit_current(fit, cfg=None, rtol=1e-6):
     """Is a saved fit still a fit of TODAY's forward model? Returns the relative difference between the stellar grid the fit was run with (pickled inside its cfg) and the one the
     current code builds from the same inputs (star, band, filter file, stellar model), the largest over the detectors of a joint fit. 0 means identical; anything else means the
     thermal normalisation changed since the run (stellar SED, filter convention, band-edge fix, ...), so the saved samples are not the posterior of the current likelihood and every
-    plot that re-evaluates the forward model would mix the two. Also raises for a cfg saved with an older FittingConfig (missing fields), which the forward model could not evaluate anyway."""
+    plot that re-evaluates the forward model would mix the two. inf (with a printed WARNING) where the planet's band itself changed since the run (a HItargets_utils.PARTIAL_BANDS
+    entry: the current code would integrate another band). Also raises for a cfg saved with an older FittingConfig (missing fields), which the forward model could not evaluate anyway."""
     cfg = cfg if cfg is not None else fit.meta["cfg"]
-    rel_max = 0.
+    rel_max, band_changed = 0., False
     for c in detector_cfgs(cfg):
         missing = [f.name for f in fields(FittingConfig) if not hasattr(c, f.name)]
         if missing: raise ValueError(f"the saved FittingConfig predates the field(s) {missing}: this fit ({fit.meta.get('file', '?')}) was run with an older forward model and has to be re-run")
+        band = observed_band(c.filter_path, c.l1, c.l2, c.planet)   # the band the current code observes this planet in (a PARTIAL_BANDS entry added since the run moves it)
+        if not np.allclose(band, (c.l1, c.l2), rtol=0., atol=1e-12):
+            print(f"WARNING [{fit.meta['insolation_model']}]: {fit.meta.get('file', 'this fit')} was run over {1e6 * c.l1:.2f}-{1e6 * c.l2:.2f} um, but the current code observes "
+                  f"{c.planet.name} in {1e6 * band[0]:.2f}-{1e6 * band[1]:.2f} um of this band (HItargets_utils.PARTIAL_BANDS). Re-run the fit before quoting it.", file=sys.stderr, flush=True)
+            band_changed = True
         now = stellar_spidergrid((c.l1, c.l2), c.filter_path, c.planet.logg, c.planet.feh, stellar_model=c.stellar_model)
         then = c.stellar_grid
         rel = np.inf if (np.shape(now[1]) != np.shape(then[1]) or not np.allclose(now[0], then[0])) else float(np.max(np.abs(np.asarray(now[1], float) / np.asarray(then[1], float) - 1.)))   # inf: different T_eff nodes
@@ -943,7 +950,7 @@ def check_fit_current(fit, cfg=None, rtol=1e-6):
     if rel_max > rtol:   # printed to stderr rather than warnings.warn: HItargets_utils silences every warning at import (warnings.filterwarnings('ignore')), and this one must be seen
         print(f"WARNING [{fit.meta['insolation_model']}]: the stellar grid of the current code differs from the one this fit was run with by up to {100 * rel_max:.3g} % "
               f"(stellar model, filter or band changed since {fit.meta.get('file', 'the run')}). Its samples are not the posterior of today's likelihood: re-run the fit before quoting it.", file=sys.stderr, flush=True)
-    return rel_max
+    return np.inf if band_changed else rel_max
 
 
 def logl_from_fit(fit, cfg=None, **model_kw):
@@ -1578,7 +1585,9 @@ def run_prediction(fits, ref=None, K=200, seed=0, z_tol=1e-6):
     zF_obs = sqrt(2 dlnL_max) between the best fits with and without redistribution (the significance of F in this realisation, one-sided) and occam_F = lnB_redist_vs_ps - dlnL_max.
     With ref["redist"] (evidence_reference(..., redist=True)): dA_noiseless_redist, F_noiseless, chi2_min_redist, sigma_fisher_redist, zF_noiseless = sqrt(chi2_min - chi2_min_redist),
     zeta_F = r_F_hat . z and zF_pred = max(zF_noiseless + zeta_F, 0), the linear prediction of zF_obs (F >= 0, hence the floor).
-    A_B_lo95_<m>, A_B_lo_<m>, A_B_hi_<m>, A_B_hi95_<m> (m = truth, alt, redist) and F_lo95, F_lo, F_hi, F_hi95 are the 95 % and 68 % posterior intervals (plot_ns_realizations)."""
+    A_B_lo95_<m>, A_B_lo_<m>, A_B_hi_<m>, A_B_hi95_<m> (m = truth, alt, redist) and F_lo95, F_lo, F_hi, F_hi95 are the 95 % and 68 % posterior intervals (plot_ns_realizations).
+    chi2_best_<m> and p_best_<m> (m = truth, alt, redist): chi2 of the model's best sample against the noisy data and its p-value for n_data - k degrees of freedom (k: every sampled
+    parameter), the goodness-of-fit test an observer could make with that model alone."""
     true_m, alt = alternative_model(fits)
     if alt not in fits or true_m not in fits: raise KeyError(f"the run has {tuple(fits)}; the prediction needs {true_m!r} and {alt!r}")
     if ref is None: ref = evidence_reference(fits)
@@ -1607,6 +1616,10 @@ def run_prediction(fits, ref=None, K=200, seed=0, z_tol=1e-6):
                sigma_post=0.5 * (s_a["hi"] - s_a["lo"]), sigma_post_truth=0.5 * (s_t["hi"] - s_t["lo"]), sigma_fisher=ref["sigma_fisher"])
     interval = lambda fit, name, tag: dict(zip((f"{name}_lo95{tag}", f"{name}_lo{tag}", f"{name}_hi{tag}", f"{name}_hi95{tag}"), _quantiles(fit, name, (0.025, 0.16, 0.84, 0.975))))
     row.update(**interval(f_t, "A_B", "_truth"), **interval(f_a, "A_B", "_alt"))
+    def best(fit, tag):   # chi2 of a fit's best sample and its p-value (ln L = -(chi2 + sum ln 2 pi sigma^2) / 2: GaussianLogL keeps the normalisation)
+        c = float(-2. * np.max(fit.results.logl) - np.sum(np.log(2. * np.pi * np.asarray(data["sigma"], float) ** 2)))
+        return {f"chi2_best{tag}": c, f"p_best{tag}": float(chi2_dist.sf(c, z.size - len(fit.pset.names)))}
+    row.update(n_data=int(z.size), **best(f_t, "_truth"), **best(f_a, "_alt"))
     row["lnB_ext_vs_ps"], row["lnB_pred_ext_vs_ps"] = sign * row["lnB"], sign * row["lnB_pred"]
     if K: row["lnB_err_jitter"] = bayes_factor(fits, true_m, alt, K=K, seed=seed, verbose=False)["err_jitter"]
     if "chi2_fixed" in ref: row.update(chi2_min_fixed=float(ref["chi2_fixed"]), sigma_fisher_fixed=float(ref["sigma_fisher_fixed"]))
@@ -1621,7 +1634,7 @@ def run_prediction(fits, ref=None, K=200, seed=0, z_tol=1e-6):
         row.update(lnB_vs_redist=float(f_t.meta["lnZ"] - f_r.meta["lnZ"]), lnB_redist_vs_ps=float(f_r.meta["lnZ"] - fits["naive"].meta["lnZ"]) if "naive" in fits else np.nan,
                    F_med=float(q50), F_sigma=float(0.5 * (q84 - q16)), F_95=float(q95))
         s_r = posterior_summary(f_r, verbose=False)["params"]["A_B"]
-        row.update(A_B_med_redist=s_r["med"], dA_median_redist=s_r["med"] - s_t["med"], sigma_post_redist=0.5 * (s_r["hi"] - s_r["lo"]), **interval(f_r, "A_B", "_redist"), **interval(f_r, "F", ""))
+        row.update(A_B_med_redist=s_r["med"], dA_median_redist=s_r["med"] - s_t["med"], sigma_post_redist=0.5 * (s_r["hi"] - s_r["lo"]), **interval(f_r, "A_B", "_redist"), **interval(f_r, "F", ""), **best(f_r, "_redist"))
         x = (1. - f_r.results.samples[:, f_r.pset.names.index("A_B")]) * f_r.results.samples[:, f_r.pset.names.index("F")]   # the nightside temperature depends on the two only through (1 - A_B) F, and monotonically: transform its quantiles
         row.update(zip(("T_night_lo", "T_night_med", "T_night_hi"), (float(surface_temperature(np.pi, c0.planet, "naive_redist", A_B=0., emissivity_bol=c0.emissivity_bol, F=float(v)))
                                                                       for v in dyfunc.quantile(x, [0.16, 0.5, 0.84], weights=f_r.results.importance_weights()))))
@@ -1717,7 +1730,8 @@ def plot_ns_check(tab, groups=None, figsize=None):
             if not len(t): continue
             yerr = np.where(np.isfinite(t["lnB_err_jitter"]), t["lnB_err_jitter"], t["lnB_err"]) if yc == "lnB_ext_vs_ps" else None
             ax.errorbar(t[xc], t[yc], yerr=yerr, fmt=mk[k % len(mk)], ms=6, color=f"C{k % 10}", mec="k", mew=.5, elinewidth=1., capsize=2, label=f"{label} ({int(m.sum())})", zorder=3)
-        lo, hi = np.nanmin([tab[xc].min(), tab[yc].min()]), np.nanmax([tab[xc].max(), tab[yc].max()])
+        shown = tab[np.any(list(groups.values()), axis=0)]   # the axis range follows the plotted rows, not rows that no group shows (e.g. null tests, whose bias has the other sign)
+        lo, hi = np.nanmin([shown[xc].min(), shown[yc].min()]), np.nanmax([shown[xc].max(), shown[yc].max()])
         pad = 0.06 * (hi - lo) or 1e-3
         ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="0.4", lw=1., ls="--", zorder=1)
         if xc == "sigma_fisher": ax.set_xscale("log"); ax.set_yscale("log")
@@ -1728,9 +1742,10 @@ def plot_ns_check(tab, groups=None, figsize=None):
     return fig, axes
 
 
-def plot_ns_realizations(tab, panels, A_B_ylim=None, figsize=None):
+def plot_ns_realizations(tab, panels, A_B_ylim=None, figsize=None, order="seed"):
     """The noise realisations of one configuration side by side: what each simulated observation returns. One column per entry of `panels` ({title: boolean mask over tab}), the
-    runs of a column ordered by seed (the same seed is the same standardised noise in every column).
+    runs of a column ordered by `order` (default: the seed, so the same number is the same standardised noise in every column; e.g. "lnB_pred" sorts each column by its predicted
+    ln B). With more than 15 realisations the markers shrink, the z_F numbers of (b) are left out and every fifth realisation is ticked.
     (a) the posterior of A_B under the extended-source model, the point-source model and the point-source model with redistribution: median, 68 % (thick) and 95 % (thin) intervals;
         dashed: the injected value; thin lines in the model colours: the noiseless fits of the two point-source models.
     (b) the posterior of F with the same intervals, the noiseless fitted F (line) and, above each realisation, the significance of F in it (zF_obs).
@@ -1749,40 +1764,102 @@ def plot_ns_realizations(tab, panels, A_B_ylim=None, figsize=None):
     L_INJ, L_NOISELESS, L_EXP, L_LNB, L_PRED, L_LNB_F = ("injected value", "noiseless fits", r"expected, $\chi^2_{\min}/2 \pm \sqrt{\chi^2_{\min}}$", r"$\ln B$, extended vs point source",
                                                         "predicted from the noise", r"$\ln B$, with vs without redistribution")
     for (title, mask), (ax_A, ax_F, ax_B) in zip(panels.items(), axes.T):
-        t = tab[mask].sort_values("seed")
+        t = tab[mask].sort_values(order)
         x = np.arange(1, len(t) + 1)
+        dense = len(t) > 15   # many realisations: smaller markers, thinner bars, no z_F numbers
+        ms, lw = (3., 1.4) if dense else (5., 2.4)
         for tag, color, marker, label, dx in models:   # (a) A_B under the three models
-            ax_A.vlines(x + dx, t["A_B_lo95" + tag], t["A_B_hi95" + tag], color=color, lw=0.8, alpha=0.6, zorder=2)
-            ax_A.vlines(x + dx, t["A_B_lo" + tag], t["A_B_hi" + tag], color=color, lw=2.4, zorder=3)
-            ax_A.plot(x + dx, t["A_B_med" + tag], marker, ms=5, color=color, mec="w", mew=0.4, ls="none", zorder=4, label=label)
+            ax_A.vlines(x + dx, t["A_B_lo95" + tag], t["A_B_hi95" + tag], color=color, lw=0.8 if not dense else 0.6, alpha=0.6, zorder=2)
+            ax_A.vlines(x + dx, t["A_B_lo" + tag], t["A_B_hi" + tag], color=color, lw=lw, zorder=3)
+            ax_A.plot(x + dx, t["A_B_med" + tag], marker, ms=ms, color=color, mec="w", mew=0.4, ls="none", zorder=4, label=label)
         ax_A.axhline(t["A_B_true"].iloc[0], color="k", lw=1., ls="--", zorder=1, label=L_INJ)
         ax_A.axhline(t["A_B_true"].iloc[0] + t["dA_noiseless"].iloc[0], color=C_NAIVE, lw=0.9, zorder=1, label=L_NOISELESS)
         ax_A.axhline(t["A_B_true"].iloc[0] + t["dA_noiseless_redist"].iloc[0], color=C_REDIST, lw=0.9, zorder=1)
         ax_A.set_title(title, fontsize=10)
 
         ax_F.vlines(x, t["F_lo95"], t["F_hi95"], color=C_REDIST, lw=0.8, alpha=0.6, zorder=2)   # (b) F and its significance in each realisation
-        ax_F.vlines(x, t["F_lo"], t["F_hi"], color=C_REDIST, lw=2.4, zorder=3)
-        ax_F.plot(x, t["F_med"], "s", ms=5, color=C_REDIST, mec="w", mew=0.4, zorder=4)
+        ax_F.vlines(x, t["F_lo"], t["F_hi"], color=C_REDIST, lw=lw, zorder=3)
+        ax_F.plot(x, t["F_med"], "s", ms=ms, color=C_REDIST, mec="w", mew=0.4, zorder=4)
         ax_F.axhline(t["F_noiseless"].iloc[0], color=C_REDIST, lw=0.9, zorder=1)
         ax_F.axhline(0., color="k", lw=1., ls="--", zorder=1)
-        for xi, top, zF in zip(x, t["F_hi95"], t["zF_obs"]): ax_F.annotate(f"{zF:.1f}", (xi, top), xytext=(0, 2), textcoords="offset points", ha="center", va="bottom", fontsize=7, color=MUTED)
+        if not dense:
+            for xi, top, zF in zip(x, t["F_hi95"], t["zF_obs"]): ax_F.annotate(f"{zF:.1f}", (xi, top), xytext=(0, 2), textcoords="offset points", ha="center", va="bottom", fontsize=7, color=MUTED)
 
         c2 = t["chi2_min"].iloc[0]   # (c) the Bayes factors
         ax_B.axhspan(0.5 * c2 - np.sqrt(c2), 0.5 * c2 + np.sqrt(c2), color="0.9", lw=0, zorder=0)
         ax_B.axhline(0.5 * c2, color="0.45", lw=1., zorder=1, label=L_EXP)
         for level in (2.5, 5.): ax_B.axhline(level, color="0.5", lw=0.7, ls=":", zorder=1)
         ax_B.axhline(0., color="k", lw=0.7, zorder=1)
-        ax_B.errorbar(x, t["lnB"], yerr=np.where(np.isfinite(t["lnB_err_jitter"]), t["lnB_err_jitter"], t["lnB_err"]), fmt="o", ms=4.5, color="k", elinewidth=1., zorder=4, label=L_LNB)
-        ax_B.plot(x, t["lnB_pred"], "o", ms=8, mfc="none", mec="k", mew=0.9, zorder=3, label=L_PRED)
-        ax_B.plot(x, t["lnB_redist_vs_ps"], "s", ms=4.5, color=C_REDIST, mec="w", mew=0.4, zorder=3, label=L_LNB_F)
-        ax_B.set_xticks(x); ax_B.set_xlabel("noise realisation"); ax_B.set_xlim(0.4, len(t) + 0.6)
+        ax_B.errorbar(x, t["lnB"], yerr=np.where(np.isfinite(t["lnB_err_jitter"]), t["lnB_err_jitter"], t["lnB_err"]), fmt="o", ms=ms - 0.5, color="k", elinewidth=1., zorder=4, label=L_LNB)
+        ax_B.plot(x, t["lnB_pred"], "o", ms=1.8 * ms - 1., mfc="none", mec="k", mew=0.9 if not dense else 0.6, zorder=3, label=L_PRED)
+        ax_B.plot(x, t["lnB_redist_vs_ps"], "s", ms=ms - 0.5, color=C_REDIST, mec="w", mew=0.4, zorder=3, label=L_LNB_F)
+        ax_B.set_xticks(x[4::5] if dense else x); ax_B.set_xlim(0.4, len(t) + 0.6)
+        ax_B.set_xlabel("noise realisation" + ("" if order == "seed" else f" (ordered by {order})"))
     axes[0, 0].set_ylabel("$A_B$"); axes[1, 0].set_ylabel("$F$"); axes[2, 0].set_ylabel(r"$\ln B$")
     if A_B_ylim is not None: axes[0, 0].set_ylim(*A_B_ylim)
     axes[1, 0].set_ylim(-0.0015, 1.5 * np.nanmax(tab[np.any(list(panels.values()), axis=0)]["F_hi95"]))   # room for the z_F numbers and the panel tag
-    for ax, tag in zip(axes[:, 0], ("(a)", "(b) numbers: $z_F$", "(c)")): ax.text(0.03, 0.96, tag, transform=ax.transAxes, fontsize=9, va="top")
+    many = max(int(m.sum()) for m in panels.values()) > 15
+    for ax, tag in zip(axes[:, 0], ("(a)", "(b)" if many else "(b) numbers: $z_F$", "(c)")): ax.text(0.03, 0.96, tag, transform=ax.transAxes, fontsize=9, va="top")
     entries = {l: h for ax in (axes[0, 0], axes[2, 0]) for h, l in zip(*ax.get_legend_handles_labels())}
     order = [models[0][3], models[1][3], models[2][3], L_INJ, L_NOISELESS, L_EXP, L_LNB, L_PRED, L_LNB_F]   # filled column by column: the models and references of (a) and (b), then the Bayes factors of (c)
     ax_leg = fig.add_subplot(gs[0, :])
     ax_leg.axis("off")
     ax_leg.legend([entries[l] for l in order], order, loc="center", ncol=5, frameon=False, fontsize=8)
+    return fig, axes
+
+
+def plot_ns_distribution(tab, rows, others=None, figsize=None):
+    """The noise realisations of one configuration as distributions: what a single observation can return, and how often. One row of three panels per entry of `rows`
+    ({title: boolean mask over tab}); needs a series_table(..., redist=True) and runs with all three models.
+    (a) the posterior median of A_B under the point-source model (circles) and the point-source model with redistribution (squares) against the median under the extended-source
+        model in the same realisation. Dashed: equal medians; lines in the model colours: the extended-source median shifted by the noiseless bias of each fit; cross: the injected
+        value; dash-dotted: the prior edge A_B = 0; the bar in the corner: the median 68 % half-widths of the extended-source and the point-source posterior.
+    (b) the fraction of realisations whose ln B (extended vs point source) exceeds the value on the x axis (steps), against the Gaussian prediction N(chi2_min / 2, chi2_min) of
+        the noiseless fit (dashed). others: one {label: mask} per row for further configurations in grey (e.g. another planet in the same mode). Dotted: ln B = 2.5 and 5.
+    (c) the significance z_F of the spurious F in each realisation against ln B of that realisation; the fill tells what the Bayes factor of the point-source model with over
+        without redistribution (ln B_F) concludes. Horizontal line: the noiseless z_F (its predicted median); vertical line: chi2_min / 2.
+    Returns fig, axes (number of rows x 3)."""
+    fig, axes = plt.subplots(len(rows), 3, figsize=figsize or (13., 4.1 * len(rows)), squeeze=False)
+    x_B = np.linspace(-4., 20., 500)
+    for k, ((title, mask), (ax_A, ax_B, ax_F)) in enumerate(zip(rows.items(), axes)):
+        t = tab[mask].sort_values("seed")
+        A0, dA, dAF, c2 = t["A_B_true"].iloc[0], t["dA_noiseless"].iloc[0], t["dA_noiseless_redist"].iloc[0], t["chi2_min"].iloc[0]
+
+        lo, hi = min(t["A_B_med_truth"].min(), A0) - 0.03, max(t["A_B_med_truth"].max(), A0) + 0.03   # (a) the point-source medians against the extended-source median
+        y_lo = min(-0.03, t["A_B_med_redist"].min() - 0.03)
+        x = np.array([lo, hi])
+        ax_A.plot(x, x, color="k", lw=1., ls="--", zorder=1, label="equal medians")
+        ax_A.plot(x, x + dA, color=C_NAIVE, lw=1., zorder=1, label="shifted by the noiseless bias")
+        ax_A.plot(x, x + dAF, color=C_REDIST, lw=1., zorder=1)
+        ax_A.axhline(0., color="0.6", lw=0.8, ls="-.", zorder=1)
+        ax_A.plot(t["A_B_med_truth"], t["A_B_med_alt"], "o", ms=5, color=C_NAIVE, mec="w", mew=0.4, ls="none", zorder=3, label="point source")
+        ax_A.plot(t["A_B_med_truth"], t["A_B_med_redist"], "s", ms=5, color=C_REDIST, mec="w", mew=0.4, ls="none", zorder=3, label="point source with redistribution")
+        ax_A.plot([A0], [A0], "+", ms=13, mew=1.6, color=C_HI, zorder=4, label="injected value")
+        sx, sy = t["sigma_post_truth"].median(), t["sigma_post"].median()
+        ax_A.errorbar([hi - sx - 0.04 * (hi - lo)], [y_lo + sy + 0.05 * (hi - y_lo)], xerr=sx, yerr=sy, color="0.4", lw=1., capsize=2, zorder=2)
+        ax_A.set_xlim(lo, hi); ax_A.set_ylim(y_lo, hi)
+        ax_A.set_xlabel(r"$A_B$, extended-source model"); ax_A.set_ylabel(r"$A_B$, point-source models")
+
+        groups = [(title.split(",")[0], t, "k")] + [(lab, tab[m], "0.6") for lab, m in (others[k].items() if others else ())]   # (b) fraction of realisations above ln B
+        for lab, g, color in groups:
+            v, c = np.sort(g["lnB"].to_numpy()), g["chi2_min"].iloc[0]
+            ax_B.step(np.concatenate([[x_B[0]], v, [x_B[-1]]]), np.concatenate([[1.], 1. - np.arange(1, len(v) + 1) / len(v), [0.]]), where="post", color=color, lw=1.6, label=f"{lab} ({len(v)})")
+            ax_B.plot(x_B, norm.sf((x_B - 0.5 * c) / np.sqrt(c)), color=color, lw=1., ls="--", label="Gaussian prediction" if color == "k" else None)
+        ax_B.axvline(0., color="k", lw=0.7, zorder=1)
+        ax_B.set_ylim(0., 1.02); ax_B.set_ylabel(r"fraction of realizations above $\ln B$")
+
+        b = t["lnB_redist_vs_ps"].to_numpy()   # (c) the significance of F against ln B; the fill: the verdict of the Bayes factor with vs without redistribution
+        for sel, fc, lab in ((b <= 0., "w", r"$\ln B_F \leq 0$"), ((b > 0.) & (b <= 2.5), "#a9cdf0", r"$0 < \ln B_F \leq 2.5$"), (b > 2.5, C_REDIST, r"$\ln B_F > 2.5$")):
+            ax_F.plot(t["lnB"][sel], t["zF_obs"][sel], "s", ms=6, mfc=fc, mec=C_REDIST, mew=1., ls="none", zorder=3, label=f"{lab} ({int(sel.sum())})")
+        ax_F.axhline(t["zF_noiseless"].iloc[0], color=C_REDIST, lw=1., zorder=1)
+        ax_F.axvline(0.5 * c2, color="0.45", lw=1., zorder=1)
+        ax_F.set_ylim(0., max(5.6, 1.08 * t["zF_obs"].max())); ax_F.set_ylabel(r"$z_F$")
+        x_hi = max(17., 1.08 * max(g["lnB"].max() for _, g, _ in groups))
+        for ax in (ax_B, ax_F):
+            for level in (2.5, 5.): ax.axvline(level, color="0.5", lw=0.7, ls=":", zorder=1)
+            ax.set_xlim(-3., x_hi); ax.set_xlabel(r"$\ln B$, extended vs point source")
+        for ax, tag in zip((ax_A, ax_B, ax_F), "abc"): ax.set_title(f"({tag})" + (f" {title}" if tag == "a" else ""), fontsize=10, loc="left")
+        if k == 0: ax_A.legend(frameon=False, fontsize=7.5, loc="upper left")
+        ax_B.legend(frameon=False, fontsize=8, loc="upper right"); ax_F.legend(frameon=False, fontsize=8, loc="lower right", title=r"$\ln B_F$: with vs without $F$", title_fontsize=8)
+    fig.tight_layout()
     return fig, axes

@@ -1,4 +1,4 @@
-import os, fcntl, re
+import os, sys, fcntl, re
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -51,9 +51,9 @@ DEFAULT_N_ORBITS = 5
 # Bins per orbit of the phase-folded light curve: 12 min for TOI-2431 b, 15 min for K2-141 b. The width is derived from the period, so the bins tile the orbit exactly.
 DEFAULT_N_BINS = 27
 
-# Reference Rp/R* of the (a/R*, T_eff) bias maps (simple_bias_analysis.reference_planet; Bias_Maps.ipynb, HypotheticalExtremePlanet.ipynb, PaperPlots.ipynb): the median of the nine
-# PAPER_PLANETS (0.0158; they span 0.012-0.021). The bias barely depends on it, because the mismatch and the response to A_B both scale with the planet's flux: between 0.0075 and
-# 0.03 it changes by less than 3 % (A_B-only fit) and 5 % (with F) (PaperPlots.ipynb, res-maps-code). Map outputs from before 2026-11-14 used 0.015.
+# Reference Rp/R* of the (a/R*, T_eff) bias maps (simple_bias_analysis.reference_planet; Bias_Maps.ipynb, HypotheticalExtremePlanet.ipynb, For_Paper/Plots_Sec4.3.ipynb): the median of the
+# PAPER_PLANETS (0.0158 for the nine of the selection rule, 0.0160 with 55 Cnc e; they span 0.012-0.021). The bias barely depends on it, because the mismatch and the response to A_B both scale with the planet's flux: between 0.0075 and
+# 0.03 it changes by less than 3 % (A_B-only fit) and 5 % (with F) (For_Paper/Plots_Sec4.3.ipynb, res-maps-code). Map outputs from before 2026-11-14 used 0.015.
 DEFAULT_MAP_RP_RS = 0.016
 
 # Parameter ranges, shared by the least-squares bias analysis (simple_bias_analysis) and the nested sampling (dynesty_utils, run_dynesty.py).
@@ -99,7 +99,11 @@ ROCKY_MAX_RADE = 1.7
 # (K2-157 b, K2-223 b, KOI-1843.03, K2-183 b, K2-301 c, Kepler-990 c fail it with ESM 0.7-1.9; K2-106 b with 3.0). Every member has a CUSTOM entry, so the sample does not move
 # with archive updates. Dropped on the a/R* cut: TOI-6255 b, TOI-431 b, GJ 367 b (3.10-3.35, ESM 15-22; three of the five GO 8864 targets) and TOI-6324 b (4.29).
 # best_hi_planets is NOT this set: it ranks by (1 - Rp/R*)/(a/R*) and has no brightness cut.
-PAPER_PLANETS = ("TOI-2431 b", "TOI-2260 b", "K2-141 b", "K2-131 b", "TOI-561 b", "Kepler-78 b", "TOI-1444 b", "TOI-1798.02", "HD 80653 b")
+# 55 Cnc e (2026-11-18) is added outside the rule as the common reference of the hyper-illumination literature (Carter et al. 2024, Sadh & Gavassino 2026, Sadh 2026) and of the lava-world
+# observations: it fails both the radius cut (1.87 R_E) and the a/R* cut (3.52). Its host (K = 4.0) saturates NIRSpec/G395H, so it has no noise level there (UNOBSERVABLE): MIRI/LRS only, and
+# that only over 6.7-10.5 um, since it saturates the blue end of the band too (PARTIAL_BANDS).
+PAPER_PLANETS = ("TOI-2431 b", "TOI-2260 b", "K2-141 b", "K2-131 b", "TOI-561 b", "Kepler-78 b", "TOI-1444 b", "TOI-1798.02", "HD 80653 b", "55 Cnc e")
+PAPER_OUTSIDE_RULE = ("55 Cnc e",)   # the members of PAPER_PLANETS that the selection rule does not pick (PaperNumbers.ipynb checks the others against the archive selection)
 
 # The Roche limits drawn on every (a/R*, T_eff) map (simple_bias_analysis.draw_roche_frontier, main-sequence hosts) and used in HypotheticalExtremePlanet.ipynb, as {label: (iron mass
 # fraction, rho_0 / rho_mean)} of a rock/iron planet of radius ROCHE_R_P. The radius and iron fraction give the mean density (astro_utils.rocky_mean_density, Fortney et al. 2007 eq. 8), and
@@ -139,6 +143,8 @@ CUSTOM = {
     "TOI-6255 b":       PlanetParams(name="TOI-6255 b", period=0.23818244, incl=74.4, ecc=0.0, w=90.0, r1=0.0267, r2=1.0, R=3.10, T2_eff=3421.0, a_AU=0.00533, T14=0.36, logg=4.85, feh=-0.14),    # Dai et al. 2024 (AJ 168, 101) Tab. 1-2 (R* 0.370); b = 0.84. T14 from the geometry (none published; ExoFOP's 0.48 h is not from the fit). P/P_Roche = 1.13: ellipsoidal variations of tens of ppm expected
     "TOI-6324 b":       PlanetParams(name="TOI-6324 b", period=0.2792210, incl=82.36, ecc=0.0, w=90.0, r1=0.03217, r2=1.0, R=4.29, T2_eff=3247.0, a_AU=0.00585, T14=0.435, logg=4.93, feh=-0.32),  # geometry Gomez Barrientos et al. 2025 (AJ 170, 148) Tab. 3 (a/R* 4.29 +0.61/-0.69, b 0.57, i 82.36 +- 2.94, TESS Rp/R*); star and P Lee et al. 2025 (ApJL 983, L36) Tab. 1 (R* 0.293). Lee's own fit (a/R* 3.17, i 74.6) rests on a stellar density mislabelled by the factor rho_sun (10.7 solar = 15.1 g/cm^3). T14 from the geometry
     "TOI-431 b":        PlanetParams(name="TOI-431 b", period=0.490054945, incl=84.7, ecc=0.0, w=90.0, r1=0.0161, r2=1.0, R=3.35, T2_eff=4850.0, a_AU=0.01139, T14=1.10, logg=4.60, feh=0.20),     # Smith et al. 2026 (arXiv:2609.03029) Tab. 1-2, joint TESS+RV fit with Osborn's density prior; star Osborn et al. 2021 (MNRAS 507, 2782) Tab. 2 (R* 0.731). The archive's a/R* = 3.42 +- 1.71 (Kokori et al. 2023) is a catalogue value, not a fit
+    # ---- 55 Cnc e: in PAPER_PLANETS outside the selection rule (common reference; 2026-11-18) ---------------------------------------------------------------------------
+    "55 Cnc e":         PlanetParams(name="55 Cnc e", period=0.7365474, incl=83.59, ecc=0.0, w=90.0, r1=0.0182, r2=1.0, R=3.52, T2_eff=5172.0, a_AU=0.01544, T14=1.532, logg=4.43, feh=0.35),          # Bourrier et al. 2018 (A&A 619, A1) Tab. 4: P, a/R* 3.52 +- 0.01, Rp/R* 0.0182 +- 0.0002 (HST/STIS), i 83.59 +0.47/-0.44 (b = 0.39), a 0.01544 AU (e = 0.05 +- 0.03 set to 0); star Tab. 1 (R* 0.943 von Braun et al. 2011; T_eff, log g, [Fe/H] Yee et al. 2017). Rp = 1.87 R_E > ROCKY_MAX_RADE. T14 from the geometry (none in Bourrier)
     "GJ 367 b":         PlanetParams(name="GJ 367 b", period=0.3219225, incl=79.89, ecc=0.0, w=90.0, r1=0.01399, r2=1.0, R=3.327, T2_eff=3522.0, a_AU=0.00709, T14=0.629, logg=4.776, feh=-0.01),  # Goffo et al. 2023 (ApJL 955, L3) Tab. 1-2 (R* 0.458; e = 0.06 +0.07/-0.04 set to 0; b = 0.584); a/R* = 3.327 as adopted from Goffo by Zhang et al. 2024 (ApJL 961, L44) Sect. 2 (Lee et al. 2026, arXiv:2606.18355: 3.33 +- 0.17, b = 0.68, Rp/R* = 0.0148)
     # ---- tier A of the top-30 review: usable geometry and host -------------------------------------------------------------------------------------------------------
     "K2-157 b":         PlanetParams(name="K2-157 b", period=0.3652575, incl=89.2, ecc=0.0, w=90.0, r1=0.00996, r2=1.0, R=2.405, T2_eff=5334.0, a_AU=0.00962, T14=1.161, logg=4.45, feh=0.02),        # Castro-Gonzalez et al. 2025 (A&A 699, A344) Tab. B.5, Tab. 1 (R* 0.860); a/R* from the stellar priors; i = 89.2 is a flat-prior median (b = 0.03 +- 0.38)
@@ -460,8 +466,12 @@ def joint_name(detectors):
 FILTER_LAMBDA_M = {name: 1e-6 * np.array(r) for name, r in FILTER_LAMBDA_UM.items()}
 FULL_LAMBDA_M = {name: 1e-6 * np.array(r) for name, r in FULL_LAMBDA_UM.items()}
 
-def filter_lambda(instrument):
-    """The wavelength range [m] used for observations as a 2-element array."""
+def filter_lambda(instrument, planet=None):
+    """The wavelength range [m] used for observations as a 2-element array: the band's FILTER_LAMBDA_UM range or, for a planet (PlanetParams or name) with a PARTIAL_BANDS entry on
+    this instrument, the part of it that planet can be observed in (its host saturates the rest)."""
+    if planet is not None:
+        part = PARTIAL_BANDS_N.get(_normalise(getattr(planet, "name", planet)), {}).get(instrument)
+        if part is not None: return part.copy()
     return FILTER_LAMBDA_M[instrument]
 
 def full_lambda(instrument):
@@ -528,6 +538,56 @@ CUSTOM_SIGMA_1MIN = {
 _bad = {ins for d in CUSTOM_SIGMA_1MIN.values() for ins in d} - set(FILTER_LAMBDA_UM)
 if _bad: raise KeyError(f"CUSTOM_SIGMA_1MIN uses unknown instrument(s) {sorted(_bad)}; valid keys are {list(FILTER_LAMBDA_UM)}")
 CUSTOM_SIGMA_1MIN_N = {_normalise(k): v for k, v in CUSTOM_SIGMA_1MIN.items()}
+
+# Modes in which a planet cannot be observed: {planet name: {instrument (FILTER_LAMBDA_UM key): reason}}. rms_1min raises NoNoiseLevelError for them before PandExo runs, exactly as for an
+# instrument without any noise level: planet_bias_table fits them without a Fisher sigma (VERDICT_NO_NOISE), joint fits that need the detector and the false-positive tables leave the planet
+# out, run_dynesty.py skips the entry, and paper_plot_utils.ns_series expects no runs (observable). Planet names are matched loosely.
+_G395H_SAT_55CNC = "the host (K = 4.0) saturates NIRSpec/G395H; NIRCam grism was the only non-saturating near-infrared option (Patel et al. 2024, A&A 690, A159; Hu et al. 2024 used NIRCam F444W)"
+UNOBSERVABLE = {
+    "55 Cnc e": {"JWST_NIRSpec.G395H_NRS1": _G395H_SAT_55CNC, "JWST_NIRSpec.G395H_NRS2": _G395H_SAT_55CNC},
+}
+_bad = {ins for d in UNOBSERVABLE.values() for ins in d} - set(FILTER_LAMBDA_UM)
+if _bad: raise KeyError(f"UNOBSERVABLE uses unknown instrument(s) {sorted(_bad)}; valid keys are {list(FILTER_LAMBDA_UM)}")
+UNOBSERVABLE_N = {_normalise(k): v for k, v in UNOBSERVABLE.items()}
+
+def observable(planet_name, instrument):
+    """False if any detector of `instrument` (a band, a detector tuple or a JOINT_INSTRUMENTS alias) is in UNOBSERVABLE for the planet."""
+    dets = resolve_instrument(instrument)
+    return not any(d in UNOBSERVABLE_N.get(_normalise(planet_name), {}) for d in ([dets] if isinstance(dets, str) else dets))
+
+# Bands a planet can be observed in only in part: {planet name: {instrument (FILTER_LAMBDA_UM key): [lo, hi] um}}. The host saturates the rest of the band in the first group (PandExo's
+# full_saturation_mask: unrecoverable), so the white-light curve is the sum of the clean pixels, and the forward model must integrate the same range as the noise is computed over.
+# filter_lambda(instrument, planet) returns this range; FittingConfig.__post_init__ applies it to every config of the planet on the instrument's standard band (observed_band), so
+# instrument_cfg, planet_bias_table, run_dynesty.py and every replace(cfg, planet=...) get it; rms_1min bins the PandExo spectrum over it. Planet names are matched loosely; a planet
+# renamed around the same host (simple_bias_analysis.moved_planet, the Roche cases) does not inherit the entry, although the saturation belongs to the host.
+# A partial band changes the forward model: dynesty runs made before the entry was added are flagged by dynesty_utils.check_fit_current.
+PARTIAL_BANDS = {
+    # PandExo (MIRI/LRS, ngroup optimised to the minimum of 2): 31 of the 166 pixels of 5.0-10.5 um fully saturated, 5.02-6.67 um; the first clean pixel is at 6.71 um, and the
+    # noise of 6.7-10.5 um equals that of the clean pixels of 5.0-10.5 um. Hu et al. 2024 (Nature 630, 609; arXiv:2405.04744, Methods), with 5 groups: 5.0-6.0 um saturated in the
+    # 2nd group (dropped), 6.0-7.7 um partially saturated and recovered; their spectrum and white light curve start at 6.278 um (Methods). Integrating 5.0-10.5 um instead lowers the occultation depth from 136 to 129 ppm and <ln B> from 8.7 to 6.5 (A_B = 0.2, 5 orbits)
+    "55 Cnc e": {"MIRI/LRS": [6.7, 10.5]},
+}
+_bad = {ins for d in PARTIAL_BANDS.values() for ins in d} - set(FILTER_LAMBDA_UM)
+if _bad: raise KeyError(f"PARTIAL_BANDS uses unknown instrument(s) {sorted(_bad)}; valid keys are {list(FILTER_LAMBDA_UM)}")
+for _pl, _d in PARTIAL_BANDS.items():
+    for _ins, (_lo, _hi) in _d.items():
+        if not FILTER_LAMBDA_UM[_ins][0] <= _lo < _hi <= FILTER_LAMBDA_UM[_ins][1]: raise ValueError(f"PARTIAL_BANDS[{_pl!r}][{_ins!r}] = {[_lo, _hi]} is not inside the band {FILTER_LAMBDA_UM[_ins]}")
+        if _ins in UNOBSERVABLE.get(_pl, {}): raise ValueError(f"{_pl!r} on {_ins!r} is both UNOBSERVABLE and in PARTIAL_BANDS")
+PARTIAL_BANDS_N = {_normalise(k): {ins: 1e-6 * np.array(r, float) for ins, r in v.items()} for k, v in PARTIAL_BANDS.items()}
+
+# The band [m] a FittingConfig observes `planet` (PlanetParams or name) in, from its throughput file and band edges: where (l1, l2) is a STANDARD band of the instrument of filter_path
+# (its FILTER_LAMBDA_UM range, or any planet's PARTIAL_BANDS range of it), the planet's own filter_lambda(instrument, planet); any other (l1, l2) - a top-hat, a band-edge sweep - as given.
+# FittingConfig.__post_init__ calls it, so a config moved to another planet (replace(cfg, planet=...)) takes that planet's band. Returns (l1, l2).
+def observed_band(filter_path, l1, l2, planet):
+    if filter_path is None or not (np.isfinite(l1) and np.isfinite(l2)): return l1, l2
+    ins = _INSTRUMENT_OF_FILE.get(os.path.realpath(str(filter_path)))
+    if ins is None: return l1, l2
+    standard = [FILTER_LAMBDA_M[ins]] + [d[ins] for d in PARTIAL_BANDS_N.values() if ins in d]
+    if not any(np.allclose((l1, l2), b, rtol=0., atol=1e-12) for b in standard): return l1, l2
+    lo, hi = filter_lambda(ins, planet)
+    return float(lo), float(hi)
+
+_INSTRUMENT_OF_FILE = {os.path.realpath(str(FILTER_DIR / f)): ins for ins, f in FILTER_FILES.items()}
 
 # Calculate the rms noise per minute of observation
 def rms_1min_pandexo(result, T14, lambda_range, visualize=False, extra=False):
@@ -656,12 +716,22 @@ def binning(lam_start, lam_end, result, visualize=True):
     N_in, N_out, V_in, V_out = (np.asarray(raw[k], float) for k in ("electrons_in", "electrons_out", "var_in", "var_out"))
     t_ratio = timing["On Source Time Out of Transit"] / timing["On Source Time In Transit"]
 
+    # PandExo sets the error of a fully saturated pixel to NaN (mask_fully_saturated_final_spectrum), so the self-check and the sums below use the other pixels only
+    saturated = np.asarray(spec.get("full_saturation_mask", np.zeros(wave.size)), bool)
+    if saturated.shape != wave.shape: raise ValueError(f"binning(): full_saturation_mask has shape {saturated.shape}, the spectrum {wave.shape}")
+
     # self-check: the formula must reproduce PandExo's own per-pixel errors (fails e.g. with a noise floor, which PandExo applies per binned point and this sum would drop)
-    if not np.allclose(pandexo_depth_error(N_in, N_out, V_in, V_out, t_ratio), error, rtol=1e-6):
+    if not np.allclose(pandexo_depth_error(N_in, N_out, V_in, V_out, t_ratio)[~saturated], error[~saturated], rtol=1e-6):
         raise ValueError("binning(): the summed-electron error does not reproduce PandExo's per-pixel errors (noise floor set?)")
 
-    use = (lam_start < wave) & (wave < lam_end) & ~np.asarray(spec.get("full_saturation_mask", np.zeros(wave.size)), bool)
+    in_band = (lam_start < wave) & (wave < lam_end)
+    use = in_band & ~saturated
+    if in_band.any() and not use.any(): raise NoNoiseLevelError(f"every PandExo pixel in {lam_start:g}-{lam_end:g} um is fully saturated: no noise level in this band")   # not observable
     if not use.any(): raise ValueError(f"no usable PandExo pixels in {lam_start:g}-{lam_end:g} um")
+    if (in_band & saturated).any():   # the noise then belongs to the unsaturated part of the band, while the forward model integrates all of it unless the planet has a PARTIAL_BANDS entry
+        lo, hi = wave[in_band & saturated].min(), wave[in_band & saturated].max()
+        print(f"binning(): {int((in_band & saturated).sum())} of {int(in_band.sum())} PandExo pixels in {lam_start:g}-{lam_end:g} um are fully saturated "
+              f"({lo:.2f}-{hi:.2f} um) and left out of the noise; give the planet the clean range in HItargets_utils.PARTIAL_BANDS, so that the forward model integrates the same band", file=sys.stderr)
     rms_transit = 1e6 * pandexo_depth_error(N_in[use].sum(), N_out[use].sum(), V_in[use].sum(), V_out[use].sum(), t_ratio)
 
     if visualize:
@@ -736,10 +806,13 @@ def _pandexo_cache_store(entries):
 
 # sigma_1min [ppm/min] of one planet on one instrument: from the PandExo cache (PANDEXO_CACHE) if it has this exact configuration, else run_pandexo + rms_1min_pandexo, stored
 # in the cache. instrument is a FILTER_LAMBDA_UM key (the PandExo mode is looked up via pandexo_mode), lrs_range [m] the band the PandExo spectrum is binned over (default:
-# filter_lambda(instrument)). overrides go to run_pandexo (verbose, mag, ...); the transit duration is planet.T14 unless t14_h overrides it. A new run also stores every other
+# filter_lambda(instrument, planet), i.e. the planet's PARTIAL_BANDS range where it has one). overrides go to run_pandexo (verbose, mag, ...); the transit duration is planet.T14 unless t14_h overrides it. A new run also stores every other
 # detector of the same PandExo mode at its own band, from the same result (one NIRSpec G395H run gives NRS1 and NRS2). use_cache=False reruns PandExo and replaces the cached row.
 # Where PandExo has no mode for the instrument, the value comes from CUSTOM_SIGMA_1MIN (lrs_range and overrides then do not apply); if that has none either, a NoNoiseLevelError says where to add one.
+# A mode listed in UNOBSERVABLE for the planet, and a band whose PandExo pixels are all fully saturated, raise NoNoiseLevelError as well (the latter is not cached: PandExo reruns on the next call).
 def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
+    reason = UNOBSERVABLE_N.get(_normalise(planet.name), {}).get(instrument)
+    if reason: raise NoNoiseLevelError(f"no noise level for {planet.name!r} on {instrument!r}: {reason} (HItargets_utils.UNOBSERVABLE)")
     if PANDEXO_MODES[instrument] is None:
         custom = CUSTOM_SIGMA_1MIN_N.get(_normalise(planet.name), {})
         if instrument not in custom:
@@ -747,7 +820,7 @@ def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
                              f"for this planet/instrument (it has {sorted(custom) or 'none'} for this planet). Add one there, or pass sigma_1min by hand.")
         if overrides.pop("verbose", False): print(f"{planet.name} [{instrument}]: sigma_1min = {custom[instrument]:.1f} ppm/min from CUSTOM_SIGMA_1MIN (no PandExo mode)")
         return custom[instrument]
-    if lrs_range is None: lrs_range = filter_lambda(instrument)
+    if lrs_range is None: lrs_range = filter_lambda(instrument, planet)   # the planet's own part of the band where its host saturates the rest (PARTIAL_BANDS)
     overrides.setdefault("t14_h", planet.T14)
     verbose = overrides.pop("verbose", True)
     p = pandexo_params(planet.name, **overrides)   # exactly the inputs run_pandexo would use: the cache key
@@ -758,7 +831,7 @@ def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
             return cached
     result = run_pandexo(planet.name, instrument, verbose=verbose, **overrides)
     created, entries, value = datetime.now().isoformat(timespec="seconds"), [], None
-    siblings = [(d, filter_lambda(d)) for d, m in PANDEXO_MODES.items() if m == PANDEXO_MODES[instrument] and d != instrument]
+    siblings = [(d, filter_lambda(d, planet)) for d, m in PANDEXO_MODES.items() if m == PANDEXO_MODES[instrument] and d != instrument]
     for ins, band in [(instrument, lrs_range)] + siblings:
         try:
             out = rms_1min_pandexo(result, overrides["t14_h"], band, extra=True)
@@ -789,7 +862,7 @@ def rms_1min_pandexo_sample(names, instrument, verbose=False, **overrides):
         except NoNoiseLevelError:
             missing.append(pl.name)
     if missing:
-        print(f"no noise level on {joint_name(dets) if joint else dets} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry) for {len(missing)} of {len(missing) + len(out)} planets: {', '.join(missing)}")
+        print(f"no noise level on {joint_name(dets) if joint else dets} (no PandExo mode and no CUSTOM_SIGMA_1MIN entry, or not observable: UNOBSERVABLE) for {len(missing)} of {len(missing) + len(out)} planets: {', '.join(missing)}")
     return out
 
 
