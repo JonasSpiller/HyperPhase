@@ -173,6 +173,34 @@ CUSTOM = {
 OVERRIDES = {
 }
 
+# Published 1-sigma uncertainties of the two reference planets, for every analysis that does not hold the geometry fixed: the nuisance fits of simple_bias_analysis
+# (Bias Analysis/Nuisance_Robustness.ipynb), fig:res_nuisance (paper_plot_utils.nuisance_robustness) and the free-geometry dynesty runs. Defined once, here.
+# GEOMETRY_PARAMS: the geometry as each planet's source FITTED it, in the column names of simple_bias_analysis.nuisance_problem. Tas et al. fit the impact parameter b and the stellar
+# density of TOI-2431 b and derive i = arccos(b / (a/R*)), so its geometry is (a/R* at fixed b, Rp/R*, b); Malavolta et al. fit a/R* and i of K2-141 b directly.
+# GEOMETRY_SIGMA: the Gaussian priors on these parameters (1 sigma, centred on the adopted values of CUSTOM, independent: correlations ignored). "a_rs" also serves "a_rs|b".
+# For TOI-2431 b, incl is derived (mostly the errors of b and a/R* combined) and only sets the sin^2 i error of the ellipsoidal prior.
+GEOMETRY_PARAMS = {"TOI-2431 b": ("a_rs|b", "rp_rs", "b"), "K2-141 b": ("a_rs", "rp_rs", "incl")}
+GEOMETRY_SIGMA = {
+    "TOI-2431 b": dict(a_rs=0.04,       # Tas et al. 2026 (A&A 707, A238): a/R* = 2.05 +- 0.04 from the fitted stellar density (2.08 adopted from a and R*)
+                       rp_rs=0.00033,   # Tas et al. 2026 Tab. 2: 0.02131 +0.00033/-0.00032
+                       b=0.032,         # Tas et al. 2026 Tab. 2: b = 0.573 +0.031/-0.033
+                       incl=1.0),       # Tas et al. 2026 Tab. 2 (FCO fit): i = 74 +1.01/-0.96 deg
+    "K2-141 b":   dict(a_rs=0.057,      # Malavolta et al. 2018 (AJ 155, 107) Tab. 3: 2.292 +0.053/-0.060, symmetrised
+                       rp_rs=0.00046,   # Malavolta et al. 2018 Tab. 3: 0.02037 +- 0.00046
+                       incl=3.15),      # Malavolta et al. 2018 Tab. 3: i = 86.3 +2.7/-3.6 deg (> 82.6, posterior peaked at 90), symmetrised; a dynesty run truncates it at 90 deg, the linear fits do not
+}
+# PLANET_MASSES: M_p [M_Earth] and its 1 sigma, M_star [M_sun] and its 1 sigma. They set the expected amplitudes of the ellipsoidal terms (simple_bias_analysis.ellipsoidal_prior,
+# deformation_prior). ELLIPSOIDAL_U_RANGE, ELLIPSOIDAL_G_RANGE: the bracket of the linear limb-darkening and of the gravity-darkening coefficient of the star in the infrared that
+# alpha_ell of the stellar ellipsoidal term is evaluated over (NOT from a table yet; K dwarfs).
+PLANET_MASSES = {"TOI-2431 b": (6.2, 1.6, 0.661, 0.0225),    # Tas et al. 2026 (A&A 707, A238) Tab. 1-2 (FCO fit; M_star +0.021/-0.024 symmetrised)
+                 "K2-141 b":   (5.08, 0.41, 0.708, 0.028)}   # Malavolta et al. 2018 (AJ 155, 107) Tab. 2-3
+M_EARTH_SUN = 3.0035e-6   # M_Earth / M_Sun (IAU 2015 nominal values)
+ELLIPSOIDAL_U_RANGE, ELLIPSOIDAL_G_RANGE = (0.1, 0.3), (0.1, 0.4)
+# Fluid Love number h2 of the planets' tidal deformation (simple_bias_analysis.deformation_limits; the row "+ planetary deformation" of fig:res_nuisance): the true value, 2 for rocky
+# planets (Correia 2014, A&A 570, L5, after Yoder 1995; Earth's moment of inertia in his Darwin-Radau relation gives 1.93), and the range a fit may use, from all mass at the centre (1)
+# to a homogeneous body (2.5).
+DEFORMATION_H2_TRUE, DEFORMATION_H2_RANGE = 2., (1., 2.5)
+
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
