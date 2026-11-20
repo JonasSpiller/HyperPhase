@@ -51,9 +51,9 @@ DEFAULT_N_ORBITS = 5
 # Bins per orbit of the phase-folded light curve: 12 min for TOI-2431 b, 15 min for K2-141 b. The width is derived from the period, so the bins tile the orbit exactly.
 DEFAULT_N_BINS = 27
 
-# Reference Rp/R* of the (a/R*, T_eff) bias maps (simple_bias_analysis.reference_planet; Bias_Maps.ipynb, HypotheticalExtremePlanet.ipynb, For_Paper/Plots_Sec4.3.ipynb): the median of the
+# Reference Rp/R* of the (a/R*, T_eff) bias maps (simple_bias_analysis.reference_planet; Bias_Maps.ipynb, HypotheticalExtremePlanet.ipynb, For_Paper/Plots_Sec4.5.ipynb): the median of the
 # PAPER_PLANETS (0.0158 for the nine of the selection rule, 0.0160 with 55 Cnc e; they span 0.012-0.021). The bias barely depends on it, because the mismatch and the response to A_B both scale with the planet's flux: between 0.0075 and
-# 0.03 it changes by less than 3 % (A_B-only fit) and 5 % (with F) (For_Paper/Plots_Sec4.3.ipynb, res-maps-code). Map outputs from before 2026-11-14 used 0.015.
+# 0.03 it changes by less than 3 % (A_B-only fit) and 5 % (with F) (For_Paper/Plots_Sec4.5.ipynb, res-maps-code). Map outputs from before 2026-11-14 used 0.015.
 DEFAULT_MAP_RP_RS = 0.016
 
 # Parameter ranges, shared by the least-squares bias analysis (simple_bias_analysis) and the nested sampling (dynesty_utils, run_dynesty.py).
@@ -103,7 +103,7 @@ ROCKY_MAX_RADE = 1.7
 # observations: it fails both the radius cut (1.87 R_E) and the a/R* cut (3.52). Its host (K = 4.0) saturates NIRSpec/G395H, so it has no noise level there (UNOBSERVABLE): MIRI/LRS only, and
 # that only over 6.7-10.5 um, since it saturates the blue end of the band too (PARTIAL_BANDS).
 PAPER_PLANETS = ("TOI-2431 b", "TOI-2260 b", "K2-141 b", "K2-131 b", "TOI-561 b", "Kepler-78 b", "TOI-1444 b", "TOI-1798.02", "HD 80653 b", "55 Cnc e")
-PAPER_OUTSIDE_RULE = ("55 Cnc e",)   # the members of PAPER_PLANETS that the selection rule does not pick (PaperNumbers.ipynb checks the others against the archive selection)
+PAPER_OUTSIDE_RULE = ("55 Cnc e",)   # the members of PAPER_PLANETS that the selection rule does not pick (For_Paper/Numbers_Sec3.ipynb checks the others against the archive selection)
 
 # The Roche limits drawn on every (a/R*, T_eff) map (simple_bias_analysis.draw_roche_frontier, main-sequence hosts) and used in HypotheticalExtremePlanet.ipynb, as {label: (iron mass
 # fraction, rho_0 / rho_mean)} of a rock/iron planet of radius ROCHE_R_P. The radius and iron fraction give the mean density (astro_utils.rocky_mean_density, Fortney et al. 2007 eq. 8), and

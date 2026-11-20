@@ -1971,7 +1971,7 @@ def plot_sg_comparison(sg, band_label="MIRI/LRS"):
     for a_ in axs: a_.grid(axis="y", visible=False)
     fig.legend(*axs[0].get_legend_handles_labels(), fontsize=9, ncol=3, loc="lower center")
     fig.suptitle(r"Sadh & Gavassino (2026) Table 2 against consistent hemisphere definitions ($A_B$ = 0)", fontsize=12)
-    fig.tight_layout(rect=(0., 0.14, 1., 1.))   # room for the figure legend: lay out with tight=False in paper_figure
+    fig.tight_layout(rect=(0., 0.14, 1., 1.))   # room for the figure legend
     return fig
 
 
