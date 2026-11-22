@@ -91,8 +91,10 @@ def cfg_detectors(cfg):
 
 
 # The noiseless hyperillumination truth every fit of this module is made against: model_pcurve(cfg, "hyperillum", A_B_true)[1], or for a detector set the list of one curve per detector.
-def truth_curves(cfg, A_B_true, **kw):
-    return [model_pcurve(c, "hyperillum", A_B_true, **kw)[1] for c in cfg] if is_detector_set(cfg) else model_pcurve(cfg, "hyperillum", A_B_true, **kw)[1]
+# F_true: a truth that redistributes heat ("hyperillum_redist" at that F; true_F_sweep). None, the default, is the bare rock every other analysis uses.
+def truth_curves(cfg, A_B_true, F_true=None, **kw):
+    model, kw = ("hyperillum", kw) if F_true is None else ("hyperillum_redist", {**kw, "F": float(F_true)})
+    return [model_pcurve(c, model, A_B_true, **kw)[1] for c in cfg] if is_detector_set(cfg) else model_pcurve(cfg, model, A_B_true, **kw)[1]
 
 
 # The one per-minute noise of a cfg, or of a detector set whose detectors share it (the placeholder noise of the maps). A critical noise read off a map is this value scaled by the
@@ -2542,6 +2544,24 @@ def _bias_sweep_point(cfg, A_B_true, transform, value, models, bounds, F_bounds,
 # sigma_J, bias_sigma_J, F_fit, chi2_J, railed_J and z_F = sqrt(chi2 - chi2_J) (fit with redistribution; z_F needs both models), as in bias_vs_a_rs.
 def bias_sweep(cfg, A_B_true, values, transform, models=("naive", "naive_redist"), bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
     return pd.DataFrame(pmap(_bias_sweep_point, [(cfg, A_B_true, transform, v, models, bounds, F_bounds, kw) for v in values], n_jobs))
+
+
+# A hyper-illuminated planet that DOES redistribute heat, fitted with the point-source model with redistribution: the sweep over the true F (paper App. G.2, "True redistribution").
+# Truth: "hyperillum_redist" at (A_B_true, F_true), i.e. Eq. KL with the extended-source irradiance; fit: fit_redist ("naive_redist"), with its Fisher sigmas at the fit. The A_B-only
+# point-source fit is left out: against a planet with a warm nightside it fails for a reason that has nothing to do with the irradiation model.
+# Columns: value (= F_true), A_B_fit_J, bias_J, sigma_J, bias_sigma_J, F_fit, bias_F (= F_fit - F_true), sigma_F, bias_F_sigma, chi2_J and lnB_mean_J = chi2_J / 2. The last is the
+# expected ln B of the extended-source model with redistribution against the point-source model with redistribution: both have the parameters (A_B, F), so their Occam factors cancel
+# as for the two bare-rock models, as long as F_true lies well above the prior edge F = 0 (at F_true = 0 the edge cuts the posterior of the extended-source model only, so there
+# chi2_J / 2 is not the expected ln B). At F_true = 0 the row is the fit with redistribution of every other table (bias_F = F_fit, the spurious redistribution).
+def _true_F_point(cfg, A_B_true, F_true, bounds, F_bounds, kw):
+    truth = truth_curves(cfg, A_B_true, F_true=F_true, **kw)
+    A_fit, F_fit, chi2, _ = fit_redist(cfg, truth, free_offset=True, bounds=bounds, F_bounds=F_bounds, **kw)
+    sigma_A, sigma_F = fisher_sigma(cfg, "naive_redist", A_fit, F=F_fit, bounds=bounds, F_bounds=F_bounds, **kw)
+    return dict(value=float(F_true), A_B_fit_J=A_fit, bias_J=A_fit - A_B_true, sigma_J=sigma_A, bias_sigma_J=abs(A_fit - A_B_true) / sigma_A, F_fit=F_fit, bias_F=F_fit - F_true,
+                sigma_F=sigma_F, bias_F_sigma=abs(F_fit - F_true) / sigma_F, chi2_J=chi2, lnB_mean_J=0.5 * chi2)
+
+def true_F_sweep(cfg, A_B_true, F_values, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
+    return pd.DataFrame(pmap(_true_F_point, [(cfg, A_B_true, F, bounds, F_bounds, kw) for F in F_values], n_jobs))
 
 
 # A bias_sweep per mode on shared axes: sweeps = {mode label: DataFrame}. joint=False (A_B-only fit): the bias (right axis: in % of the true A_B), |bias| / sigma, and

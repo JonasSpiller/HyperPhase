@@ -134,7 +134,7 @@ def BBtemp_from_insolation(insol, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSI
 
 # tabulates insolation(gamma1) on a 1D grid once, so 2D pixel grids
 def _tabulate_insolation(planet, u_bol, insolation_model, n_tab=3000):
-    if insolation_model == "hyperillum":
+    if insolation_model in EXTENDED_SOURCE_MODELS:
         gp1 = planet.terminator_penumbra()
         gp2 = planet.terminator_nightside()
         gp_fi = np.linspace(0., gp1, n_tab)
@@ -143,7 +143,7 @@ def _tabulate_insolation(planet, u_bol, insolation_model, n_tab=3000):
         F_pen = insolation_penumbra_hyperillum(gp_pen, planet, u_bol=u_bol)
         gp_grid = np.concatenate([gp_fi, gp_pen, [np.pi]])
         F_grid = np.concatenate([F_fi, F_pen, [0.]])
-    elif insolation_model in ("naive", "naive_redist"):  # naive_redist redistributes the heat, not the incident flux
+    elif insolation_model in POINT_SOURCE_MODELS:  # a redistribution model redistributes the heat, not the incident flux
         gp_grid = np.linspace(0., np.pi, n_tab)
         F_grid = naive_insolation(gp_grid, planet)
     else:
@@ -158,12 +158,17 @@ def _tabulate_insolation(planet, u_bol, insolation_model, n_tab=3000):
 #####
 ###########################################################################################################################
 
-# "hyperillum": extended stellar disk, "naive": point source, "naive_redist": point source + Kreidberg & Loeb 2016 heat redistribution F (see Heat Redistribution below)
-INSOLATION_MODELS = ("hyperillum", "naive", "naive_redist")
+# "hyperillum": extended stellar disk, "naive": point source, "naive_redist": point source + Kreidberg & Loeb 2016 heat redistribution F (see Heat Redistribution below),
+# "hyperillum_redist": extended stellar disk + the same redistribution. The last is a TRUTH-ONLY model (2026-11-20): the hyper-illuminated planet that does redistribute heat, for
+# simple_bias_analysis.true_F_sweep. No fit and no sampler uses it (fit_redist and dynesty_utils fit "naive_redist").
+INSOLATION_MODELS = ("hyperillum", "naive", "naive_redist", "hyperillum_redist")
+EXTENDED_SOURCE_MODELS = ("hyperillum", "hyperillum_redist")   # irradiated by the extended stellar disk (insolation map, reflected light, smooth terminator)
+POINT_SOURCE_MODELS = ("naive", "naive_redist")                # irradiated by a point source
+REDIST_MODELS = ("naive_redist", "hyperillum_redist")          # take the heat redistribution F
 
 def insolation(gamma1, planet, insolation_model, u_bol=DEFAULT_U_BOL):
-    if insolation_model == "hyperillum": return insolation_hyperillum(gamma1, planet, u_bol=u_bol)
-    elif insolation_model in ("naive", "naive_redist"): return naive_insolation(gamma1, planet)  # naive_redist redistributes the heat, not the incident flux
+    if insolation_model in EXTENDED_SOURCE_MODELS: return insolation_hyperillum(gamma1, planet, u_bol=u_bol)
+    elif insolation_model in POINT_SOURCE_MODELS: return naive_insolation(gamma1, planet)  # a redistribution model redistributes the heat, not the incident flux
     else: raise ValueError(f"insolation_model must be one of {INSOLATION_MODELS}")
 
 # Insolation Model without Hyperillumination
@@ -280,31 +285,45 @@ def _theta_kernels_vec(theta, alpha, rho, r2):
 # In terms of the naive insolation I (= S*cos(z) on the dayside, 0 on the nightside) both read sigma*T^4 = (1-A_B)*[(1-2F)*I + F*S/2]: the nightside re-radiates the fraction F of the absorbed power.
 # F=0: no redistribution (identical to "naive"), F=0.5: isothermal planet. SPIDERMAN's Louden model evaluates the same map (with T_int=0), which is what the "naive_redist" thermal phase curve uses.
 
-# F is required by insolation_model="naive_redist" and ignored by the other models (like u_bol is by "naive").
+# "hyperillum_redist" (truth only) is the same map with the extended-source irradiance: sigma*T^4 = (1-A_B)*[(1-2F)*I + 2F*<I>], <I> the mean insolation over the sphere (mean_insolation).
+# For the point source <I> = S/4, so this IS the line above; for the extended source <I> is larger by the power the point source misses (6.0 % for TOI-2431 b at u_bol = 0.5). The fraction 2F of the
+# absorbed power is spread uniformly over the sphere and the rest re-radiated where it is absorbed, so the planet emits exactly what it absorbs for every F. F=0: identical to "hyperillum".
+
+# F is required by the redistribution models ("naive_redist", "hyperillum_redist") and ignored by the other models (like u_bol is by "naive").
 def check_redistribution(insolation_model, F):
-    if insolation_model == "naive_redist" and F is None:
-        raise ValueError('insolation_model="naive_redist" requires the heat redistribution parameter F in [0, 0.5]')
+    if insolation_model in REDIST_MODELS and F is None:
+        raise ValueError(f'insolation_model="{insolation_model}" requires the heat redistribution parameter F in [0, 0.5]')
     if F is not None and not 0. <= F <= 0.5:
         raise ValueError(f"heat redistribution parameter F must be in [0, 0.5], got F={F}")
 
 
-# Flux per unit (1-A_B) a surface element re-radiates: the insolation itself under instant re-radiation ("hyperillum", "naive"), the redistributed flux under "naive_redist".
-def effective_insolation(insol, planet, insolation_model, F=None):
+# Mean insolation over the whole sphere [W/m^2], <I> = (1/2) int I(gamma1) sin(gamma1) d gamma1: the intercepted stellar power per unit surface area. Point source: S/4 (to the
+# quadrature); extended source: larger by P_ext/P_ps.
+def mean_insolation(planet, insolation_model, u_bol=DEFAULT_U_BOL, n_tab=3000):
+    g, I = _tabulate_insolation(planet, u_bol, insolation_model, n_tab=n_tab)
+    return float(np.trapezoid(I * np.sin(g), g) / 2.)
+
+
+# Flux per unit (1-A_B) a surface element re-radiates: the insolation itself under instant re-radiation ("hyperillum", "naive"), the redistributed flux under the redistribution models.
+# u_bol: only "hyperillum_redist" needs it, for the mean insolation of the extended source ("naive_redist" keeps its closed form F*S/2, bit-identical to before 2026-11-20).
+def effective_insolation(insol, planet, insolation_model, F=None, u_bol=DEFAULT_U_BOL):
     check_redistribution(insolation_model, F)
-    if insolation_model != "naive_redist": return insol
-    S = float(naive_insolation(0., planet))  # substellar insolation
-    return (1. - 2. * F) * insol + F * S / 2.
+    if insolation_model not in REDIST_MODELS: return insol
+    if insolation_model == "naive_redist":
+        S = float(naive_insolation(0., planet))  # substellar insolation
+        return (1. - 2. * F) * insol + F * S / 2.
+    return (1. - 2. * F) * insol + 2. * F * mean_insolation(planet, insolation_model, u_bol=u_bol)
 
 
-# Surface temperature from an insolation map of the given insolation_model (local radiative equilibrium, redistributed for "naive_redist").
+# Surface temperature from an insolation map of the given insolation_model (local radiative equilibrium, redistributed for the redistribution models; u_bol as in effective_insolation).
 # emissivity_bol is degenerate with A_B (see BBtemp_from_insolation): with emissivity_bol = 1, A_B is an effective albedo.
-def temperature_from_insolation(insol, planet, insolation_model, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None):
-    return BBtemp_from_insolation(effective_insolation(insol, planet, insolation_model, F=F), A_B = A_B, emissivity_bol=emissivity_bol)
+def temperature_from_insolation(insol, planet, insolation_model, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None, u_bol=DEFAULT_U_BOL):
+    return BBtemp_from_insolation(effective_insolation(insol, planet, insolation_model, F=F, u_bol=u_bol), A_B = A_B, emissivity_bol=emissivity_bol)
 
 
 # T(gamma1): surface temperature at an angular distance gamma1 from the substellar point (the T(z) profile of Kreidberg & Loeb 2016 for "naive_redist")
 def surface_temperature(gamma1, planet, insolation_model, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None):
-    return temperature_from_insolation(insolation(gamma1, planet, insolation_model, u_bol=u_bol), planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F)
+    return temperature_from_insolation(insolation(gamma1, planet, insolation_model, u_bol=u_bol), planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F, u_bol=u_bol)
 
 
 # Bolometric hemisphere temperatures [K] of the day (gamma1 <= 90 deg) and night (>= 90 deg) side under three weights of the angle gamma1 from the substellar point, by 1-D trapezoid of
@@ -316,7 +335,7 @@ def surface_temperature(gamma1, planet, insolation_model, u_bol=DEFAULT_U_BOL, A
 # with T0 = T_eff sqrt(R*/a) [(1-A_B)/emissivity_bol]^(1/4). The point-source values are exact up to the quadrature: the check of the weights.
 def hemisphere_temperatures(planet, insolation_model="hyperillum", u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None, n=40001):
     g = np.linspace(0., np.pi, n)
-    I = effective_insolation(insolation(g, planet, insolation_model, u_bol=u_bol), planet, insolation_model, F=F)
+    I = effective_insolation(insolation(g, planet, insolation_model, u_bol=u_bol), planet, insolation_model, F=F, u_bol=u_bol)
     weights = {"uniform": np.full_like(g, 2. / np.pi), "area": np.sin(g), "disk": 2. * np.abs(np.cos(g)) * np.sin(g)}
     out = {}
     for side, m in (("day", g <= np.pi / 2), ("night", g >= np.pi / 2)):
@@ -388,13 +407,13 @@ def plot_insolmap(phase, planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivit
     F_interp = np.interp(gamma1[disk], gp_grid, F_grid)
     mapval = np.full_like(X, np.nan)
     if unit == "temperature":
-        mapval[disk] = temperature_from_insolation(F_interp, planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F)
+        mapval[disk] = temperature_from_insolation(F_interp, planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F, u_bol=u_bol)
     else:   # flux, normalized to 1 at the substellar point (gp_grid[0] == 0)
-        mapval[disk] = effective_insolation(F_interp, planet, insolation_model, F=F) / effective_insolation(F_grid[0], planet, insolation_model, F=F)
+        mapval[disk] = effective_insolation(F_interp, planet, insolation_model, F=F, u_bol=u_bol) / effective_insolation(F_grid[0], planet, insolation_model, F=F, u_bol=u_bol)
 
     if min_temp is None or max_temp is None:
         if unit == "temperature":
-            t_hot = temperature_from_insolation(F_grid[0], planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F)
+            t_hot = temperature_from_insolation(F_grid[0], planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F, u_bol=u_bol)
             if min_temp is None: min_temp = -t_hot*0.1
             if max_temp is None: max_temp = 1.1 * t_hot
         else:   # flux, normalized to 1 at the substellar point
@@ -450,7 +469,7 @@ def plot_quad_insolmap(planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_
 
     if min_temp is None or max_temp is None:
         if unit == "temperature":
-            t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F)
+            t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F, u_bol=u_bol)
             if min_temp is None: min_temp = -t_hot*0.1
             if max_temp is None: max_temp = 1.1 * t_hot
         else:   # flux, normalized to 1 at the substellar point
@@ -511,7 +530,7 @@ def animation_insolmap(planet, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVIT
     gp_table = _tabulate_insolation(planet, u_bol, insolation_model, n_tab=n_tab)
 
     if unit == "temperature":
-        t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F)
+        t_hot = temperature_from_insolation(gp_table[1][0], planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F, u_bol=u_bol)
         if min_temp is None: min_temp = -t_hot*0.1
         if max_temp is None: max_temp = 1.1 * t_hot
     else:   # flux, normalized to 1 at the substellar point

@@ -93,7 +93,7 @@ def reflected_lightcurve(epsilon, planet, u_bol=DEFAULT_U_BOL, unit="normalized"
     gp2 = planet.terminator_nightside()  # arccos((r1-r2)/R)
 
     def F(gp):
-        if insolation_model == "hyperillum":
+        if insolation_model in EXTENDED_SOURCE_MODELS:
             # tabulate F_fi, F_pen on a gamma1-grid once and interpolate at quadrature nodes
             gp_fi_grid = np.linspace(0., gp1, n_tab)
             Ffi_grid = insolation_fullyilluminated_hyperillum(gp_fi_grid, planet)
@@ -105,7 +105,7 @@ def reflected_lightcurve(epsilon, planet, u_bol=DEFAULT_U_BOL, unit="normalized"
                 gp <= gp1, np.interp(gp, gp_fi_grid, Ffi_grid),
                 np.where(gp <= gp2, np.interp(gp, gp_pen_grid, Fpen_grid), 0.))
 
-        elif insolation_model in ("naive", "naive_redist"):  # naive (point-like) insolation model; heat redistribution does not change the reflected light
+        elif insolation_model in POINT_SOURCE_MODELS:  # naive (point-like) insolation model; heat redistribution does not change the reflected light
             return naive_insolation(gp, planet)
 
         else:
@@ -321,6 +321,7 @@ def insolation_grid(planet, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la=DEFAULT
 # Generated custom temperature grid from a given insolation model (insolation_model = hyperillum, naive, naive_redist) as input for spiderman custom forward model
 # insol: optional precomputed (lo, la, insol_grid) from insolation_grid / insolation_cache. When given the insolation is NOT recomputed and only the ((1-A_B)/emissivity_bol)^(1/4) rescale is done (~0.3 ms instead of ~0.4 s).
 # F: heat redistribution, required by insolation_model="naive_redist" (Kreidberg & Loeb 2016 eq. 1 map, built from the same F-independent naive insolation, so insol stays valid)
+# and by the truth-only "hyperillum_redist" (the same map from the F-independent extended-source insolation, so insol stays valid there too)
 def custom_temperature_grid(planet, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insolation_model="hyperillum", F=None, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, insol=None):
     check_redistribution(insolation_model, F)
     if insol is None:
@@ -330,7 +331,7 @@ def custom_temperature_grid(planet, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la
         if (len(lo), len(la)) != (n_lo, n_la) or insol_grid.shape != (len(la), len(lo)):
             raise ValueError(f"cached insol is on a {(len(lo), len(la))} grid but n_lo, n_la = {(n_lo, n_la)}")
 
-    temp_grid = temperature_from_insolation(insol_grid, planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F)
+    temp_grid = temperature_from_insolation(insol_grid, planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F, u_bol=u_bol)
 
     return lo, la, temp_grid  # Custom temperature map [lo (deg), la (deg), T (K)]
 
@@ -346,14 +347,14 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=D
 
     # N_LAYERS = 30-40 usually sufficient for insolation_model="hyperillum", insolation_model="naive" (and "naive_redist", whose F=0 limit has the same sharp terminator) needs N_LAYERS = 60-80
     if N_LAYERS is None:
-        if insolation_model=="hyperillum": N_LAYERS = 40
+        if insolation_model in EXTENDED_SOURCE_MODELS: N_LAYERS = 40
         else: N_LAYERS = 80
 
     # "naive_redist": the Kreidberg & Loeb 2016 map is analytic, so SPIDERMAN's Louden model evaluates it instead of a direct_T grid (u_bol, n_lo, n_la unused)
     if insolation_model == "naive_redist":
         return Louden_PhaseCurve(planet, lambda_range, t=t, t0=t0, F=F, u=u, stellar_model=stellar_model, filter_path=filter_path, A_B = A_B, emissivity_bol=emissivity_bol, emissivity=emissivity, N_LAYERS=N_LAYERS, include_transit=include_transit, include_occultation=include_occultation, spman=spman, spman_kw=spman_kw)
 
-    lo, la, temp_grid = custom_temperature_grid(planet, u_bol=u_bol, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B = A_B, emissivity_bol=emissivity_bol)
+    lo, la, temp_grid = custom_temperature_grid(planet, u_bol=u_bol, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, F=F, A_B = A_B, emissivity_bol=emissivity_bol)   # F: used by "hyperillum_redist" only (a direct_T map like "hyperillum"), ignored by "hyperillum" and "naive"
 
     # pass indexing='ij' meshgrids in deg and the transposed temp_grid (wrong orientation fails silently!)
     # The map goes in as is, nightside at exactly 0 K for "naive": the installed fspiderman clamps the direct_T bicubic to the cell corners (fork README, patch 4). Upstream SPIDERMAN
@@ -669,7 +670,7 @@ def pcurve_params(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_r
     # ~N^-1 against hyperillum's ~N^-2 (K2-141 b: 0.33 / 0.20 / 0.08 ppm at n_layers 40 / 60 / 120, vs 0.13 / 0.07 / 0.02).
     # Since the hyperillum-naive depth difference is itself only ~1 ppm, use n_layers >= 120 when COMPARING depths between models.
     if n_layers is None:
-        if insolation_model == "hyperillum":
+        if insolation_model in EXTENDED_SOURCE_MODELS:
             n_layers = 40
         else:
             n_layers = 60
@@ -683,7 +684,7 @@ def pcurve_params(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_r
         return p
 
     # insol=... reuses the A_B-independent insolation map, leaving only the exact T = T(A_B=0, emissivity_bol=1)*((1-A_B)/emissivity_bol)^(1/4) rescale (valid because insol depends on geometry alone).
-    lo, la, Tg = custom_temperature_grid(planet, u_bol=cfg.u_bol, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, A_B=A_B_, emissivity_bol=cfg.emissivity_bol, insol=insol)
+    lo, la, Tg = custom_temperature_grid(planet, u_bol=cfg.u_bol, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, F=F, A_B=A_B_, emissivity_bol=cfg.emissivity_bol, insol=insol)   # F: used by "hyperillum_redist" only
     LO, LA = np.meshgrid(lo, la, indexing="ij")
     p = sp.ModelParams(brightness_model="direct_T")   # the stellar SED enters only through cfg.stellar_grid
     p.n_layers = n_layers
