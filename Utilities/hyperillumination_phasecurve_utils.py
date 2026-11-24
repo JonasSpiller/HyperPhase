@@ -88,15 +88,13 @@ def reflected_lightcurve(epsilon, planet, u_bol=DEFAULT_U_BOL, unit="normalized"
     """
     epsilon: angle substellar spot to line of sight [rad]
     unit: Whether to return normalized light curve signal (Fp/Fs) or radiant intensity ([W/sr])
-    lambda_band_ratio: Only relevant for unit=='radiant intensity'. If measurements are taken in a wavelength band (not bolometric), this is the ratio Fs_band/Fs. Needed to correctly scale the absolute radial intensity in that band.
+    lambda_band_ratio: Only relevant for unit=='radiant intensity'. If measurements are taken in a wavelength band (not bolometric), this is the
+        ratio Fs_band/Fs (for a filter T(lambda): int T B_lambda(T_eff) dlambda / sigma T_eff^4). Needed to correctly scale the absolute radial
+        intensity in that band.
     A: Spherical bolometric or band/throughput-integrated albedo (NOT geometric albedo). For bolometric measurements, this function is also suitable to calculate reflected + THERMAL light curve signal - for this set A=1.
     n_eta, n_phi: Gauss-Legendre order for the inner (eta) / outer (phi) integral
     n_tab: resolution of the gamma1-grid used to tabulate F_fi/F_pen
     """
-    #TODO: When passing a filter T(λ) one can calculate lambda_band_ratio = ∫T(λ)B_λ(T_eff)dλ / σT_eff⁴
-    #TODO: For reflected light insolation_penumbra_hyperillum() should actually take u (MIR band), not u_bol. For simplicity (since quadratic limb
-    #darkening is not implemented in the hyperillum model) we pass the bolometric u_bol and assume the impact to be negligible for now (reflected
-    #light only minor contribution).
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     t0 = time.perf_counter()

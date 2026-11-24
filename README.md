@@ -67,6 +67,24 @@ The insolation models are `"hyperillum"` (extended star), `"naive"` (point sourc
 redistribution $F$ of Kreidberg & Loeb 2016, passed as `F=`). The notebooks in `Hyperillumination/` show the irradiance, the temperature
 maps and the thermal and reflected curves step by step.
 
+## Conventions
+
+- **Models.** `"hyperillum"` is the extended star of the paper, `"naive"` the point source, and `"naive_redist"` the point source with the heat
+  redistribution $F$ of Kreidberg & Loeb (2016). `"hyperillum_redist"`, the extended star with $F$, serves only as a simulated truth.
+- **Geometry.** `PlanetParams` names the planet radius `r1`, the stellar radius `r2` and the semi-major axis `R`, in any consistent units: only
+  $R_p/R_\star$ = `r1/r2` and $a/R_\star$ = `R/r2` enter. `a_AU` is the semi-major axis in AU, for the light-travel time.
+- **Albedos and emissivities.** `A_B` is the Bond albedo of the energy balance, `A` the band-integrated albedo of the reflected light (the field
+  `A_` of `FittingConfig`, a function of `A_B`). `emissivity_bol` enters the energy balance, $\varepsilon_{\rm bol}\,\sigma T^4 = (1 - A_B)\,I$,
+  and `emissivity` scales the thermal flux in the band.
+- **Limb darkening.** `u_bol` is the bolometric linear limb darkening of the irradiance, `u = (u1, u2)` the quadratic limb darkening of the transit.
+- **Units.** Times in days from mid-transit, wavelengths in m, irradiance in W m⁻², temperatures in K. Light curves are relative to the star:
+  `full_PhaseCurve` returns 1 + planet − transit, `model_pcurve` the same minus 1 in ppm. Occultation depths are in ppm, noise levels in ppm per
+  minute of integration.
+- **"Joint"** means two things: the fit of $A_B$ and $F$ together (`fit_redist`, the `_J` columns of the tables), and the fit of several detectors
+  with one $A_B$ (`JointGaussianLogL`, the mode `"JWST_NIRSpec.G395H_joint"` of NRS1 and NRS2).
+- **Baseline settings** (albedos, emissivities, limb darkening, orbits, bins), the fit ranges and the paper's planet sample are defined once, at
+  the top of `Utilities/HItargets_utils.py` (`DEFAULT_*`, `A_B_BOUNDS`, `PAPER_PLANETS`, ...).
+
 ## Repository layout
 
 | Folder | Contents |
@@ -95,6 +113,17 @@ They take about 2,000 core-hours in total and save to `Dynesty Fits/dynesty_resu
 stored retrievals in `Dynesty Fits/example_runs/` can be read with `dynesty_utils.load_fits`. The comparison with
 [InstellCa](https://github.com/Mradumay137/InstellCa) needs a clone of InstellCa at commit 99225f4 (see the first cell of
 `InstellCa_Comparison/InstellCa_Comparison.ipynb`).
+
+## Limitations
+
+- The planet is a bare rock in instantaneous radiative equilibrium: uniform Bond albedo and emissivity, no thermal inertia, no internal heat.
+  Heat transport enters only as the uniform-nightside redistribution $F$ of Kreidberg & Loeb (2016).
+- Orbits are circular: the irradiance uses a fixed star–planet distance, and the fast light-curve evaluation times the occultation for $e = 0$.
+- The star's limb darkening is linear for the irradiance. The reflected light is grey and Lambertian, and its penumbral irradiance uses the
+  bolometric `u_bol` rather than the limb darkening of the band.
+- The planet emits as a blackbody scaled by the band emissivity, without spectral features of the surface.
+- Sweeps over the stellar $T_{\rm eff}$ keep the host's $\log g$ and [Fe/H], so the swept stars are hypothetical; their significances shift by a few
+  per cent below 3000 K.
 
 ## Data sources and acknowledgements
 
