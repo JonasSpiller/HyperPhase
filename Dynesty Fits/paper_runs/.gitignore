@@ -1,0 +1,7 @@
+# written by make_runs.py and run_all.sh
+/*.py
+!/make_runs.py
+/done/
+/logs/
+/run_all.log
+__pycache__/
