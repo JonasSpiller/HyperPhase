@@ -1,0 +1,59 @@
+"""Thermal and reflected phase curves with fSPIDERMAN and batman (Section 3.1 and Appendix B)."""
+import numpy as np
+import pytest
+
+import astro_utils
+import hyperillumination_phasecurve_utils as hpu
+
+
+def thermal(planet, band, model, **kw):
+    (l1, l2), path = band
+    return hpu.thermal_PhaseCurve(planet, (l1, l2), filter_path=path, insolation_model=model, stellar_model="blackbody", **kw)
+
+
+def test_point_source_without_redistribution(toi2431b, lrs):
+    """naive_redist at F = 0 (SPIDERMAN's analytic Louden map) reproduces naive (a tabulated temperature map)."""
+    _, naive, depth_naive, _ = thermal(toi2431b, lrs, "naive", include_transit=False)
+    _, louden, depth_louden, _ = thermal(toi2431b, lrs, "naive_redist", F=0., include_transit=False)
+    assert 1e6 * np.max(np.abs(naive - louden)) < 0.05   # ppm
+    assert depth_louden == pytest.approx(depth_naive, abs=0.05)
+
+
+@pytest.mark.parametrize("model", ["hyperillum", "naive"])
+def test_fast_lightcurve_matches_direct_evaluation(toi2431b, lrs, model):
+    """fast_lightcurve interpolates the phase modulation and skips the totality; the direct evaluation calls SPIDERMAN at every time."""
+    _, fast, _, _ = thermal(toi2431b, lrs, model)
+    _, direct, _, _ = thermal(toi2431b, lrs, model, spman="normal")
+    assert 1e6 * np.max(np.abs(fast - direct)) < 0.1   # ppm
+
+
+def test_reflected_light_is_linear_in_albedo(toi2431b):
+    t = np.linspace(0., toi2431b.period, 400, endpoint=False)
+    _, curve_1, depth_1 = hpu.reflected_PhaseCurve(toi2431b, t=t, A=0.1, include_transit=False)
+    _, curve_2, depth_2 = hpu.reflected_PhaseCurve(toi2431b, t=t, A=0.2, include_transit=False)
+    assert np.allclose(2. * curve_1, curve_2, rtol=0., atol=1e-9 * np.max(curve_2))
+    assert depth_2 == pytest.approx(2. * depth_1, rel=1e-12)
+
+
+def test_totality_is_the_star_alone(toi2431b, lrs):
+    """While the planet is fully hidden behind the star, the flux is exactly that of the star."""
+    t, flux, _ = hpu.full_PhaseCurve(toi2431b, lrs[0], filter_path=lrs[1], stellar_model="blackbody")
+    totality = np.abs(t / toi2431b.period - 0.5) < 0.02
+    assert totality.any() and np.all(flux[totality] == 1.)
+
+
+def test_brightness_temperature_inverts_the_occultation_depth(toi2431b, lrs):
+    """With full redistribution (F = 0.5) the planet has one temperature, which T_bright must recover from the occultation depth."""
+    A_B = 0.2
+    _, _, depth, _ = hpu.Louden_PhaseCurve(toi2431b, lrs[0], F=0.5, A_B=A_B, filter_path=lrs[1], stellar_model="blackbody", include_transit=False)
+    T_uniform = toi2431b.T2_eff * np.sqrt(toi2431b.r2 / toi2431b.R) * ((1. - A_B) / 4.) ** 0.25
+    assert astro_utils.T_bright(depth, toi2431b, lrs[0], lrs[1], stellar_model="blackbody") == pytest.approx(T_uniform, abs=0.5)
+
+
+def test_extended_star_brightens_the_planet(toi2431b, lrs):
+    """The extended star heats the planet beyond the point-source terminator: the occultation is deeper and the nightside at transit brighter."""
+    kw = dict(filter_path=lrs[1], stellar_model="blackbody")
+    depth = {m: hpu.full_PhaseCurve(toi2431b, lrs[0], insolation_model=m, **kw)[2] for m in ("hyperillum", "naive")}
+    night = {m: hpu.nightside_flux(toi2431b, lrs[0], insolation_model=m, **kw)[0] for m in ("hyperillum", "naive")}
+    assert depth["hyperillum"] > depth["naive"]
+    assert night["hyperillum"] > night["naive"]

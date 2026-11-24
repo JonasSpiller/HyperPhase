@@ -29,6 +29,7 @@ dependencies:
       - pandeia.engine==2026.7
       - synphot==1.7.0
       - stsynphot==1.5.1
+      - pytest==9.2.0
       - fspiderman-package @ git+https://github.com/JonasSpiller/fSPIDERMAN.git@1781efd0d3637ff7a65d956754793b31b4ef7a22
       - -e .
 # Upstream SPIDERMAN (module spiderman) is not installed: it is only the benchmark baseline of Hyperillumination/SpeedAccuracy_ThermalPhaseCurve.ipynb.

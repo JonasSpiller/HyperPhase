@@ -1,0 +1,54 @@
+"""Planet parameters, instrument bands, noise levels and the definition of the paper's retrievals."""
+import importlib.util
+from pathlib import Path
+
+import pytest
+
+import HItargets_utils as hit
+
+
+def test_filter_files_and_bands():
+    for instrument in hit.FILTER_FILES:
+        assert Path(hit.filter_loc(instrument)).exists(), instrument
+        (l1, l2), (f1, f2) = hit.filter_lambda(instrument), hit.full_lambda(instrument)
+        assert f1 <= l1 < l2 <= f2, instrument
+
+
+@pytest.mark.parametrize("name", hit.PAPER_PLANETS)
+def test_paper_planets_have_a_curated_geometry(name):
+    planet = hit.hi_planets_by_name(name)
+    assert planet is hit.CUSTOM[name]
+    assert planet.R / planet.r2 > 1. + planet.r1 / planet.r2   # the planet orbits outside its star
+
+
+def test_curated_parameters_take_precedence_over_the_archive():
+    """HD 80653 b: the published T_eff of the curated table, not the value of the archive aggregate."""
+    assert hit.hi_planets_by_name("HD 80653 b").T2_eff == 5959.
+
+
+def test_noise_level_from_the_cache(toi2431b, monkeypatch):
+    """The PandExo cache serves sigma_1min without running PandExo (its key includes the PandExo version of the paper)."""
+    if hit._package_version("pandexo.engine") != "2026.7" or hit._package_version("pandeia.engine") != "2026.7":
+        pytest.skip("the cache holds PandExo/Pandeia 2026.7 values")
+    monkeypatch.setattr(hit, "run_pandexo", lambda *a, **k: pytest.fail("PandExo ran instead of the cache"))
+    assert hit.rms_1min(toi2431b, "MIRI/LRS", verbose=False) == pytest.approx(62.93, abs=0.01)
+
+
+def test_noise_levels_without_pandexo(toi2431b):
+    """MIRI imaging takes its noise from CUSTOM_SIGMA_1MIN (TOI-2431 b only); 55 Cnc e saturates NIRSpec/G395H."""
+    assert hit.rms_1min(toi2431b, "MIRI/F1280W") > 0.
+    with pytest.raises(hit.NoNoiseLevelError):
+        hit.rms_1min(hit.hi_planets_by_name("K2-141 b"), "MIRI/F1280W")
+    with pytest.raises(hit.NoNoiseLevelError):
+        hit.rms_1min(hit.hi_planets_by_name("55 Cnc e"), "JWST_NIRSpec.G395H_NRS1")
+
+
+def test_paper_runs_define_every_retrieval(root):
+    """Dynesty Fits/paper_runs/make_runs.py: 129 run files with 243 datasets, each written from run_dynesty.py without a missing input line."""
+    spec = importlib.util.spec_from_file_location("make_runs", root / "Dynesty Fits" / "paper_runs" / "make_runs.py")
+    make_runs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(make_runs)
+    assert len(make_runs.RUNS) == 129
+    assert sum(len(settings["instruments"]) for _, settings in make_runs.RUNS.values()) == 243
+    for description, settings in make_runs.RUNS.values():
+        make_runs.make_run(description, **settings)

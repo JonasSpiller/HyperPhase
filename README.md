@@ -98,6 +98,19 @@ maps and the thermal and reflected curves step by step.
 | `NASAExoplanetArchive/` | Download of the archive's PSCompPars table, derived columns, the snapshot used, comparisons of planet samples. |
 | `InstellCa_Comparison/` | Comparison of the irradiance with InstellCa (Sadh & Gavassino 2026). |
 | `Basic PhaseCurve Test/` | Early tests of batman and SPIDERMAN. |
+| `tests/` | The test suite (see below). |
+
+## Tests
+
+```bash
+pytest                 # about 30 s on 16 cores
+pytest -m "not slow"   # without the brute-force check of the fit with redistribution
+```
+
+The tests check the irradiance against the closed form of the absorbed power (Eq. 5 of the paper), an adaptive quadrature and a brute-force
+integration over the stellar surface; that heat redistribution conserves energy; the fast light curves against direct SPIDERMAN evaluation; the
+noiseless fits against a brute-force χ² grid; and that the stored retrievals reproduce their likelihood. They use a blackbody star, so they run
+without the NewEra cube; the tests that need the cube or PandExo 2026.7 are skipped otherwise.
 
 ## Reproducing the retrievals
 

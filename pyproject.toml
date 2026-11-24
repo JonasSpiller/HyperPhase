@@ -17,6 +17,7 @@ dependencies = ["numpy>=2", "scipy", "matplotlib", "pandas", "astropy", "joblib"
 [project.optional-dependencies]
 noise = ["pandexo.engine", "pandeia.engine", "synphot", "stsynphot"]   # PandExo noise levels beyond the shipped cache
 limb-darkening = ["exotic-ld"]
+test = ["pytest"]
 
 [project.urls]
 Repository = "https://github.com/JonasSpiller/HyperPhase"
@@ -27,3 +28,7 @@ Repository = "https://github.com/JonasSpiller/HyperPhase"
 package-dir = { "" = "Utilities" }
 py-modules = ["hyperillumination_utils", "hyperillumination_phasecurve_utils", "astro_utils", "batman_utils", "newera_utils",
               "HItargets_utils", "simple_bias_analysis", "dynesty_utils"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: a test that takes more than a few seconds (deselect with -m \"not slow\")"]
