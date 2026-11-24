@@ -36,12 +36,13 @@ A_B_true = DEFAULT_A_B   # injected Bond albedo (baseline settings, HItargets_ut
 
 A_model = ConstantBandAlbedo(DEFAULT_A)   # band-integrated albedo A of the reflected light, independent of A_B
 
-# Filters to be used: one dataset and one set of fits PER ENTRY, exactly as if the script were run once per entry (every other input is shared).
-# An entry is a band name, or a JOINT fit of several detectors - one shared (A_B, F), one baseline per detector, as in the bias analysis (JWST_RETRIEVALS) - spelled either as the
-# tuple of band names, ("JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2"), or as its alias in HItargets_utils.JOINT_INSTRUMENTS, "JWST_NIRSpec.G395H_joint". The joint dataset
-# draws its detectors from ONE noise stream, so its first detector's data are exactly the single-detector dataset of the same seed.
-# "MIRI/F1280W" etc. have no PandExo mode: rms_1min takes sigma_1min from CUSTOM_SIGMA_1MIN in HItargets_utils.py. A band with no noise level for this planet
-# (MIRI imaging for every planet but TOI-2431 b) is skipped with a warning, and the other entries still run.
+# Filters to be used: one dataset and one set of fits PER ENTRY, exactly as if the script were run once per entry (every other input is shared). An
+# entry is a band name, or a JOINT fit of several detectors - one shared (A_B, F), one baseline per detector, as in the bias analysis
+# (JWST_RETRIEVALS) - spelled either as the tuple of band names, ("JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2"), or as its alias in
+# HItargets_utils.JOINT_INSTRUMENTS, "JWST_NIRSpec.G395H_joint". The joint dataset draws its detectors from ONE noise stream, so its first detector's
+# data are exactly the single-detector dataset of the same seed. "MIRI/F1280W" etc. have no PandExo mode: rms_1min takes sigma_1min from
+# CUSTOM_SIGMA_1MIN in HItargets_utils.py. A band with no noise level for this planet (MIRI imaging for every planet but TOI-2431 b) is skipped with a
+# warning, and the other entries still run.
 instruments = ("JWST_NIRSpec.G395H_NRS1",)   # e.g. ("JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2", "JWST_NIRSpec.G395H_joint", "MIRI/LRS", "MIRI/F1280W")
 
 INSOL_TRUTH = "hyperillum"   # insolation model the simulated data are drawn from (no redistribution in the truth: any fitted F is bias)
@@ -55,8 +56,8 @@ n_orbits = DEFAULT_N_ORBITS # number of orbits observed
 
 sigma_1min_scaling = 1. # scale the noise level
 
-# Priors (uniform, the shared ranges of HItargets_utils); ParameterSet fixes the column order of theta and of res.samples.
-# One baseline per detector: "offset" for a single band, "offset_<label>" per detector of a joint fit (labels: HItargets_utils.detector_label, e.g. NRS1, NRS2).
+# Priors (uniform, the shared ranges of HItargets_utils); ParameterSet fixes the column order of theta and of res.samples. One baseline per detector:
+# "offset" for a single band, "offset_<label>" per detector of a joint fit (labels: HItargets_utils.detector_label, e.g. NRS1, NRS2).
 _A_B = Parameter("A_B", Uniform(*A_B_BOUNDS), r"$A_B$")
 _F   = Parameter("F",   Uniform(*F_BOUNDS), r"$F$")
 
@@ -105,8 +106,9 @@ def run_instrument(instrument):
         print(f"   [{b}, {c.l1*1e6:.2f}-{c.l2*1e6:.2f} um]   noise level (1 min) = {c.sigma_1min:.1f} ppm   ->   1-sigma per bin (over all orbits) = {c.sigma_bin:.1f} ppm")
     print(f"period = {planet.period*24*60:.1f} min -> {n_bins} bins of {planet.period*24*60/n_bins:.1f} min")
 
-    # SIMULATED OBSERVATION. Reproducible: the same inputs and seed give the same data (the same seed in every band draws the same standardised noise, scaled by each band's sigma_bin;
-    # a joint dataset continues one stream across its detectors, so its first detector's data equal that band's single dataset).
+    # SIMULATED OBSERVATION. Reproducible: the same inputs and seed give the same data (the same seed in every band draws the same standardised noise,
+    # scaled by each band's sigma_bin; a joint dataset continues one stream across its detectors, so its first detector's data equal that band's
+    # single dataset).
     data = simulate_data(cfg, A_B_true, insolation_model=INSOL_TRUTH, seed=seed, plotting=False, labels=labels, **({} if F_TRUE is None else dict(F=F_TRUE)))
 
     # LogLikelihoods. Same data for every model, each with its own pset (a JointGaussianLogL for a detector set)
@@ -115,9 +117,10 @@ def run_instrument(instrument):
     if missing: raise ValueError(f"no pset for model(s) {missing}; PSETS has {tuple(PSETS)}")
     logls = {m: make_logl(cfg, data, m, PSETS[m], labels=labels) for m in MODELS}
 
-    # Dynesty. `tag` is everything the models share - it is the DATASET (dynesty_utils.DATASET_TAG), which plot_dynesty.ipynb finds again with find_dataset.
-    # The free parameters differ per model, so "priors-..." goes LAST, after {insolation_model} (which run_nested_fit fills in): one glob on tag then picks up
-    # every model of this dataset whatever it was sampled with, while runs with different free parameters still cannot overwrite each other.
+    # Dynesty. `tag` is everything the models share - it is the DATASET (dynesty_utils.DATASET_TAG), which plot_dynesty.ipynb finds again with
+    # find_dataset. The free parameters differ per model, so "priors-..." goes LAST, after {insolation_model} (which run_nested_fit fills in): one
+    # glob on tag then picks up every model of this dataset whatever it was sampled with, while runs with different free parameters still cannot
+    # overwrite each other.
     tag = dataset_tag(planet, instrument, sigmas, A_label=A_model.label, A_B=A_B_true, n_bins=n_bins, n_orbits=n_orbits, sigma_scaling=sigma_1min_scaling, seed=seed, pfrac=sampler["pfrac"])
 
     def outfile_of(pset):
@@ -131,8 +134,9 @@ def run_instrument(instrument):
         scfg = SamplerConfig(seed=seed, outfile=outfile_of(PSETS[m]), **sampler)
         fits[m] = run_nested_fit(L, PSETS[m], scfg)
 
-    # Summary. The injected value of every parameter any model samples (every baseline is 0): without redistribution in the truth the injected F is 0, so the posterior's distance
-    # from it IS the bias (posterior_summary only quotes a bias for parameters a model actually samples, so one base serves all three).
+    # Summary. The injected value of every parameter any model samples (every baseline is 0): without redistribution in the truth the injected F is 0,
+    # so the posterior's distance from it IS the bias (posterior_summary only quotes a bias for parameters a model actually samples, so one base
+    # serves all three).
     base = dict(A_B=A_B_true, F=0. if data["truth"]["F"] is None else data["truth"]["F"], **{p_.name: 0. for p_ in PSETS["hyperillum"].params if p_.name.startswith("offset")})
     print("\n" + "=" * 78)
     for f in fits.values():
@@ -150,7 +154,8 @@ def run_instrument(instrument):
     return fits
 
 
-# Everything below spawns the dynesty pool. multiprocessing uses SPAWN here, so each worker re-imports this file - without the guard it would re-run the whole script (PandExo, the fit, ...) in every worker.
+# Everything below spawns the dynesty pool. multiprocessing uses SPAWN here, so each worker re-imports this file - without the guard it would re-run
+# the whole script (PandExo, the fit, ...) in every worker.
 if __name__ == "__main__":
     t_all = time.perf_counter()
     results, skipped, failed = {}, {}, {}

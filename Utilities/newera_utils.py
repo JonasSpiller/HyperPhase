@@ -14,7 +14,8 @@ NEWERA_HSR = NEWERA_DIR / "raw" / "hsr"                                         
 CUBE_FLUX = NEWERA_DIR / "newera_cube_flux.npy"    # float32 [feh, logg, teff, wave], surface flux F_lambda [W m^-2 nm^-1], NaN where the grid has no model; memory-mapped, so loky workers share it
 CUBE_AXES = NEWERA_DIR / "newera_cube_axes.npz"    # the axes plus provenance
 
-# What the cube keeps: alpha = 0 (scaled solar) models covering every host and the bias-map T_eff axis with margin. Widen and rebuild if a star falls outside.
+# What the cube keeps: alpha = 0 (scaled solar) models covering every host and the bias-map T_eff axis with margin. Widen and rebuild if a star falls
+# outside.
 CUBE_TEFF = np.r_[np.arange(2300., 7001., 100.), 7200.]   # [K] the grid steps by 100 K up to 7000 K, by 200 K above (there is no 7100 K model)
 CUBE_LOGG = np.arange(3.5, 6.01, 0.5)              # [cgs]
 CUBE_FEH = np.array([-1.5, -1.0, -0.5, 0.0, 0.5])  # [M/H] = zscale of the grid (scaled solar, so equal to [Fe/H])
@@ -29,7 +30,8 @@ def cube_bins(R=CUBE_R, lo=PRODUCT_NM[0], hi=PRODUCT_NM[1]):
     return edges, np.sqrt(edges[:-1] * edges[1:])
 
 
-# Bin averages of F on the uniform fine grid wl [nm] into edges [nm], conserving the trapezoid integral exactly (cumulative integral differenced at the edges).
+# Bin averages of F on the uniform fine grid wl [nm] into edges [nm], conserving the trapezoid integral exactly (cumulative integral differenced at
+# the edges).
 def rebin(wl, F, edges):
     C = np.concatenate(([0.], np.cumsum(0.5 * (F[1:] + F[:-1]) * np.diff(wl))))
     return np.diff(np.interp(edges, wl, C)) / np.diff(edges)
@@ -69,7 +71,8 @@ def _ingest(fobj, feh, cube, edges, wl, fill_only=False):
     return kept, dup
 
 
-# One-time conversion of the JWST product into the memory-mappable cube (about 10-30 min, the gzip stream is read once). The tarball is never extracted.
+# One-time conversion of the JWST product into the memory-mappable cube (about 10-30 min, the gzip stream is read once). The tarball is never
+# extracted.
 def build_cube(overwrite=False, verbose=True):
     if CUBE_FLUX.exists() and not overwrite: raise FileExistsError(f"{CUBE_FLUX} exists; pass overwrite=True to rebuild")
     edges, centres = cube_bins()

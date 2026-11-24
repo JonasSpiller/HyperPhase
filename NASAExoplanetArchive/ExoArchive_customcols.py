@@ -23,10 +23,12 @@ from astro_utils import *
 # Input: the newest file matching this pattern.
 INPUT_GLOB = "pscomppars_*.csv"
 
-# Extra planets to splice in. Lines starting with "#" are disabled. Columns absent from the file are left as NaN, and a custom planet replaces the archive row of the same name.
+# Extra planets to splice in. Lines starting with "#" are disabled. Columns absent from the file are left as NaN, and a custom planet replaces the
+# archive row of the same name.
 CUSTOM_PLANETS_FILE = "costom_planets_my.txt"
 
-# ADS bibcodes whose values get blanked out, e.g. ["2017AJ....153..136S"] for Stassun et al. 2017. Matched against the *_reflink columns. There is no second row to fall back on in PSCompPars, so this creates NaNs rather than substituting another reference.
+# ADS bibcodes whose values get blanked out, e.g. ["2017AJ....153..136S"] for Stassun et al. 2017. Matched against the *_reflink columns. There is no
+# second row to fall back on in PSCompPars, so this creates NaNs rather than substituting another reference.
 MASK_BIBCODES = []
 
 # Stellar-parameter overrides, by exact planet name.
@@ -230,7 +232,9 @@ df = df.copy()
 
 # JWST Observability metrics: TSM and ESM (Kempton et al. 2018)
 
-# ESM: Emission Spectroscopy Metric. S/N of an OCCULTATION at 7.5 um with MIRI LRS. The Planck ratio times (r1/r2)^2 is just the occultation depth in ppm; the 4.29 puts it on a S/N scale. ESM > 7.5 is roughly "worth observing". ESM evaluates the Planck function at 1.1 * Teq, a blanket stand-in for a dayside slightly hotter than the full-redistribution value.
+# ESM: Emission Spectroscopy Metric. S/N of an OCCULTATION at 7.5 um with MIRI LRS. The Planck ratio times (r1/r2)^2 is just the occultation depth in
+# ppm; the 4.29 puts it on a S/N scale. ESM > 7.5 is roughly "worth observing". ESM evaluates the Planck function at 1.1 * Teq, a blanket stand-in for
+# a dayside slightly hotter than the full-redistribution value.
 df["occdep_ESM"] = planck_ratio(df["pl_rprs2"], df["st_teff"], 1.1 * df["pl_Teq"], LAM_ESM)
 df["ESM"] = 4.29 * df["occdep_ESM"] * 10 ** (-0.2 * df["sy_kmag"])
 
@@ -238,7 +242,8 @@ rel_rprs2 = 2.0 * symmetric_sigma(df, "pl_ratror") / df["pl_ratror"]
 rel_tp = df["pl_Teq_err"] / df["pl_Teq"]
 df["occdep_ESM_err"] = df["occdep_ESM"].abs() * np.sqrt(rel_rprs2 ** 2 + (planck_ratio_logderiv(1.1 * df["pl_Teq"], LAM_ESM) * rel_tp) ** 2)
 
-# TSM: Transmission Spectroscopy Metric. S/N of a transmission spectrum, where starlight filters through the terminator during transit. The signal is the extra area blocked by the atmospheric annulus, ~ 2 r1 H / r2^2, with scale height H = kT/(mu g) and surface gravity g ~ M/r1^2.
+# TSM: Transmission Spectroscopy Metric. S/N of a transmission spectrum, where starlight filters through the terminator during transit. The signal is
+# the extra area blocked by the atmospheric annulus, ~ 2 r1 H / r2^2, with scale height H = kT/(mu g) and surface gravity g ~ M/r1^2.
 df["scale"] = pd.cut(df["pl_rade"], [0, 1.5, 2.75, 4.0, np.inf], labels=[0.19, 1.26, 1.28, 1.15]).astype(float)
 df["TSM"] = df["scale"] * df["pl_rade"] * df["pl_rprs2"] / R_EARTH_IN_R_SUN ** 2 * df["pl_Teq"] / df["pl_bmasse"] * 10 ** (-0.2 * df["sy_jmag"])
 
@@ -267,7 +272,8 @@ df["delta_Na"] = (df["RR_RE"] * R_EARTH_IN_R_SUN / df["st_rad"]) ** 2 * 1e6 # tr
 
 
 # Ephemeris drift
-# How far the predicted transit time has drifted by T_REF_JD, in minutes. Large values mean the ephemeris is stale and you would miss the transit today. The propagation assumes T0 and P came from one fit and so share a covariance; in PSCompPars they need not, hence ephem_same_ref.
+# How far the predicted transit time has drifted by T_REF_JD, in minutes. Large values mean the ephemeris is stale and you would miss the transit
+# today. The propagation assumes T0 and P came from one fit and so share a covariance; in PSCompPars they need not, hence ephem_same_ref.
 n_orbits = (T_REF_JD - df["pl_tranmid"]) / df["pl_orbper"]
 df["t0_n_err"] = np.sqrt((n_orbits * symmetric_sigma(df, "pl_orbper")) ** 2 + symmetric_sigma(df, "pl_tranmid") ** 2) * 24 * 60
 df["ephem_same_ref"] = df["pl_tranmid_reflink"] == df["pl_orbper_reflink"]
@@ -281,7 +287,8 @@ df = df.copy()
 for base in ("pl_bmasse", "pl_rade"):
     df[f"{base}_calculated"] = df[f"{base}_reflink"].astype("string").str.contains("calculated", case=False, na=False)
 
-# e_fitted separates a measured eccentricity from one fixed at 0 by assumption or quoted only as an upper limit - important for tidal heating modelling
+# e_fitted separates a measured eccentricity from one fixed at 0 by assumption or quoted only as an upper limit - important for tidal heating
+# modelling
 e_err = symmetric_sigma(df, "pl_orbeccen")
 df["e_fitted"] = df["pl_orbeccen"].notna() & e_err.notna() & (e_err > 0)
 

@@ -34,8 +34,9 @@ import matplotlib.pyplot as plt
 #####
 ###########################################################################################################################
 
-# Forward-model resolution of the TRUTH simulate_data draws the data from. Well above the likelihood's defaults (model_pcurve: n_t = 50 n_bins, n_layers 40 / 60, n_lo / n_la = DEFAULT_N_LO / DEFAULT_N_LA),
-# so that a truth-vs-model residual is model bias and not grid resolution; plot_noisy_vs_truth checks that against its "numerical floor". k_truth: sub-samples per bin (n_t = k_truth * n_bins).
+# Forward-model resolution of the TRUTH simulate_data draws the data from. Well above the likelihood's defaults (model_pcurve: n_t = 50 n_bins,
+# n_layers 40 / 60, n_lo / n_la = DEFAULT_N_LO / DEFAULT_N_LA), so that a truth-vs-model residual is model bias and not grid resolution;
+# plot_noisy_vs_truth checks that against its "numerical floor". k_truth: sub-samples per bin (n_t = k_truth * n_bins).
 TRUTH_KW = dict(k_truth=200, n_layers=80, n_lo=600, n_la=300)
 
 
@@ -48,9 +49,9 @@ def truth_model_kw(data, cfg):
     return kw
 
 
-# A detector set (simple_bias_analysis.is_detector_set: a list/tuple of FittingConfigs with the same planet and binning, different band and noise) is fitted JOINTLY - one shared
-# (A_B, F), one baseline per detector - by JointGaussianLogL; its dataset is the per-detector simulate_data outputs under data["detectors"]. These helpers let every plot treat a
-# single FittingConfig and a set alike.
+# A detector set (simple_bias_analysis.is_detector_set: a list/tuple of FittingConfigs with the same planet and binning, different band and noise) is
+# fitted JOINTLY - one shared (A_B, F), one baseline per detector - by JointGaussianLogL; its dataset is the per-detector simulate_data outputs under
+# data["detectors"]. These helpers let every plot treat a single FittingConfig and a set alike.
 def detector_cfgs(cfg):
     """A FittingConfig or a detector set -> the list of FittingConfigs."""
     return list(cfg) if is_detector_set(cfg) else [cfg]
@@ -148,7 +149,8 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
     t=(np.arange(cfg.n_bins) + 0.5) * cfg.planet.period / cfg.n_bins
     sigma = np.full(cfg.n_bins, s)
 
-    # the injected truth travels with the data (and from there into NestedFit.meta), so a saved fit knows what it was fitted to; model_kw lets plot_simulated_data / plot_noisy_vs_truth re-evaluate exactly this truth
+    # the injected truth travels with the data (and from there into NestedFit.meta), so a saved fit knows what it was fitted to; model_kw lets
+    # plot_simulated_data / plot_noisy_vs_truth re-evaluate exactly this truth
     F_true = model_kw.get("F")
     truth = dict(A_B=float(A_B_true), insolation_model=insolation_model, F=None if F_true is None else float(F_true), offset=float(offset), seed=int(seed), noise=bool(noise), model_kw=model_kw_truth)
     data = {"t": t, "y_obs": y_obs, "sigma":sigma, "truth": truth}
@@ -272,9 +274,10 @@ class ParameterSet:
 
 # Geometry parameters model_pcurve accepts by name (its own kwarg spelling: a_rs = R/r2, rp_rs = r1/r2).
 _GEOMETRY = ("a_rs", "T_s", "rp_rs")
-# F (heat redistribution) belongs to insolation_model="naive_redist" alone: required there, rejected for the other models.
-# The orbital inclination, sampled either directly ("incl" [deg]) or through the impact parameter ("b", with i = arccos(b / (a/R*)) at the sampled or the planet's own a/R*):
-# whichever the planet's source fitted (Tas et al. 2026 fit b for TOI-2431 b, Malavolta et al. 2018 fit i for K2-141 b). Not a model_pcurve keyword: _orbit_cfg puts it into the planet.
+# F (heat redistribution) belongs to insolation_model="naive_redist" alone: required there, rejected for the other models. The orbital inclination,
+# sampled either directly ("incl" [deg]) or through the impact parameter ("b", with i = arccos(b / (a/R*)) at the sampled or the planet's own a/R*):
+# whichever the planet's source fitted (Tas et al. 2026 fit b for TOI-2431 b, Malavolta et al. 2018 fit i for K2-141 b). Not a model_pcurve keyword:
+# _orbit_cfg puts it into the planet.
 _ORBIT = ("incl", "b")
 _KNOWN = ("A_B", "offset", "F") + _GEOMETRY + _ORBIT
 
@@ -341,7 +344,8 @@ class GaussianLogL:
         self.data = {"t": self.t, "y_obs": self.y, "sigma": self.sigma, "truth": dict(self.truth)}   # what run_nested_fit stores with the fit
 
         # Geometry-only caches for speedup
-        # Each cache is dropped as soon as ANY parameter it depends on is sampled, so it can never be used at a geometry it was not built at. Both are pure speed-ups: bit-identical either way.
+        # Each cache is dropped as soon as ANY parameter it depends on is sampled, so it can never be used at a geometry it was not built at. Both are
+        # pure speed-ups: bit-identical either way.
         geom = {k: v for k, v in self.fixed.items() if k in _GEOMETRY}
         self._live = {k: cache and not any(n in self.names for n in deps[insolation_model]) for k, deps in _CACHE_DEPS.items()}
         self._live["refl"] &= cfg.reflected  # nothing to cache when the reflected part is switched off
@@ -349,7 +353,8 @@ class GaussianLogL:
         self.refl_unit = reflected_unit(cfg, insolation_model, n_t=self.model_kw.get("n_t"), **geom) if self._live["refl"] else None
         self.insol = insolation_cache(cfg, insolation_model, n_lo=self.model_kw.get("n_lo", DEFAULT_N_LO), n_la=self.model_kw.get("n_la", DEFAULT_N_LA), **geom) if self._live["insol"] else None
 
-    # Build the likelihood from a ParameterSet, so the sampled names have a single source of truth. Fixed values are not the pset's business: pass them here, e.g. from_pset(..., pset, fixed=dict(a_rs=2.5))
+    # Build the likelihood from a ParameterSet, so the sampled names have a single source of truth. Fixed values are not the pset's business: pass
+    # them here, e.g. from_pset(..., pset, fixed=dict(a_rs=2.5))
     @classmethod
     def from_pset(cls, cfg, data, insolation_model, pset, **kw):
         return cls(cfg, data, insolation_model, names=pset.names, **kw)
@@ -363,7 +368,8 @@ class GaussianLogL:
 
     @property
     def cache_used(self):
-        # Which geometry-only caches are live, e.g. ("refl", "insol"). A cache drops out when one of its dependencies is sampled — see _CACHE_DEPS for the measured dependency of each.
+        # Which geometry-only caches are live, e.g. ("refl", "insol"). A cache drops out when one of its dependencies is sampled — see _CACHE_DEPS for
+        # the measured dependency of each.
         return tuple(k for k in _CACHE_DEPS if self._live[k])
 
     def __repr__(self):
@@ -786,7 +792,8 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
                 data=copy.deepcopy(logl.data),   # the fit travels with its data (and the injected truth; per detector for a joint fit), so a reloaded NestedFit can be re-plotted without re-running the notebook
                 cfg=logl.cfg, model_kw=dict(logl.model_kw), labels=getattr(logl, "labels", None))   # everything logl_from_fit needs to rebuild the likelihood from the pickle alone (cfg is the detector set and labels the detector names for a joint fit)
 
-    # The geometry actually used: sampled, held fixed, or (the usual case) inherited from cfg.planet - an empty `fixed` on its own would not record which.
+    # The geometry actually used: sampled, held fixed, or (the usual case) inherited from cfg.planet - an empty `fixed` on its own would not record
+    # which.
     pl = detector_cfgs(logl.cfg)[0].planet
     meta["geometry"] = {k: ("sampled" if k in logl.names else float(logl.fixed.get(k, d))) for k, d in (("a_rs", pl.R / pl.r2), ("T_s", pl.T2_eff), ("rp_rs", pl.r1 / pl.r2), ("incl", pl.incl), ("b", pl.R / pl.r2 * np.cos(np.radians(pl.incl))))}
     for k, other in (("incl", "b"), ("b", "incl")):   # a sampled inclination makes the other spelling a derived quantity, not a fixed one
@@ -848,18 +855,20 @@ def load_fits(paths):
 #####
 ###########################################################################################################################
 
-# A dataset is one simulated observation (planet, instrument, albedos, binning, noise, seed) sampled with every model at one pfrac; its tag is everything the models
-# share, and a result file is tag + "_{insolation_model}_priors-<sampled names>.pkl". The free parameters come LAST, so one glob on the tag picks up every model of the
-# dataset whatever each was sampled with, while runs with different free parameters cannot overwrite each other. A joint fit lists the noise levels of its detectors
-# joined by "+". pfrac (the sampler's posterior/evidence weighting, shared by every model of a run) ends the tag: the same data sampled with another pfrac is another run.
+# A dataset is one simulated observation (planet, instrument, albedos, binning, noise, seed) sampled with every model at one pfrac; its tag is
+# everything the models share, and a result file is tag + "_{insolation_model}_priors-<sampled names>.pkl". The free parameters come LAST, so one glob
+# on the tag picks up every model of the dataset whatever each was sampled with, while runs with different free parameters cannot overwrite each
+# other. A joint fit lists the noise levels of its detectors joined by "+". pfrac (the sampler's posterior/evidence weighting, shared by every model
+# of a run) ends the tag: the same data sampled with another pfrac is another run.
 DATASET_TAG = "{planet}_{instrument}_{A_label}_AB{A_B:g}_nbins{n_bins}_norbits{n_orbits}_rms1min{rms}_sigmascale{sigma_scaling:g}_seed{seed}_pfrac{pfrac:g}"
 _RESULT_FILE_RE = re.compile(r"^(?P<planet>[^_]+)_(?P<instrument>.+?)_(?P<A_label>(?:fixed|scaled)A[\d.]+)_AB(?P<A_B>[\d.]+)_nbins(?P<n_bins>\d+)_norbits(?P<n_orbits>\d+)"
                              r"_rms1min(?P<rms>[\d.+]+)_sigmascale(?P<sigma_scaling>[\d.]+)_seed(?P<seed>\d+)_pfrac(?P<pfrac>[\d.]+)"
                              r"_(?P<insolation_model>hyperillum|naive_redist|naive)_priors-(?P<priors>.+)\.pkl$")
 DATASET_COLUMNS = ["planet", "instrument", "A_B", "n_bins", "n_orbits", "seed", "pfrac", "sigma_scaling", "A_label", "rms", "models", "subfolder", "tag"]
-# Runs whose difference from the baseline is NOT in the tag sit in a subfolder of the results folder: the truth model ("null_test": data drawn from the point-source model) and the
-# sampled geometry ("free_geometry": a/R* and Rp/R* free in every model). A dataset entry names it with the keyword subfolder= (find_dataset, check_datasets); list_datasets lists the
-# main folder and every subfolder. run_kind reads the same two properties from the pickles themselves.
+# Runs whose difference from the baseline is NOT in the tag sit in a subfolder of the results folder: the truth model ("null_test": data drawn from
+# the point-source model) and the sampled geometry ("free_geometry": a/R* and Rp/R* free in every model). A dataset entry names it with the keyword
+# subfolder= (find_dataset, check_datasets); list_datasets lists the main folder and every subfolder. run_kind reads the same two properties from the
+# pickles themselves.
 
 
 def _planet_name(planet):
@@ -1056,8 +1065,9 @@ def derived_samples(logl, thetas, n_jobs=-1):
     labels = list(logl.labels) if isinstance(logl, JointGaussianLogL) else None
     cfg, m = comps[0].cfg, logl.insolation_model
     n_lo, n_la = logl.model_kw.get("n_lo", DEFAULT_N_LO), logl.model_kw.get("n_la", DEFAULT_N_LA)
-    # The temperature map of "naive_redist" is the naive insolation map, redistributed (K&L eq. 1). model_pcurve never needs it (Louden is analytic), so GaussianLogL does not cache
-    # it - but it is geometry-only, so unless a geometry parameter is sampled it is built ONCE here rather than once per draw (~0.4 s each).
+    # The temperature map of "naive_redist" is the naive insolation map, redistributed (K&L eq. 1). model_pcurve never needs it (Louden is analytic),
+    # so GaussianLogL does not cache it - but it is geometry-only, so unless a geometry parameter is sampled it is built ONCE here rather than once
+    # per draw (~0.4 s each).
     insol = comps[0].insol
     if insol is None and not any(n in logl.names for n in _GEOMETRY):
         insol = insolation_cache(cfg, m, n_lo=n_lo, n_la=n_la, **{k: v for k, v in logl.fixed.items() if k in _GEOMETRY})
@@ -1075,7 +1085,8 @@ def derived_samples(logl, thetas, n_jobs=-1):
         for L in comps:   # one band per detector
             pp = pcurve_params(_orbit_cfg(L.cfg, p_), m, A_B_, F=F_, **geom, n_layers=logl.model_kw.get("n_layers"), n_lo=n_lo, n_la=n_la, insol=insol)
             d_th = float(occultation_depth(pp, stellar_grid=L.cfg.stellar_grid, emissivity=L.cfg.emissivity))
-            # Reflected part: linear in A, and its maximum over the orbit is the last point before ingress - within ~1% of the full-phase value, since reflected_unit itself carries the occultation.
+            # Reflected part: linear in A, and its maximum over the orbit is the last point before ingress - within ~1% of the full-phase value, since
+            # reflected_unit itself carries the occultation.
             ru = L.refl_unit if L.refl_unit is not None else (reflected_unit(_orbit_cfg(L.cfg, p_), m, n_t=logl.model_kw.get("n_t"), **geom) if L.cfg.reflected else None)
             depths += [d_th, float(L.cfg.A_(A_B_) * np.max(ru)) if ru is not None else 0.]
         return T + depths
@@ -1264,7 +1275,8 @@ def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200,
         for dd in (-1., 1.): axr.axhline(dd, color="0.85", lw=0.6, ls=":")
         axr.axhline(0., color="0.7", lw=0.8); axr.set_ylabel("resid / $\\sigma$"); axr.set_ylim(-3.5, 3.5)
 
-        # Panel 3: the num/den pair only - with more than two models every other one is still in panels 1-2, but a single difference curve can only be a pair
+        # Panel 3: the num/den pair only - with more than two models every other one is still in panels 1-2, but a single difference curve can only be
+        # a pair
         if num in fits and den in fits:
             a, b = den, num
             axd.axhspan(-s.mean(), s.mean(), fc="0.9", ec="0.6", lw=0.8, label=r"$\pm\sigma_{bin}$")
@@ -1274,7 +1286,9 @@ def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200,
             dchi2 = ((y - best[a][blk]) ** 2 - (y - best[b][blk]) ** 2) / s ** 2   # > 0 where b fits better; sums to 2*dlnL_max over all detectors
             ax2 = axd.twinx()
             ax2.bar(ph, dchi2, width=0.7 / len(ph), color="C2", alpha=0.45, zorder=0)
-            # Both axes forced symmetric about zero. twinx() autoscales independently, so a one-signed dchi2 makes matplotlib clamp ax2 to [0, max] and the bars then grow from the panel floor while axd's zero line sits mid-panel - the reader reads the bars against a baseline that is not theirs.
+            # Both axes forced symmetric about zero. twinx() autoscales independently, so a one-signed dchi2 makes matplotlib clamp ax2 to [0, max]
+            # and the bars then grow from the panel floor while axd's zero line sits mid-panel - the reader reads the bars against a baseline that is
+            # not theirs.
             w = 1.05 * max(float(np.abs(dmed).max()), float(s.mean())); axd.set_ylim(-w, w)
             v = 1.05 * float(np.abs(dchi2).max()) or 1.; ax2.set_ylim(-v, v)
             ax2.set_ylabel(f"$\\Delta\\chi^2$ per bin (sum {dchi2.sum():+.2f})", fontsize=8, color="C2")
@@ -1332,7 +1346,8 @@ def noiseless_reference(cfg, data, models, A_B_true=None, insolation_truth=None,
     y_true = [binned(c, y) + off_inj for c, y in zip(cfgs, y_hi)]                 # the noiseless data
     fit_cfg, fit_truth = (tuple(cfgs), y_hi) if joint else (cfg0, y_hi[0])        # what the bias-analysis fitters take: a detector set with one truth per detector
 
-    # --- the misspecified models fitted to the NOISELESS truth: the deterministic bias, no seed involved (the fits of the bias analysis, at the truth's resolution) ---
+    # --- the misspecified models fitted to the NOISELESS truth: the deterministic bias, no seed involved (the fits of the bias analysis, at the
+    # truth's resolution) ---
     noiseless, insols = {}, {}
     for m in models:
         if m == "naive_redist":
@@ -1381,7 +1396,8 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     labels = list(getattr(L0, "labels", None) or [None] * n_det)
     blocks = _blocks([c.n_bins for c in cfgs])
 
-    # --- the noiseless reference (the truth curves at their own resolution) and the misspecified models fitted to it: the deterministic bias, no seed involved ---
+    # --- the noiseless reference (the truth curves at their own resolution) and the misspecified models fitted to it: the deterministic bias, no seed
+    # involved ---
     ref = noiseless_reference(cfg, data, [m for m in ("naive", "naive_redist") if m in fits], A_B_true=A_B_true, insolation_truth=insolation_truth, A_B_bounds=A_B_bounds, xatol=xatol, truth_kw=truth_kw)
     t_hi, y_hi, y_true, s_bin, fit_cfg, fit_truth = (ref[k] for k in ("t_hi", "y_hi", "y_true", "s_bin", "fit_cfg", "fit_truth"))
     truth_kw, F_truth, off_inj, insols, noiseless = (ref[k] for k in ("truth_kw", "F_truth", "off_inj", "insols", "noiseless"))
@@ -1504,10 +1520,11 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
 #####
 ###########################################################################################################################
 
-# The prediction (simple_bias_analysis, "Expected evidence"): for two models with the same parameters and priors, ln B(true vs alt) = chi2_min / 2 + zeta sqrt(chi2_min), with chi2_min
-# and r_perp from the NOISELESS A_B-only fit of the misspecified model `alt` to the truth and zeta = r_perp_hat . z. In a simulation the standardised noise z = (y_obs - y_true) / sigma
-# is known exactly, so every stored run has a prediction of its own, without sampling. Only for extended source vs point source; Bayes factors against the fit with redistribution carry
-# the Occam term of the F prior and are reported as measured.
+# The prediction (simple_bias_analysis, "Expected evidence"): for two models with the same parameters and priors, ln B(true vs alt) = chi2_min / 2 +
+# zeta sqrt(chi2_min), with chi2_min and r_perp from the NOISELESS A_B-only fit of the misspecified model `alt` to the truth and zeta = r_perp_hat .
+# z. In a simulation the standardised noise z = (y_obs - y_true) / sigma is known exactly, so every stored run has a prediction of its own, without
+# sampling. Only for extended source vs point source; Bayes factors against the fit with redistribution carry the Occam term of the F prior and are
+# reported as measured.
 
 
 def run_kind(fits):

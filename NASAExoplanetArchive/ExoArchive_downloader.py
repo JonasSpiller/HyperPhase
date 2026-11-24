@@ -25,13 +25,15 @@ TAP_URL = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
 # SETTINGS
 # ==========================================================================
 
-# Which archive table. "pscomppars" is one row per planet already; "ps" is one row per planet per paper and would need an aggregation step this pipeline no longer has.
+# Which archive table. "pscomppars" is one row per planet already; "ps" is one row per planet per paper and would need an aggregation step this
+# pipeline no longer has.
 TABLE = "pscomppars"
 
 # Restrict to planets observed to transit. (not necessarily detected by transit)
 TRANSITING_ONLY = True
 
-# Also fetch the per-column "<name>_reflink" columns, which record which paper each individual value came from. The aggregator needs these to spot archive-calculated masses and to check that T0 and P share a reference.
+# Also fetch the per-column "<name>_reflink" columns, which record which paper each individual value came from. The aggregator needs these to spot
+# archive-calculated masses and to check that T0 and P share a reference.
 WITH_REFLINKS = True
 
 # Output
@@ -40,7 +42,8 @@ OUTPUT_DIR = Path(__file__).resolve().parent
 
 # --------------------------------------------------------------------------
 # Column wishlist.
-#MEASURED_*: Physical measurements. The archive stores each of these as FOUR columns -- the value, plus <name>err1 (upper error), <name>err2 (lower error, negative), and in PSCompPars also <name>_reflink (the source paper).
+#MEASURED_*: Physical measurements. The archive stores each of these as FOUR columns -- the value, plus <name>err1 (upper error), <name>err2 (lower
+#error, negative), and in PSCompPars also <name>_reflink (the source paper).
 # --------------------------------------------------------------------------
 
 
