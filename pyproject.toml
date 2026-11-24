@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyperphase"
+version = "1.0.0"
+description = "Phase curves of hyper-illuminated rocky exoplanets: extended-source irradiance, thermal and reflected light curves, bias analysis and nested-sampling retrievals"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jonas Spiller" }]
+requires-python = ">=3.11"
+# fSPIDERMAN (the thermal phase curves) is not on PyPI: install it from https://github.com/JonasSpiller/fSPIDERMAN (see environment.yml).
+dependencies = ["numpy>=2", "scipy", "matplotlib", "pandas", "astropy", "joblib", "pillow", "batman-package", "dynesty>=3"]
+
+[project.optional-dependencies]
+noise = ["pandexo.engine", "pandeia.engine", "synphot", "stsynphot"]   # PandExo noise levels beyond the shipped cache
+limb-darkening = ["exotic-ld"]
+
+[project.urls]
+Repository = "https://github.com/JonasSpiller/HyperPhase"
+
+# The modules live in Utilities/ and find the repository's data (filters, stellar spectra, PandExo cache) relative to their own location,
+# so install with `pip install -e .` (editable) rather than `pip install .`.
+[tool.setuptools]
+package-dir = { "" = "Utilities" }
+py-modules = ["hyperillumination_utils", "hyperillumination_phasecurve_utils", "astro_utils", "batman_utils", "newera_utils",
+              "HItargets_utils", "simple_bias_analysis", "dynesty_utils"]

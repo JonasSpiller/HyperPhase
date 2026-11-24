@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper below."
+type: software
+title: "HyperPhase"
+abstract: "Phase curves of hyper-illuminated rocky exoplanets: the irradiance of the extended stellar disk, thermal and reflected light curves in JWST bands, the bias of point-source fits, and nested-sampling retrievals."
+authors:
+  - family-names: Spiller
+    given-names: Jonas
+    orcid: "https://orcid.org/0009-0001-7436-7636"
+    affiliation: "ETH Zurich"
+repository-code: "https://github.com/JonasSpiller/HyperPhase"
+license: MIT
+keywords:
+  - exoplanets
+  - phase curves
+  - hyper-illumination
+  - rocky planets
+  - JWST
+preferred-citation:
+  type: article
+  title: "Hyper-Illumination Mimics Heat Redistribution in JWST Phase Curves of Rocky Planets Closest to Their Stars"
+  authors:
+    - family-names: Spiller
+      given-names: Jonas
+      orcid: "https://orcid.org/0009-0001-7436-7636"
+    - family-names: Zieba
+      given-names: Sebastian
+      orcid: "https://orcid.org/0000-0003-0562-6750"
+    - family-names: Wordsworth
+      given-names: Robin
+      orcid: "https://orcid.org/0000-0003-1127-8334"
+  status: in-preparation
+  year: 2026

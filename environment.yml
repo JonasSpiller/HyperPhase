@@ -1,0 +1,34 @@
+# The environment the paper's results were computed with (Python 3.11, macOS arm64).
+#
+#   conda env create -f environment.yml     (from the repository root; also installs this repository with pip install -e .)
+#   conda activate hyperphase
+#
+# fSPIDERMAN is a C extension built from source, so a C compiler is needed (Xcode command-line tools on macOS, gcc on Linux).
+# Never install spiderman-package from PyPI instead: its wheel is ABI-incompatible with numpy >= 2.
+name: hyperphase
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - jupyterlab
+  - pip:
+      - numpy==2.4.6
+      - scipy==1.17.1
+      - matplotlib==3.10.9
+      - pandas==3.0.3
+      - astropy==7.2.0
+      - joblib==1.5.3
+      - pillow==12.2.0
+      - h5py==3.16.0
+      - colorama==0.4.6                # InstellCa_Comparison only
+      - batman-package==2.5.3
+      - dynesty==3.1.0
+      - exotic-ld==3.2.0               # limb-darkening coefficients (Stellar Model/LimbDarkening.ipynb)
+      - pandexo.engine==2026.7         # noise levels; needs the Pandeia reference data (pandeia_refdata) and PYSYN_CDBS
+      - pandeia.engine==2026.7
+      - synphot==1.7.0
+      - stsynphot==1.5.1
+      - fspiderman-package @ git+https://github.com/JonasSpiller/fSPIDERMAN.git@1781efd0d3637ff7a65d956754793b31b4ef7a22
+      - -e .
+# Upstream SPIDERMAN (module spiderman) is not installed: it is only the benchmark baseline of Hyperillumination/SpeedAccuracy_ThermalPhaseCurve.ipynb.
