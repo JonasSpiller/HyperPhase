@@ -364,7 +364,8 @@ def _archive_row(name):
     return rows.iloc[0]
 
 def hi_planets_by_name(names):
-    """One planet or a list of them as {name: PlanetParams}. Accepts loose spellings ('TOI-2431b'). CUSTOM entries are returned whether or not they exist in the archive. An unknown name raises KeyError."""
+    """The PlanetParams of one planet, or {name: PlanetParams} for a list of names. Accepts loose spellings ('TOI-2431b'). CUSTOM entries are returned
+    whether or not they exist in the archive. An unknown name raises KeyError."""
     if isinstance(names, str):
         custom = CUSTOM_N.get(_normalise(names))
         if custom is not None:
@@ -525,7 +526,7 @@ def full_lambda(instrument):
     return FULL_LAMBDA_M[instrument]
 
 def filter_loc(instrument):
-    """Path to the SPIDERMAN throughput file."""
+    """Path [str] to the throughput file of an instrument (a FILTER_LAMBDA_UM key) in Filters/Spiderman/."""
     return str(FILTER_DIR / FILTER_FILES[instrument])
 
 def pandexo_mode(instrument):
@@ -868,15 +869,16 @@ def _pandexo_cache_store(entries):
         df.to_csv(f, index=False)
 
 
-# sigma_1min [ppm/min] of one planet on one instrument: from the PandExo cache (PANDEXO_CACHE) if it has this exact configuration, else run_pandexo +
-# rms_1min_pandexo, stored in the cache. instrument is a FILTER_LAMBDA_UM key (the PandExo mode is looked up via pandexo_mode), lrs_range [m] the band
-# the PandExo spectrum is binned over (default: filter_lambda(instrument, planet), i.e. the planet's PARTIAL_BANDS range where it has one). overrides
-# go to run_pandexo (verbose, mag, ...); the transit duration is planet.T14 unless t14_h overrides it. A new run also stores every other detector of
-# the same PandExo mode at its own band, from the same result (one NIRSpec G395H run gives NRS1 and NRS2). use_cache=False reruns PandExo and replaces
-# the cached row. Where PandExo has no mode for the instrument, the value comes from CUSTOM_SIGMA_1MIN (lrs_range and overrides then do not apply); if
-# that has none either, a NoNoiseLevelError says where to add one. A mode listed in UNOBSERVABLE for the planet, and a band whose PandExo pixels are
-# all fully saturated, raise NoNoiseLevelError as well (the latter is not cached: PandExo reruns on the next call).
 def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
+    """Noise level sigma_1min [ppm/min] of one planet on one instrument: from the PandExo cache (PANDEXO_CACHE) if it has this exact configuration,
+    else run_pandexo + rms_1min_pandexo, stored in the cache. instrument is a FILTER_LAMBDA_UM key (the PandExo mode is looked up via pandexo_mode),
+    lrs_range [m] the band the PandExo spectrum is binned over (default: filter_lambda(instrument, planet), i.e. the planet's PARTIAL_BANDS range
+    where it has one). overrides go to run_pandexo (verbose, mag, ...); the transit duration is planet.T14 unless t14_h overrides it. A new run also
+    stores every other detector of the same PandExo mode at its own band, from the same result (one NIRSpec G395H run gives NRS1 and NRS2).
+    use_cache=False reruns PandExo and replaces the cached row. Where PandExo has no mode for the instrument, the value comes from CUSTOM_SIGMA_1MIN
+    (lrs_range and overrides then do not apply); if that has none either, a NoNoiseLevelError says where to add one. A mode listed in UNOBSERVABLE for
+    the planet, and a band whose PandExo pixels are all fully saturated, raise NoNoiseLevelError as well (the latter is not cached: PandExo reruns on
+    the next call)."""
     reason = UNOBSERVABLE_N.get(_normalise(planet.name), {}).get(instrument)
     if reason: raise NoNoiseLevelError(f"no noise level for {planet.name!r} on {instrument!r}: {reason} (HItargets_utils.UNOBSERVABLE)")
     if PANDEXO_MODES[instrument] is None:

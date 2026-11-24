@@ -205,13 +205,15 @@ def main_sequence_logg(T_eff):
     return np.log10(G_CGS * main_sequence_M_star(T_eff) * const.M_sun.cgs.value / (main_sequence_R_star(T_eff) * const.R_sun.cgs.value) ** 2)
 
 
-# Brightness temperature [K] of a thermal depth [ppm] (the occultation depth gives the dayside value; a blackbody temperature, below the surface
-# temperature for emissivity < 1): solves (r1/r2)^2 S_planet(T) = depth * S_star, where S_star is SPIDERMAN's own stellar normalisation (its cubic
-# spline through stellar_spidergrid at T2_eff, hpu.spidergrid_value) and S_planet the same band integral of a blackbody (hpu.band_planck: same
-# samples, response and sum_flux). So T_bright inverts SPIDERMAN's depths exactly whatever the stellar model and band weighting (a top-hat is
-# energy-weighted there, like SPIDERMAN's filter=False); the remaining ~0.15 K of a round trip is SPIDERMAN's own planet quadrature. Raises
-# (check_teff_nodes) outside the T_eff nodes and ValueError (brentq) for a depth below the band flux at 10 K.
 def T_bright(thermal_depth, planet, lambda_range, filter_path=None, stellar_model=STELLAR_MODEL):
+    """Brightness temperature [K] of a thermal planet flux [ppm] in the band lambda_range [m] (filter_path: throughput file, None for a top-hat). The
+    occultation depth gives the dayside value; it is a blackbody temperature, below the surface temperature for emissivity < 1.
+
+    Solves (r1/r2)^2 S_planet(T) = depth S_star, where S_star is SPIDERMAN's own stellar normalisation (its cubic spline through stellar_spidergrid
+    at T2_eff, hpu.spidergrid_value) and S_planet the same band integral of a blackbody (hpu.band_planck: same samples, response and sum_flux). So
+    T_bright inverts SPIDERMAN's depths exactly whatever the stellar model and band weighting (a top-hat is energy-weighted there, like SPIDERMAN's
+    filter=False); the remaining ~0.15 K of a round trip is SPIDERMAN's own planet quadrature. Raises (check_teff_nodes) outside the T_eff nodes and
+    ValueError (brentq) for a flux below the band flux at 10 K."""
     import hyperillumination_phasecurve_utils as hpu   # imported here: hpu imports this module
     grid = hpu.stellar_spidergrid(lambda_range, filter_path, planet.logg, planet.feh, stellar_model=stellar_model)
     hpu.check_teff_nodes(grid, planet.T2_eff)

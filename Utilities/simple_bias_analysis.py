@@ -371,15 +371,12 @@ def fit_railed(fit, bounds, F_bounds=F_BOUNDS, rail_tol=RAIL_TOL):
     return bool(is_railed(fit["A_B_fit"], bounds, rail_tol)) or ("F_fit" in fit and (F_bounds[1] - fit["F_fit"]) < rail_tol)
 
 
-# One grid cell of a bias map: generate the hyperillumination truth, fit the naive model, return the recovered-A_B bias.
-# NaN if the fit railed against a bound, i.e. the naive model cannot reproduce the truth at ANY albedo.
-# redist=True fits naive_redist (A_B and F) instead and returns (A_B bias, F_fit); the truth has no redistribution, so F_fit is itself the bias in F.
-# return_chi2=True appends the fit's chi2 (at cfg.sigma_1min), which false_F_map_grid(fits=...) turns into dchi2_F without refitting.
 def bias_cell(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, temp_bias=False, bounds=A_B_FIT_BOUNDS, redist=False, F_bounds=F_BOUNDS, return_chi2=False, **kw):
-    """Recovered-A_B bias for one map cell. NaN if the fit railed against a bound,
-    i.e. the naive model cannot reproduce the truth at ANY albedo.
-    With redist=True: (A_B bias, F_fit), both NaN on a rail. F_fit = 0 is a valid fit, only F's upper bound counts as a rail.
-    With return_chi2=True the fit's chi2 is appended (bias, chi2) / (bias, F_fit, chi2), also NaN on a rail."""
+    """One cell of a bias map: generate the extended-source truth, fit the point-source model and return the bias of the recovered A_B (with
+    temp_bias=True the temperature bias instead). NaN if the fit railed against a bound, i.e. the point-source model cannot reproduce the truth at ANY
+    albedo. redist=True fits "naive_redist" (A_B and F) instead and returns (bias, F_fit), both NaN on a rail; the truth has no redistribution, so
+    F_fit is itself the bias in F (F_fit = 0 is a valid fit, only F's upper bound counts as a rail). return_chi2=True appends the fit's chi2 at
+    cfg.sigma_1min, also NaN on a rail, which false_F_map_grid(fits=...) turns into dchi2_F without refitting."""
     model = "naive_redist" if redist else "naive"
     fit = fit_truth(cfg, A_B_true, models=(model,), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)[model]   # same bounds the rail check below uses
     A_B_fit, F_fit = fit["A_B_fit"], fit.get("F_fit", 0.)

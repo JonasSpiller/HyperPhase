@@ -28,6 +28,9 @@ kB = const.k_B.value
 
 @dataclass(frozen=True)
 class PlanetParams:
+    """A planet and its star. r1 is the planet radius, r2 the stellar radius and R the semi-major axis, in any consistent units: only the ratios
+    r1/r2 and R/r2 enter. a_AU is the semi-major axis in AU, for the light-travel-time correction. HItargets_utils.hi_planets_by_name builds one for
+    a known planet."""
     name: str                # Exoplanet Name
     period: float       # orbital period [days]
     incl:   float       # inclination [deg]
@@ -39,8 +42,8 @@ class PlanetParams:
     T2_eff: float       # stellar Teff [K]
     a_AU: float         # semi-major axis [AU] (for light travel time correction)
     T14: float  # Transit Duration [h]
-    logg: float = 4.5  # stellar surface gravity [log10 cgs]; only the stellar SED uses it (astro_utils.stellar_spectrum)
-    feh: float = 0.0  # stellar metallicity [Fe/H] [dex]; only the stellar SED uses it
+    logg: float = 4.5  # stellar surface gravity [log10 cgs], for the stellar spectrum and limb darkening
+    feh: float = 0.0  # stellar metallicity [Fe/H] [dex], for the stellar spectrum and limb darkening
 
     @property
     def args(self):
@@ -69,11 +72,11 @@ class PlanetParams:
         if insolation: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self)) - 1
         else: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self))**0.25 - 1
 
-    # Approximate (naive) occultation depth [ppm] for a grey planet and a blackbody star: delta_occ = emissivity * (r1/r2)^2 * <B_l(T1_day)> /
-    # <B_l(T2_eff)>  +  A_g * (r1/R)^2 (<.> is the bandpass average weighted by stellar photon flux (B_l * l).)
-    def approx_occ_depth(planet, eff_wavelength_range, A_B=None, f=2/3, emissivity_bol=None, emissivity=None, A_g=0.0, n_wl=400):
-        # f is Cowan & Agol (2011) redistribution parameter: 1/4 full redistribution, 1/2 uniform dayside, 2/3 no redistribution (disk-integrated), 1
-        # substellar. resolved here, not in the signature: the baseline settings are imported only after this class (see below)
+    def approx_occ_depth(self, eff_wavelength_range, A_B=None, f=2/3, emissivity_bol=None, emissivity=None, A_g=0.0, n_wl=400):
+        """Approximate (point-source) occultation depth [ppm] of a grey planet around a blackbody star: emissivity (r1/r2)^2 <B(T_day)> / <B(T2_eff)>
+        + A_g (r1/R)^2, with <.> the band average over eff_wavelength_range [m] weighted by the stellar photon flux. f is the redistribution factor of
+        Cowan & Agol (2011): 1/4 full redistribution, 1/2 uniform dayside, 2/3 no redistribution (disk-integrated), 1 substellar."""
+        # A_B, emissivity_bol and emissivity default to the baseline settings, resolved here: they are imported only after this class (see below)
         if A_B is None: A_B = DEFAULT_A_B
         if emissivity_bol is None: emissivity_bol = DEFAULT_EMISSIVITY_BOL
         if emissivity is None: emissivity = DEFAULT_EMISSIVITY
@@ -81,13 +84,13 @@ class PlanetParams:
         wl_min, wl_max = eff_wavelength_range # [m]
 
         # Point-source value ignoring hyper-illumination.
-        T1_day = planet.T2_eff * np.sqrt(planet.r2 / planet.R) * (f * (1.0 - A_B) / emissivity_bol) ** 0.25
+        T1_day = self.T2_eff * np.sqrt(self.r2 / self.R) * (f * (1.0 - A_B) / emissivity_bol) ** 0.25
 
         wl = np.linspace(wl_min, wl_max, n_wl)
         B = lambda T: (2 * h * c ** 2 / wl ** 5) / np.expm1(h * c / (wl * kB * T))
 
-        contrast = np.trapezoid(wl * B(T1_day), wl) / np.trapezoid(wl * B(planet.T2_eff), wl)
-        return 1e6 * (emissivity * (planet.r1 / planet.r2) ** 2 * contrast + A_g * (planet.r1 / planet.R) ** 2)
+        contrast = np.trapezoid(wl * B(T1_day), wl) / np.trapezoid(wl * B(self.T2_eff), wl)
+        return 1e6 * (emissivity * (self.r1 / self.r2) ** 2 * contrast + A_g * (self.r1 / self.R) ** 2)
 
     def summary(self, print_params=False, eff_wavelength_range=None):
         print(f"=== {self.name} ===")
@@ -173,6 +176,9 @@ POINT_SOURCE_MODELS = ("naive", "naive_redist")                # irradiated by a
 REDIST_MODELS = ("naive_redist", "hyperillum_redist")          # take the heat redistribution F
 
 def insolation(gamma1, planet, insolation_model, u_bol=DEFAULT_U_BOL):
+    """Irradiance [W m^-2] at the angular distance gamma1 [rad] from the substellar point: from the extended star for "hyperillum" and
+    "hyperillum_redist" (u_bol: its bolometric linear limb darkening), from a point source for "naive" and "naive_redist". The redistribution models
+    share the irradiance of their source and redistribute only the absorbed heat (effective_insolation)."""
     if insolation_model in EXTENDED_SOURCE_MODELS: return insolation_hyperillum(gamma1, planet, u_bol=u_bol)
     elif insolation_model in POINT_SOURCE_MODELS: return naive_insolation(gamma1, planet)  # a redistribution model redistributes the heat, not the incident flux
     else: raise ValueError(f"insolation_model must be one of {INSOLATION_MODELS}")
@@ -232,15 +238,15 @@ def insolation_penumbra_hyperillum(gamma1, planet, u_bol=DEFAULT_U_BOL, order=64
     # map nodes to [0, theta_max] per point: theta = theta_max/2 * (x+1)
     theta = (theta_max[:, None] / 2.0) * (nodes[None, :] + 1.0)   # (N, order)
     jac = theta_max[:, None] / 2.0                                # (N, order)
-    w = weights[None, :] * jac
+    wq = weights[None, :] * jac
 
     A, B, cos_tp, Delta, st = _theta_kernels_vec(theta, alpha, rho, r2)
 
     def Mn(n):
-        return 2.0 * r2**2 / np.pi * np.sum(A * Delta * cos_tp**n * st * w, axis=1) # M_n of Eq. (A10), Gauss-Legendre quadrature
+        return 2.0 * r2**2 / np.pi * np.sum(A * Delta * cos_tp**n * st * wq, axis=1) # M_n of Eq. (A10), Gauss-Legendre quadrature
 
     def Nn(n):
-        return 2.0 * r2**2 / np.pi * np.sum(B * np.sin(Delta) * cos_tp**n * st * w, axis=1) # N_n of Eq. (A10), Gauss-Legendre quadrature
+        return 2.0 * r2**2 / np.pi * np.sum(B * np.sin(Delta) * cos_tp**n * st * wq, axis=1) # N_n of Eq. (A10), Gauss-Legendre quadrature
 
     ca, sa = np.cos(alpha), np.sin(alpha)
     J1 = Mn(1) * ca + Nn(1) * sa                          # Eq. (A9), n = 1
@@ -329,9 +335,9 @@ def temperature_from_insolation(insol, planet, insolation_model, A_B=DEFAULT_A_B
     return BBtemp_from_insolation(effective_insolation(insol, planet, insolation_model, F=F, u_bol=u_bol), A_B = A_B, emissivity_bol=emissivity_bol)
 
 
-# T(gamma1): surface temperature at an angular distance gamma1 from the substellar point (the T(z) profile of Kreidberg & Loeb 2016 for
-# "naive_redist")
 def surface_temperature(gamma1, planet, insolation_model, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None):
+    """Surface temperature [K] at the angular distance gamma1 [rad] from the substellar point, in local radiative equilibrium (Eq. 6), with the heat
+    redistribution F of Kreidberg & Loeb (2016) for the redistribution models."""
     return temperature_from_insolation(insolation(gamma1, planet, insolation_model, u_bol=u_bol), planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F, u_bol=u_bol)
 
 
