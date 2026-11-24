@@ -1,6 +1,6 @@
 import batman
 import numpy as np
-from astro_utils import *
+from astro_utils import occultation_time, true_anomaly
 from HItargets_utils import DEFAULT_U   # baseline transit limb darkening
 from astropy import constants as const
 

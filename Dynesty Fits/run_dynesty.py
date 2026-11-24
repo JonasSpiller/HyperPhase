@@ -20,7 +20,7 @@ with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanr
     import fspiderman as sp
 from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, rms_1min, NoNoiseLevelError, resolve_instrument, detector_label, joint_name, JOINT_INSTRUMENTS, DEFAULT_A_B, DEFAULT_A, DEFAULT_U_BOL, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS, A_B_BOUNDS, F_BOUNDS, OFFSET_BOUNDS
 from hyperillumination_phasecurve_utils import FittingConfig, ConstantBandAlbedo, ScaledBandAlbedo   # ScaledBandAlbedo(1.): A = A_B, the A_B-coupled alternative (only within the physical prior A_B_BOUNDS, where A >= 0)
-from dynesty_utils import *
+from dynesty_utils import Parameter, ParameterSet, Uniform, SamplerConfig, simulate_data, make_logl, run_nested_fit, posterior_summary, bayes_factor, dataset_tag
 
 
 ####################################################################################################

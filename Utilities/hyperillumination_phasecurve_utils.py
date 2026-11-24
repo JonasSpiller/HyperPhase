@@ -4,14 +4,15 @@ import numpy as np
 import contextlib, io
 with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
     import fspiderman as sp
-from hyperillumination_utils import *
+from hyperillumination_utils import (insolation, naive_insolation, insolation_fullyilluminated_hyperillum, insolation_penumbra_hyperillum,
+                                     temperature_from_insolation, check_redistribution, INSOLATION_MODELS, EXTENDED_SOURCE_MODELS, POINT_SOURCE_MODELS)
 from HItargets_utils import DEFAULT_A_B, DEFAULT_A, DEFAULT_EMISSIVITY_BOL, DEFAULT_EMISSIVITY, DEFAULT_U_BOL, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS   # baseline settings
 import astro_utils
 import batman_utils
 import contextlib, io
 from astropy import constants as const
 from collections.abc import Callable
-from dataclasses import field   # dataclass/replace arrive via hyperillumination_utils; field does not
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
 sigma = const.sigma_sb.value

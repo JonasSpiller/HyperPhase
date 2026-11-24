@@ -15,9 +15,9 @@ from astropy import constants as const
 from dataclasses import fields
 
 sigma = const.sigma_sb.value  # 5.670374e-8 W ⋅ m⁻² ⋅ K⁻⁴
-h = const.h.value
-c = const.c.value
-kB = const.k_B.value
+H_PLANCK = const.h.value
+C_LIGHT = const.c.value
+K_B = const.k_B.value
 
 
 ###########################################################################################################################
@@ -87,7 +87,7 @@ class PlanetParams:
         T1_day = self.T2_eff * np.sqrt(self.r2 / self.R) * (f * (1.0 - A_B) / emissivity_bol) ** 0.25
 
         wl = np.linspace(wl_min, wl_max, n_wl)
-        B = lambda T: (2 * h * c ** 2 / wl ** 5) / np.expm1(h * c / (wl * kB * T))
+        B = lambda T: (2 * H_PLANCK * C_LIGHT ** 2 / wl ** 5) / np.expm1(H_PLANCK * C_LIGHT / (wl * K_B * T))
 
         contrast = np.trapezoid(wl * B(T1_day), wl) / np.trapezoid(wl * B(self.T2_eff), wl)
         return 1e6 * (emissivity * (self.r1 / self.r2) ** 2 * contrast + A_g * (self.r1 / self.R) ** 2)

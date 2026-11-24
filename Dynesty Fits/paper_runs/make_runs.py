@@ -103,6 +103,7 @@ FREE_GEOMETRY = r'''# Free geometry (added by make_runs.py): the orbital geometr
 # (HItargets_utils.GEOMETRY_PARAMS): a/R*, Rp/R* and the impact parameter b for TOI-2431 b, with i = arccos(b / (a/R*)), and a/R*, Rp/R* and i for K2-141 b.
 import numpy as np
 from HItargets_utils import GEOMETRY_PARAMS, GEOMETRY_SIGMA
+from dynesty_utils import TruncNormal
 _GEOMETRY_TRUE = {"a_rs": planet.R / planet.r2, "rp_rs": planet.r1 / planet.r2, "incl": planet.incl, "b": planet.R / planet.r2 * np.cos(np.radians(planet.incl))}
 _GEOMETRY_LABEL = {"a_rs": r"$a/R_\star$", "rp_rs": r"$R_p/R_\star$", "incl": r"$i$ [deg]", "b": r"$b$"}
 

@@ -13,7 +13,7 @@ R_sun = const.R_sun.value
 H_PLANCK = const.h.value
 C_LIGHT = const.c.value
 K_BOLTZ = const.k_B.value
-b = 2.897771955e-3 # Wien
+WIEN_B = 2.897771955e-3   # Wien's displacement constant [m K]
 STEFAN_BOLTZMANN = (2.0 * np.pi**5 * K_BOLTZ**4) / (15.0 * H_PLANCK**3 * C_LIGHT**2) # Stefan-Boltzmann constant
 
 STELLAR_MODEL = "newera"    # repo-wide stellar SED: "newera" (newera_utils cube), an stsynphot grid ("phoenix", "ck04models", "k93models") or "blackbody". Read as a default argument at import, so change it here, not at runtime
@@ -245,7 +245,7 @@ def planck_ratio_logderiv(Tp, wavelength_m):
 
 # Wien's displacement law
 def wien_lambda_max(T):
-    return b / T # max. wavelength [in m]
+    return WIEN_B / T # max. wavelength [in m]
 
 # Spectral radiance [W m^-2 sr^-1 m^-1] of a blackbody at temperature T, per unit wavelength [m] (Planck function): B_lambda(T) = (2 h c^2 / lambda^5)
 # / (exp(h c / (lambda k_B T)) - 1)
