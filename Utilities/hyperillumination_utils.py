@@ -1,3 +1,6 @@
+"""Irradiance of a planet by its extended host star (hyper-illumination), the point-source and redistribution models, temperature maps and their plots.
+
+Equation numbers refer to the paper: Spiller, Zieba & Wordsworth (in prep.), "Hyper-Illumination Mimics Heat Redistribution in JWST Phase Curves of Rocky Planets Closest to Their Stars"."""
 import io
 import time
 from functools import lru_cache
@@ -121,9 +124,9 @@ def which_zone(gamma1, planet):
         default="night-side")
 
 def alpha_(gamma1, R, r1):
-    # returns alpha, rho
+    # returns alpha, rho of Eq. (A1)
     rho = np.sqrt(R ** 2 + r1 ** 2 - 2 * r1 * R * np.cos(gamma1))
-    cos_alpha = (R * np.cos(gamma1) - r1) / rho  # corrected eq. (23): r1, not r2
+    cos_alpha = (R * np.cos(gamma1) - r1) / rho  # Eq. (A1)
     return np.arccos(np.clip(cos_alpha, -1, 1)), rho
 
 # Local radiative equilibrium emissivity_bol sigma T^4 = (1-A_B) insol. A_B is always the Bond albedo (even for lambda-band measurements), emissivity_bol the bolometric emissivity.
@@ -181,8 +184,7 @@ def naive_insolation(gamma1, planet):
 
 
 
-# computes illumination on the surface of the exoplanet accounting for hyper-illumination
-# Inspired by Kopal 1954
+# computes illumination on the surface of the exoplanet accounting for hyper-illumination, inspired by Kopal (1954)
 def insolation_hyperillum(gamma1, planet, u_bol=DEFAULT_U_BOL):
     # gamma1 is angle from substellar point; u_bol is the bolometric stellar limb-darkening coefficient
 
@@ -199,17 +201,17 @@ def insolation_hyperillum(gamma1, planet, u_bol=DEFAULT_U_BOL):
     return Fp_incident # incident flux on planet (W/m^2)
 
 
-# Fully illuminated zone: Kopal implementation (eq. 33-35)
+# Fully illuminated zone: Eq. (3), the closed form of Eq. (A6)
 # fully illuminated zone is independent of limb darkening (integral term vanishes through symmetry)
 def insolation_fullyilluminated_hyperillum(gamma1, planet):
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     mu = np.cos(gamma1)
-    Fp_incident =  r2**2 * sigma * T2_eff**4 * (R * mu - r1) / (R**2 + r1**2 - 2. * r1 * R * mu)**1.5   # eq (34) Kopal1954
+    Fp_incident =  r2**2 * sigma * T2_eff**4 * (R * mu - r1) / (R**2 + r1**2 - 2. * r1 * R * mu)**1.5   # Eq. (3)
     return Fp_incident # incident flux on planet (W/m^2)
 
 
-# Penumbra: inspired by Kopal (eq. 36-41) without small-disk approximation and with corrections (lambda inconsistency, ...), see Goodnotes derivation
+# Penumbra: Eqs. (A7), (A9) and (A10), exact (no small-disk approximation)
 # Evaluated with fixed-order Gauss-Legendre quadrature, vectorized across all gamma1 points at once (instead of looping scipy.integrate.quad per point)
 # 1e4 time improvement on insolation_penumbra_hyperillum_simpleint
 def insolation_penumbra_hyperillum(gamma1, planet, u_bol=DEFAULT_U_BOL, order=64, runtime=False):
@@ -233,18 +235,18 @@ def insolation_penumbra_hyperillum(gamma1, planet, u_bol=DEFAULT_U_BOL, order=64
     A, B, cos_tp, Delta, st = _theta_kernels_vec(theta, alpha, rho, r2)
 
     def Mn(n):
-        return 2.0 * r2**2 / np.pi * np.sum(A * Delta * cos_tp**n * st * w, axis=1) # gauss-legendre integration scheme
+        return 2.0 * r2**2 / np.pi * np.sum(A * Delta * cos_tp**n * st * w, axis=1) # M_n of Eq. (A10), Gauss-Legendre quadrature
 
     def Nn(n):
-        return 2.0 * r2**2 / np.pi * np.sum(B * np.sin(Delta) * cos_tp**n * st * w, axis=1) # gauss-legendre integration scheme
+        return 2.0 * r2**2 / np.pi * np.sum(B * np.sin(Delta) * cos_tp**n * st * w, axis=1) # N_n of Eq. (A10), Gauss-Legendre quadrature
 
     ca, sa = np.cos(alpha), np.sin(alpha)
-    J1 = Mn(1) * ca + Nn(1) * sa                          # eq. 39, n=1
+    J1 = Mn(1) * ca + Nn(1) * sa                          # Eq. (A9), n = 1
     Jp = I0 * (1.0 - u_bol) * J1
     if u_bol != 0.0:
-        J2 = Mn(2) * ca + Nn(2) * sa                      # eq. 39, n=2
+        J2 = Mn(2) * ca + Nn(2) * sa                      # Eq. (A9), n = 2
         Jp += I0 * u_bol * J2
-    result = np.pi * Jp                                   # F = pi * I'   (eq. 36)
+    result = np.pi * Jp                                   # I = pi B_0 [(1 - u_bol) J_1 + u_bol J_2], Eq. (A9)
 
     if runtime: print(f"insolation_penumbra_hyperillum runtime: {time.perf_counter() - t0:.4f} s")
 
@@ -261,12 +263,12 @@ def _theta_kernels_vec(theta, alpha, rho, r2):
     alpha = alpha[:, None]
     ct = np.cos(theta)
     st = np.sin(theta)
-    rp2 = rho**2 + r2**2 - 2.0 * rho * r2 * ct          # rho'^2                (eq. 20)
+    rp2 = rho**2 + r2**2 - 2.0 * rho * r2 * ct          # rho'^2                (Eq. A3)
     rp = np.sqrt(rp2)
-    cos_beta = (rho - r2 * ct) / rp                      # cos beta              (eq. 18)
+    cos_beta = (rho - r2 * ct) / rp                      # cos beta              (Eq. A3)
     sin_beta = r2 * st / rp                              # sin beta
-    cos_tp = (rho * ct - r2) / rp                        # cos theta'            (eq. 19)
-    # exact visible azimuthal half-width Delta(theta)
+    cos_tp = (rho * ct - r2) / rp                        # cos theta'            (Eq. A3)
+    # exact visible azimuthal half-width Delta(theta), Eq. (A7)
     with np.errstate(divide="ignore", invalid="ignore"):
         cot_beta = np.where(st > 0, (rho - r2 * ct) / (r2 * st), np.inf)
         g = np.where(np.tan(alpha) != 0, -cot_beta / np.tan(alpha), 0.0)   # -cot(a) cot(b)
@@ -595,8 +597,7 @@ def animation_insolmap(planet, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVIT
 ###########################################################################################################################
 
 
-# Penumbra: Inspired by Kopal (eq. 36-41) without small-disk approximation and with corrections (lambda inconsistency, ...), see Goodnotes derivation
-# Penumbra: baseline/ground-truth implementation via scipy.integrate.quad, per-point adaptive quadrature
+# Penumbra, Eqs. (A7), (A9) and (A10): baseline/ground-truth implementation via scipy.integrate.quad, per-point adaptive quadrature
 def insolation_penumbra_hyperillum_simpleint(gamma1, planet, u_bol=DEFAULT_U_BOL, runtime=False, **quad_kw):
 
     t0 = time.perf_counter()
@@ -625,22 +626,22 @@ def _insolation_penumbra_hyperillum_simpleint_scalar(gamma1, planet, u_bol, **qu
     Nn = lambda n: 2.0 * r2**2 / np.pi * quad(integ_N, 0.0, np.arccos(r2 / rho), args=(n,), **kw)[0]
 
     ca, sa = np.cos(alpha), np.sin(alpha)
-    J1 = Mn(1) * ca + Nn(1) * sa                          # eq. 39, n=1
+    J1 = Mn(1) * ca + Nn(1) * sa                          # Eq. (A9), n = 1
     Jp = I0 * (1.0 - u_bol) * J1
     if u_bol != 0.0:
-        J2 = Mn(2) * ca + Nn(2) * sa                      # eq. 39, n=2
+        J2 = Mn(2) * ca + Nn(2) * sa                      # Eq. (A9), n = 2
         Jp += I0 * u_bol * J2
-    return np.pi * Jp                                     # F = pi * I'   (eq. 36)
+    return np.pi * Jp                                     # I = pi B_0 [(1 - u_bol) J_1 + u_bol J_2], Eq. (A9)
 def _theta_kernels_simpleint(theta, alpha, rho, r2):
     """Return (cosb/rp^2, sinb/rp^2, cos theta', Delta) at polar angle theta."""
     ct = np.cos(theta)
     st = np.sin(theta)
-    rp2 = rho**2 + r2**2 - 2.0 * rho * r2 * ct          # rho'^2                (eq. 20)
+    rp2 = rho**2 + r2**2 - 2.0 * rho * r2 * ct          # rho'^2                (Eq. A3)
     rp = np.sqrt(rp2)
-    cos_beta = (rho - r2 * ct) / rp                      # cos beta              (eq. 18)
+    cos_beta = (rho - r2 * ct) / rp                      # cos beta              (Eq. A3)
     sin_beta = r2 * st / rp                              # sin beta
-    cos_tp = (rho * ct - r2) / rp                        # cos theta'            (eq. 19)
-    # exact visible azimuthal half-width Delta(theta)
+    cos_tp = (rho * ct - r2) / rp                        # cos theta'            (Eq. A3)
+    # exact visible azimuthal half-width Delta(theta), Eq. (A7)
     cot_beta = (rho - r2 * ct) / (r2 * st) if st > 0 else np.inf
     g = -cot_beta / np.tan(alpha) if np.tan(alpha) != 0 else 0.0   # -cot(a) cot(b)
     Delta = np.arccos(np.clip(g, -1.0, 1.0))            # in [0, pi]
@@ -671,7 +672,7 @@ def _insolation_penumbra_mask_scalar(gamma1, planet, u_bol, nth, nom):
     cb = (rho - r2 * ct) / rp
     sb = r2 * np.sin(TH) / rp
     cos_tp = (rho * ct - r2) / rp
-    cz = np.cos(alpha) * cb + np.sin(alpha) * sb * np.cos(OM)     # cos zeta (eq.17)
+    cz = np.cos(alpha) * cb + np.sin(alpha) * sb * np.cos(OM)     # cos zeta (Eq. A4)
     Iem = I0 * (1 - u_bol + u_bol * cos_tp)
     integ = np.where((cz > 0) & (cos_tp > 0),
                      Iem * cz * cos_tp * (r2**2 * np.sin(TH)) / rp2, 0.0)
@@ -680,8 +681,8 @@ def _insolation_penumbra_mask_scalar(gamma1, planet, u_bol, nth, nom):
 
 # Penumbra: Kopal's analytic penumbral approximation, lambda sign-corrected (only valid for r2<<R!, inaccurate for close-in Exoplanets)
 def insolation_penumbra_hyperillum_approx(gamma1, planet, u_bol=DEFAULT_U_BOL, runtime=False):
-    """Small-disk analytic form from eqs. (43)-(48), using the self consistent sign
-    x = sin(lambda) = -(rho/r2)cos(alpha)  (opposite to printed eq. 56)."""
+    """Small-disk closed forms of the penumbral integrals (lowest order in r2/rho), using the self-consistent sign
+    x = sin(lambda) = -(rho/r2)cos(alpha)  (opposite to the printed one)."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     t0 = time.perf_counter()
@@ -694,14 +695,14 @@ def insolation_penumbra_hyperillum_approx(gamma1, planet, u_bol=DEFAULT_U_BOL, r
     J1 = (r2 ** 2 / rho ** 2) * (0.5 - (lam + sl * cl) / np.pi) * ca \
          + (2 * r2 ** 3 / (3 * np.pi * rho ** 3)) * cl ** 3 * sa
     J2 = (r2 ** 2 / (3 * rho ** 2)) * (1 - sl * (1 + cl ** 2 / 2)) * ca \
-         + (r2 ** 3 / (8 * rho ** 3)) * cl ** 4 * sa  # corrected: r2^3 (eq.48 prints r1^3)
+         + (r2 ** 3 / (8 * rho ** 3)) * cl ** 4 * sa  # corrected: r2^3 (printed as r1^3)
     result = np.pi * I0 * ((1 - u_bol) * J1 + u_bol * J2)
     if runtime: print(f"insolation_penumbra_hyperillum_approx runtime: {time.perf_counter() - t0:.4f} s")
     return result
 
 
 # Full surface (all gamma1): brute-force integration over the stellar sphere in vector form, for validation.
-# Independent of the Kopal-style geometry above (no alpha_, no theta kernels, no Delta): stellar surface points Q are sampled
+# Independent of the geometry above (no alpha_, no theta kernels, no Delta): stellar surface points Q are sampled
 # on a midpoint grid about the star -> planet-centre axis, and the visibility of each Q is decided by the signs of the
 # emission cosine (Q faces P) and the incidence cosine (Q is above the horizon of P). Includes linear limb darkening.
 # Slow (~1 s per point at the default grid, accurate to ~1e-6 of the substellar insolation): use for spot checks, parallelise across points.

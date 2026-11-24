@@ -71,7 +71,7 @@ def nightside_flux(planet, lambda_range, insolation_model="hyperillum", unit="fl
 
 # Reflected light curve signal accounting for hyperillumination
 # This assumes Lambertian (isotropic, grey) reflection, circular planet
-# Inspired by Kopal eq. 4
+# Eq. (A11) of the paper (Spiller, Zieba & Wordsworth, in prep.)
 def reflected_lightcurve(epsilon, planet, u_bol=DEFAULT_U_BOL, unit="normalized", lambda_band_ratio=1., A=DEFAULT_A, n_eta=150, n_phi=80, n_tab=1000, runtime=False, insolation_model="hyperillum"):
     """
     epsilon: angle substellar spot to line of sight [rad]
@@ -357,7 +357,7 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=D
     lo, la, temp_grid = custom_temperature_grid(planet, u_bol=u_bol, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, F=F, A_B = A_B, emissivity_bol=emissivity_bol)   # F: used by "hyperillum_redist" only (a direct_T map like "hyperillum"), ignored by "hyperillum" and "naive"
 
     # pass indexing='ij' meshgrids in deg and the transposed temp_grid (wrong orientation fails silently!)
-    # The map goes in as is, nightside at exactly 0 K for "naive": the installed fspiderman clamps the direct_T bicubic to the cell corners (fork README, patch 4). Upstream SPIDERMAN
+    # The map goes in as is, nightside at exactly 0 K for "naive": the installed fspiderman clamps the direct_T bicubic to the cell corners (README of github.com/JonasSpiller/fSPIDERMAN, "4. Bicubic clamp"). Upstream SPIDERMAN
     # overshoots below 0 K at the sharp terminator and exit()s ("CANNOT DO NEGATIVE TEMPERATURES"), which is why older versions of this code floored the map at 100-200 K.
     LO_deg, LA_deg = np.meshgrid(lo, la, indexing='ij')  # longitude/latitude meshgrids [deg]
     grid = sp.format_grid(LO_deg, LA_deg, temp_grid.T)

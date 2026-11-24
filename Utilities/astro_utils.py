@@ -260,7 +260,7 @@ def band_avg_planck(T, lambda_range, filter_path=None, n=300):
     """
     lam, w = load_filter(lambda_range, filter_path=filter_path, n=n)
 
-    # R [counts/photon] -> [counts/energy], so that weighting B_lambda (an energy spectral radiance) below yields a photon-integrated band average. Same convention as fspiderman.get_filter (fork README, patch 6). Unused by the pipeline: T_bright integrates through hpu.band_planck.
+    # R [counts/photon] -> [counts/energy], so that weighting B_lambda (an energy spectral radiance) below yields a photon-integrated band average. Same convention as fspiderman.get_filter (README of github.com/JonasSpiller/fSPIDERMAN, "6. Photon-counting response weighting"). Unused by the pipeline: T_bright integrates through hpu.band_planck.
     w =  w * lam / (H_PLANCK * C_LIGHT)
 
     B_lambda = planck_spectrum(lam, T)
@@ -277,7 +277,7 @@ def band_avg_planck(T, lambda_range, filter_path=None, n=300):
 # Checked against sigma T_eff^4, which fails on wrong units or a truncated wavelength range. Cached: treat the arrays as read-only.
 @lru_cache(maxsize=None)
 def stellar_spectrum(T_eff, logg, feh, stellar_model=STELLAR_MODEL):
-    if stellar_model == "newera":   # no sigma T^4 check: the JWST product starts at 0.6 um; validated against full-range models in Stellar Model/build_newera.ipynb
+    if stellar_model == "newera":   # no sigma T^4 check: the JWST product starts at 0.6 um; validated against full-range models in Stellar Model/NewEra/build_newera.ipynb
         wave, I = newera_utils.newera_spectrum(float(T_eff), float(logg), float(feh))
     else:
         with warnings.catch_warnings():

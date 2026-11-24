@@ -1,3 +1,8 @@
+# ---------------------------------------------------------------------------------------------------------------------
+# The integrand of instellca_E is transcribed from InstellCa_3.0.py (InstellCa, Exoplanet Instellation Calculator,
+# https://github.com/Mradumay137/InstellCa, commit 99225f4), Copyright (c) 2021 Mradumay137 (Mradumay Sadh), MIT License;
+# reference: Sadh & Gavassino 2026, ApJ 997, 167. The MIT permission notice is reproduced in InstellCa_3.0_exported.py.
+# ---------------------------------------------------------------------------------------------------------------------
 """
 Independent re-implementation of the InstellCa_3.0 irradiance integral, used by InstellCa_Comparison.ipynb to locate
 the InstellCa bias (Jonas Spiller). Nothing here is imported from InstellCa; `instellca_E` is a

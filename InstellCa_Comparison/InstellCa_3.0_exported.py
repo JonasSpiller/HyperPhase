@@ -2,7 +2,7 @@
 # Modified copy of InstellCa_3.0.py (InstellCa, Exoplanet Instellation Calculator)
 #   Original: https://github.com/Mradumay137/InstellCa, commit 99225f4 (file last changed 2025-09-15),
 #   Copyright (c) 2021 Mradumay137 (Mradumay Sadh), MIT License. Reference: Sadh & Gavassino 2026, ApJ 997, 167.
-#   The MIT permission notice is reproduced at the end of this header; the original LICENSE file is in the clone.
+#   The MIT permission notice is reproduced at the end of this header; the original LICENSE file is at https://github.com/Mradumay137/InstellCa (commit 99225f4).
 #
 # Modifications (Jonas Spiller, 2026-11-01), marked "# MOD" below; everything else is verbatim:
 #   1. The limb-darkening coefficient u (hard-wired to 0.6 in the original) is read from the environment variable

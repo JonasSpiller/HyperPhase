@@ -1,4 +1,4 @@
-# Inspired by Sebastian Zieba
+# Inspired by the NASA Exoplanet Archive scripts of Sebastian Zieba
 
 """
 NASA Exoplanet Archive aggregator (PSCompPars).
