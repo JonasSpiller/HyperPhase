@@ -160,7 +160,7 @@ if __name__ == "__main__":
             results[instrument] = run_instrument(instrument)
         except NoNoiseLevelError as e:   # no PandExo mode and no CUSTOM_SIGMA_1MIN entry for this planet: nothing to simulate, so the band is skipped and the others still run
             skipped[instrument] = str(e)
-            print(f"\nWARNING: {instrument} skipped for {planet.name} - no noise level: {e}", file=sys.stderr, flush=True)   # printed, not warnings.warn: HItargets_utils silences every warning at import (warnings.filterwarnings('ignore'))
+            print(f"\nWARNING: {instrument} skipped for {planet.name} - no noise level: {e}", file=sys.stderr, flush=True)
         except Exception as e:   # any other failure of one band must not cost the other bands their run - as separate runs would not
             failed[instrument] = f"{type(e).__name__}: {e}"
             traceback.print_exc()

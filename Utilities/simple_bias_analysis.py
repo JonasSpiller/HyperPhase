@@ -499,14 +499,14 @@ def planet_names(planets):
 
 # The rows of a per-planet table (planet_bias_table, planet_false_F_table) for `planets`, in that order: what every per-planet plot shows. Planets the table does not have
 # (the tables leave out planets without a noise level or a stellar spectrum, with a note) are listed in a note; none at all -> ValueError. The attrs are kept.
-def select_planets(tab, planets):
+def select_planets(tab, planets, verbose=True):
     names, key = planet_names(planets), tab["name"].map(_norm_name).to_numpy()
     rows, missing = [], []
     for nm in names:
         hit = np.flatnonzero(key == _norm_name(nm))
         if len(hit): rows.append(hit[0])
         else: missing.append(nm)
-    if missing: print(f"not in the table, so not plotted: {', '.join(missing)}")
+    if missing and verbose: print(f"not in the table, so not plotted: {', '.join(missing)}")
     if not rows: raise ValueError(f"none of the planets {names} is in the table (it has {list(tab['name'])})")
     out = tab.iloc[rows].reset_index(drop=True)
     out.attrs = dict(tab.attrs)
@@ -917,7 +917,7 @@ def print_limit_curve(sweep, A_B_true, roche_a_rs, sweep_ubol0=None, u_bol=None)
 # roche: the Roche frontier (draw_roche_frontier) on every panel of an (a/R*, T_eff) map - True: roche_periods() (HItargets_utils.ROCHE_CASES at ROCHE_R_P), a {label: P_R [h]} dict:
 # those, False: none. Only a T_eff axis fixes the host density (main sequence), so other maps never show it.
 def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl=90., F_map=None, F_levels=(0.01, 0.02, 0.05),
-                   show_absolute=True, show_relative=False, show_F=False, target=None, title=None, roche=True, legend_fontsize=12, n_closest=10, *, planets):
+                   show_absolute=True, show_relative=False, show_F=False, target=None, title=None, roche=True, legend_fontsize=12, n_closest=10, *, planets, verbose=True):
     if show_F and F_map is None: raise ValueError("show_F=True needs F_map")
     if not (show_absolute or show_relative or show_F): raise ValueError("nothing to draw: set show_absolute, show_relative or show_F")
     cos_i = np.cos(np.radians(incl))
@@ -967,14 +967,14 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
     fig.tight_layout()
     fig.legend(*axs[0].get_legend_handles_labels(), loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=legend_fontsize, framealpha=.9)
 
-    if outside: print(f"outside the map box, not drawn: {', '.join(outside)}")
+    if outside and verbose: print(f"outside the map box, not drawn: {', '.join(outside)}")
     ok = ~no_occultation & np.isfinite(bias_map)
     line = (f"{'occulting, ' if F_map is not None else ''}non-railed cells: {ok.sum()} of {ok.size};  Delta A_B in [{bias_map[ok].min():+.3f}, {bias_map[ok].max():+.3f}]"
             f" = [{100 * bias_map[ok].min() / A_B_true:+.1f}, {100 * bias_map[ok].max() / A_B_true:+.1f}] % of A_B")
     if F_map is not None:
         line += f",  F in [{F_map[ok].min():.4f}, {F_map[ok].max():.4f}]"
-    print(line)
-    print(f"fitted A_B < 0 in {int((A_B_true + bias_map[ok] < 0.).sum())} of {ok.sum()} cells;  railed: {(~no_occultation & ~np.isfinite(bias_map)).sum()}" + (f",  without occultation: {no_occultation.sum()}" if F_map is not None else ""))
+    if verbose: print(line)
+    if verbose: print(f"fitted A_B < 0 in {int((A_B_true + bias_map[ok] < 0.).sum())} of {ok.sum()} cells;  railed: {(~no_occultation & ~np.isfinite(bias_map)).sum()}" + (f",  without occultation: {no_occultation.sum()}" if F_map is not None else ""))
     return fig, axs
 
 
@@ -1038,7 +1038,7 @@ def print_allowed_extremes(xg, yg, bias_map, A_B_true, allowed, periods):
 # different Rp/R* must be rescaled (or fitted at their own geometry) before their noise level is compared with the map.
 # planets (required): the labelled archive planets, n_closest: the closest-in planets labelled in addition, roche: the Roche frontier, all as in plot_bias_maps.
 def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=90., z=2., sigma_levels=(10., 20., 50., 100., 200., 500., 1000., 2000., 5000.), target=None, title=None,
-                     roche=True, n_closest=10, *, planets):
+                     roche=True, n_closest=10, *, planets, verbose=True):
     from matplotlib.colors import LogNorm
     cos_i = np.cos(np.radians(incl))
     X, Y = np.meshgrid(xg, yg)
@@ -1062,7 +1062,7 @@ def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=9
             ax.plot((1. + sign * rp_rs_of(y_line)) / cos_i, y_line, color=INK, ls="--", lw=1.2, label=r"grazing occultation ($b = 1 \mp R_p/R_\star$)" if sign > 0 else None)
     if _roche_cases(roche) and ykey == "st_teff": draw_roche_frontier(ax, xg, yg, _roche_cases(roche), rp_rs_of)
     outside = overlay_planets(AGG, ax, ykey, (yg[0], yg[-1]), a_rs_lim=(xg[0], xg[-1]), target=target, n_closest=n_closest, planets=planets)
-    if outside: print(f"outside the map box, not drawn: {', '.join(outside)}")
+    if outside and verbose: print(f"outside the map box, not drawn: {', '.join(outside)}")
     ax.set_facecolor("0.85")
     ax.grid(False)
     ax.set_xlim(xg[0], xg[-1]); ax.set_ylim(yg[0], yg[-1])
@@ -1072,9 +1072,9 @@ def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=9
     fig.tight_layout()
     fig.legend(*ax.get_legend_handles_labels(), loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=8, framealpha=.9)
 
-    print(f"occulting, non-railed cells: {ok.sum()} of {ok.size};  sigma_1min,crit ({z:g} sigma, {n_orbits} orbits) in [{sig_crit[ok].min():.1f}, {sig_crit[ok].max():.1f}] ppm/min;  "
+    if verbose: print(f"occulting, non-railed cells: {ok.sum()} of {ok.size};  sigma_1min,crit ({z:g} sigma, {n_orbits} orbits) in [{sig_crit[ok].min():.1f}, {sig_crit[ok].max():.1f}] ppm/min;  "
           f"sqrt(dchi2_F) at sigma_1min = {sigma_1min:g} ppm/min in [{np.sqrt(dchi2_map[ok]).min():.2f}, {np.sqrt(dchi2_map[ok]).max():.2f}] sigma")
-    print(f"railed: {(~no_occultation & ~np.isfinite(dchi2_map)).sum()},  without occultation: {no_occultation.sum()}")
+    if verbose: print(f"railed: {(~no_occultation & ~np.isfinite(dchi2_map)).sum()},  without occultation: {no_occultation.sum()}")
     return sig_crit
 
 
@@ -1082,7 +1082,7 @@ def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=9
 # The planets of a per-planet table whose host the stellar model can represent. A host outside the NewEra cube (T_eff, log g or [Fe/H], newera_utils.CUBE_*) or off the stellar grid's
 # T_eff nodes would raise inside the worker pool and abort the whole table, so such planets are left out with a note instead. Checked here in the parent process, where building a
 # planet's stellar grid takes ~0.02 s. A band-less template cfg (l1 = l2 = nan) has no grid to check, so it keeps every planet.
-def drop_unsupported_hosts(cfg, pls):
+def drop_unsupported_hosts(cfg, pls, verbose=True):
     keep, dropped = [], []
     for pl in pls:
         try:
@@ -1092,7 +1092,7 @@ def drop_unsupported_hosts(cfg, pls):
             keep.append(pl)
         except ValueError as e:
             dropped.append(f"{pl.name} ({e})")
-    if dropped: print(f"no stellar spectrum for {len(dropped)} of {len(pls)} planets, left out of the table:\n  " + "\n  ".join(dropped))
+    if dropped and verbose: print(f"no stellar spectrum for {len(dropped)} of {len(pls)} planets, left out of the table:\n  " + "\n  ".join(dropped))
     if not keep: raise ValueError("the stellar model covers none of the planets' hosts, so there is nothing to tabulate")
     return keep
 
@@ -1163,17 +1163,17 @@ def _planet_bias_row(cfg, A_B_true, pl, s1, redist, bounds, F_bounds, kw):
 # verdict (bias_verdict): "needs hyperillum" / "naive OK" / "unconstrained" — the last where sigma >= the flat-prior std of the physical range A_B_BOUNDS (A_B) or F_BOUNDS (F), i.e. where the fit
 # does not measure the quantity within its physical range. bounds (default A_B_FIT_BOUNDS) is only the range of the fit, so A_B_fit < 0 is a valid result.
 # AGG: archive aggregate path; with it the table carries each planet's ESM (`esm`, NaN where the archive has none) for the figure's tick labels.
-def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity=None, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, AGG=None, n_jobs=-1, **kw):
+def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity=None, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, AGG=None, n_jobs=-1, verbose=True, **kw):
     quantity = quantity or "A_B"
     if quantity not in ("A_B", "F"): raise ValueError(f'quantity must be "A_B" or "F", got {quantity!r}')
     if quantity == "F" and not redist: raise ValueError('quantity="F" needs redist=True (only the joint fit has an F)')
     pls = planet_list(planets)
     noise = {pl.name: _table_noise(sigma_1min, cfg, pl.name) for pl in pls}   # a number per planet, {detector: ppm/min} for a detector set, NaN without a (complete) noise level
     no_noise = [nm for nm, s in noise.items() if not _has_noise(s)]
-    if no_noise: print(f"no sigma_1min for {len(no_noise)} of {len(pls)} planets, fitted without one (the fitted A_B does not depend on it), so no Fisher sigma: {', '.join(no_noise)}")
+    if no_noise and verbose: print(f"no sigma_1min for {len(no_noise)} of {len(pls)} planets, fitted without one (the fitted A_B does not depend on it), so no Fisher sigma: {', '.join(no_noise)}")
     c0 = template_cfg(cfg)
     if not np.isfinite(c0.sigma_1min): raise ValueError(f"cfg.sigma_1min = {c0.sigma_1min}: the fits without a noise level run at it, so it must be finite")
-    pls = drop_unsupported_hosts(cfg, pls)
+    pls = drop_unsupported_hosts(cfg, pls, verbose=verbose)
 
     rows = pmap(_planet_bias_row, [(cfg, A_B_true, pl, noise[pl.name], redist, bounds, F_bounds, kw) for pl in pls], n_jobs)
     tab = pd.DataFrame(rows).sort_values("a_rs").reset_index(drop=True)
@@ -1285,16 +1285,16 @@ def _planet_false_F_row_from(tabs, cfg, pl, s1, bounds, F_bounds):
 # level, same per-detector noise columns for a detector set, whose sigma_1min_crit:<label> is each detector's own level times the noise margin). Sorted by a/Rs. z: the significance the decision refers to.
 # fits=(tab, tab_J): the planet_bias_table of this sample with redist=False and redist=True (same cfg, A_B_true, sigma_1min, bounds and **kw), whose fits are reused instead of refitting
 # (see _bias_table_pair). Same result.
-def planet_false_F_table(cfg, A_B_true, planets, sigma_1min, z=2., bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, AGG=None, n_jobs=-1, fits=None, **kw):
+def planet_false_F_table(cfg, A_B_true, planets, sigma_1min, z=2., bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, AGG=None, n_jobs=-1, fits=None, verbose=True, **kw):
     pls = planet_list(planets)
     noise = {pl.name: _table_noise(sigma_1min, cfg, pl.name) for pl in pls}   # as in planet_bias_table
     missing = [nm for nm, s in noise.items() if not _has_noise(s)]
     if len(missing) == len(pls): raise ValueError(f"no planet has a sigma_1min entry (planets: {missing}; sigma_1min has {sorted(sigma_1min)}), so there is nothing to tabulate")
     if missing:
-        print(f"no sigma_1min for {len(missing)} of {len(pls)} planets, left out of the table: {', '.join(missing)}")
+        if verbose: print(f"no sigma_1min for {len(missing)} of {len(pls)} planets, left out of the table: {', '.join(missing)}")
         pls = [pl for pl in pls if pl.name not in missing]
     c0 = template_cfg(cfg)
-    pls = drop_unsupported_hosts(cfg, pls)
+    pls = drop_unsupported_hosts(cfg, pls, verbose=verbose)
     if fits is None:
         rows = pmap(_planet_false_F_row, [(cfg, A_B_true, pl, noise[pl.name], bounds, F_bounds, kw) for pl in pls], n_jobs)
     else:
@@ -1329,7 +1329,7 @@ def _instrument_false_F_row_from(tabs, cfg, pl, instrument, sigma_1min, bounds, 
 # sigma_1min handling). A joint fit's sigma_1min_crit is NaN; its noise_margin applies to all its detectors alike.
 # fits=(tab, tab_J): the instrument_retrievals of this planet with redist=False and redist=True (same cfg, A_B_true, noise levels, bounds and **kw), whose fits are reused instead of
 # refitting (see _bias_table_pair). Same result.
-def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, fits=None, **kw):
+def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, fits=None, verbose=True, **kw):
     from HItargets_utils import rms_1min, NoNoiseLevelError
     c0 = template_cfg(cfg)
     instruments = [instrument_key(ins) for ins in instruments]
@@ -1341,7 +1341,7 @@ def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None
                 with contextlib.redirect_stdout(io.StringIO()): sigma_1min[d] = rms_1min(planet, d)
             except NoNoiseLevelError:
                 missing.append(d)
-        if missing: print(f"{planet.name}: no noise level on {', '.join(missing)} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry), left out")
+        if missing and verbose: print(f"{planet.name}: no noise level on {', '.join(missing)} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry), left out")
     used = [ins for ins in instruments if all(d in sigma_1min for d in detectors(ins))]
     if not used: raise ValueError(f"{planet.name}: no noise level for any of {instruments}")
     if fits is None:
@@ -1370,8 +1370,8 @@ def _one_noise_level(tab):
         raise ValueError("a joint fit of several detectors has one noise level per detector (sigma_1min:<label> columns), not the single sigma_1min the bars show: print the table (noise_cols) or use plot_planet_retrievals")
 
 
-def plot_planet_false_F_bars(tab, title=None, figsize=None, ax=None, *, planets):
-    return _false_F_bars(select_planets(tab, planets), title, figsize, ax)
+def plot_planet_false_F_bars(tab, title=None, figsize=None, ax=None, *, planets, verbose=True):
+    return _false_F_bars(select_planets(tab, planets, verbose), title, figsize, ax)
 
 def _false_F_bars(tab, title, figsize, ax):
     z = tab.attrs["z"]
@@ -1478,7 +1478,7 @@ def _instrument_row(cfg, A_B_true, pl, instrument, sigma_1min, redist, bounds, F
 # value, no Fisher sigma); a joint fit whose detectors do not all have one is left out (it weights its detectors by their noise). Both with a note.
 # Returns a DataFrame in the order of `instruments`, with the verdict of each fit (bias_verdict on A_B, at the flat-prior std of the physical range A_B_BOUNDS).
 # bounds (default A_B_FIT_BOUNDS) is the range of the fit only, so A_B_fit < 0 is a valid result.
-def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigma_1min=None, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
+def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigma_1min=None, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, verbose=True, **kw):
     from HItargets_utils import rms_1min, NoNoiseLevelError
     c0 = template_cfg(cfg)   # a detector set as cfg: its instrument-level settings (each entry of `instruments` brings its own band(s))
     instruments = [instrument_key(ins) for ins in instruments]
@@ -1492,8 +1492,8 @@ def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigm
                 pass
     no_noise = [ins for ins in instruments if len(detectors(ins)) == 1 and ins not in sigma_1min]
     joint_out = [ins for ins in instruments if len(detectors(ins)) > 1 and not all(d in sigma_1min for d in detectors(ins))]
-    if no_noise: print(f"{planet.name}: no noise level on {', '.join(no_noise)} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry): fitted without one (the fitted A_B does not depend on it), so no Fisher sigma")
-    if joint_out: print(f"{planet.name}: joint fit(s) {', '.join(joint_out)} left out: a joint fit weights its detectors by their noise levels, and not all of them have one")
+    if no_noise and verbose: print(f"{planet.name}: no noise level on {', '.join(no_noise)} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry): fitted without one (the fitted A_B does not depend on it), so no Fisher sigma")
+    if joint_out and verbose: print(f"{planet.name}: joint fit(s) {', '.join(joint_out)} left out: a joint fit weights its detectors by their noise levels, and not all of them have one")
     if no_noise and not np.isfinite(c0.sigma_1min): raise ValueError(f"cfg.sigma_1min = {c0.sigma_1min}: the fits without a noise level run at it, so it must be finite")
     used = [ins for ins in instruments if ins not in joint_out]
     if not used: raise ValueError(f"{planet.name}: nothing to fit among {instruments}")
@@ -1610,12 +1610,12 @@ def _param_rows(ax, x, rows, y0=-0.10, dy=0.075, fontsize=8):
 
 def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.2f}", fmt_sigma="{:.2f}", fmt_noise="{:.0f}",
                           figsize=None, log_noise=True, log_bias=False, colors=(None, None), title=None, quantities=None, grid=True, param_rows=True, sigma_crit_plot=False,
-                          bias_break=None, hide_unconstrained=True, *, planets):
-    tab = select_planets(tab, planets)
+                          bias_break=None, hide_unconstrained=True, *, planets, verbose=True):
+    tab = select_planets(tab, planets, verbose)
     _one_noise_level(tab)
     no_noise = ~np.isfinite(tab["sigma_1min"])   # VERDICT_NO_NOISE rows: a bias but no Fisher sigma to set it against
     if no_noise.any():
-        print(f"no noise level, so not in the bar plot (no Fisher sigma): {', '.join(tab.loc[no_noise, 'name'])}")
+        if verbose: print(f"no noise level, so not in the bar plot (no Fisher sigma): {', '.join(tab.loc[no_noise, 'name'])}")
         if no_noise.all(): raise ValueError("none of the planets has a noise level on this instrument, so there is no Fisher sigma to plot (plot_planet_retrievals shows the fitted values)")
         attrs = tab.attrs; tab = tab[~no_noise].reset_index(drop=True); tab.attrs = attrs
     quantities = tuple(quantities or (tab.attrs.get("quantity", "A_B"),))
@@ -1766,9 +1766,9 @@ def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), marker
     if any("instrument" not in t for t in tabs.values()): raise TypeError("a per-planet table: use plot_planet_retrievals(tabs, planets=...)")
     return _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize, ax, "instrument")
 
-def plot_planet_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), markers=("o", "s", "D", "^"), ylim="default", title=None, figsize=None, ax=None, *, planets):
+def plot_planet_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), markers=("o", "s", "D", "^"), ylim="default", title=None, figsize=None, ax=None, *, planets, verbose=True):
     tabs = tabs if isinstance(tabs, dict) else {None: tabs}
-    return _plot_retrievals({k: select_planets(t, planets) for k, t in tabs.items()}, quantity, sigma_levels, markers, ylim, title, figsize, ax, "name")
+    return _plot_retrievals({k: select_planets(t, planets, verbose) for k, t in tabs.items()}, quantity, sigma_levels, markers, ylim, title, figsize, ax, "name")
 
 # The default y range of an A_B retrieval plot over several tables: (lower, top), lower = 0 unless a fitted A_B is below 0.1, then 0.1 below the lowest fit rounded down to a tenth.
 # Pass it as ylim= to every panel of a figure whose retrieval panels share the y axis (sharey=True), so each panel draws the A_B < 0 band of the common range.

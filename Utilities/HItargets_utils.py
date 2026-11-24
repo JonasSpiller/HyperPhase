@@ -1,4 +1,4 @@
-import os, sys, fcntl, re
+import os, sys, re
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -6,8 +6,6 @@ import numpy as np
 import pandas as pd
 from astropy import constants as const
 import matplotlib.pyplot as plt
-import warnings
-warnings.filterwarnings('ignore')
 
 ###########################################################################################################################
 #####
@@ -809,11 +807,17 @@ def _read_pandexo_cache(f):
     f.seek(0)
     return pd.read_csv(f, dtype={c: str for c in _PANDEXO_TEXT}) if os.fstat(f.fileno()).st_size else pd.DataFrame()
 
+def _lock(f, exclusive):
+    """Lock the open cache file for parallel kernels and workers (fcntl, POSIX only; no lock on Windows)."""
+    try: import fcntl
+    except ImportError: return
+    fcntl.flock(f, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+
 def pandexo_cache_lookup(key):
     """sigma_1min [ppm/min] of the newest cached row matching key, or None."""
     if not PANDEXO_CACHE.exists(): return None
     with open(PANDEXO_CACHE) as f:
-        fcntl.flock(f, fcntl.LOCK_SH)
+        _lock(f, exclusive=False)
         df = _read_pandexo_cache(f)
     m = _pandexo_match(df, key)
     return float(df.loc[m, "sigma_1min"].iloc[-1]) if m.any() else None
@@ -822,7 +826,7 @@ def _pandexo_cache_store(entries):
     """Add (key, values) entries to the cache, replacing rows with the same key; read-modify-write under an exclusive lock."""
     PANDEXO_CACHE.touch(exist_ok=True)
     with open(PANDEXO_CACHE, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+        _lock(f, exclusive=True)
         df = _read_pandexo_cache(f)
         for key, _ in entries:
             if len(df): df = df[~_pandexo_match(df, key)]

@@ -65,9 +65,9 @@ def _blocks(sizes):
     return [slice(int(edges[k]), int(edges[k + 1])) for k in range(len(sizes))]
 
 
-def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", labels=None, **model_kw):
+def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", labels=None, verbose=True, **model_kw):
     """The simulated observation against the truth it was drawn from (re-evaluated here, one forward model per detector at the truth's own resolution, truth_model_kw), with the residuals
-    in units of sigma. Prints the chi2 check of the noise realisation. One column per detector for a detector set (joint dataset); `labels` names the columns.
+    in units of sigma. Prints the chi2 check of the noise realisation (verbose=False: silent). One column per detector for a detector set (joint dataset); `labels` names the columns.
     Returns fig, (ax, axr) for a single detector and fig, axes (2 x n_detectors) for a set; does not show (the caller does)."""
     cfgs, datas = detector_cfgs(cfg), detector_data(data)
     labels = list(labels) if labels is not None else [None] * len(cfgs)
@@ -102,9 +102,9 @@ def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", labe
         # Numerical Checks
         chi2 = np.sum(r ** 2)
         pre = f"{lab}: " if lab else ""
-        print(f"{pre}sigma_bin: {c.sigma_bin:.2f} ppm  (bin width {c.planet.period * 24 * 60 / c.n_bins:.2f} min)")
-        print(f"{pre}chi2 / n_bins (normalized average noise per bin ~1): {chi2 / c.n_bins:.2f}")
-        print(f"{pre}residual mean / sigma (~0): {r.mean():.2f}")
+        if verbose: print(f"{pre}sigma_bin: {c.sigma_bin:.2f} ppm  (bin width {c.planet.period * 24 * 60 / c.n_bins:.2f} min)")
+        if verbose: print(f"{pre}chi2 / n_bins (normalized average noise per bin ~1): {chi2 / c.n_bins:.2f}")
+        if verbose: print(f"{pre}residual mean / sigma (~0): {r.mean():.2f}")
     return (fig, (axes[0, 0], axes[1, 0])) if len(cfgs) == 1 else (fig, axes)
 
 
@@ -958,7 +958,7 @@ def check_fit_current(fit, cfg=None, rtol=1e-6):
         then = c.stellar_grid
         rel = np.inf if (np.shape(now[1]) != np.shape(then[1]) or not np.allclose(now[0], then[0])) else float(np.max(np.abs(np.asarray(now[1], float) / np.asarray(then[1], float) - 1.)))   # inf: different T_eff nodes
         rel_max = max(rel_max, rel)
-    if rel_max > rtol:   # printed to stderr rather than warnings.warn: HItargets_utils silences every warning at import (warnings.filterwarnings('ignore')), and this one must be seen
+    if rel_max > rtol:
         print(f"WARNING [{fit.meta['insolation_model']}]: the stellar grid of the current code differs from the one this fit was run with by up to {100 * rel_max:.3g} % "
               f"(stellar model, filter or band changed since {fit.meta.get('file', 'the run')}). Its samples are not the posterior of today's likelihood: re-run the fit before quoting it.", file=sys.stderr, flush=True)
     return np.inf if band_changed else rel_max
