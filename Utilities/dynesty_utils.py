@@ -19,7 +19,7 @@ from dynesty import utils as dyfunc
 from scipy.ndimage import gaussian_filter
 from simple_bias_analysis import binned, fit_naive, fit_AB_only, fit_redist, fisher_sigma, measurability, temperature_bias, is_detector_set, evidence_residual, nuisance_problem, nuisance_solve, pmap, C_HI, C_NAIVE, C_REDIST, MUTED   # the noiseless least-squares fits of the bias analysis, which plot_noisy_vs_truth and the series table compare the sampler with
 from hyperillumination_utils import surface_temperature   # the nightside temperature a fitted F implies
-from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS, DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS, resolve_instrument, joint_name, observed_band   # the parameter ranges: priors (physical) and the least-squares fit range of A_B; the baseline settings and instrument spellings of the dataset tags
+from HItargets_utils import A_B_BOUNDS, A_B_FIT_BOUNDS, F_BOUNDS, OFFSET_BOUNDS, DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS, resolve_instrument, joint_name, observed_band, FILTER_DIR   # the parameter ranges: priors (physical) and the least-squares fit range of A_B; the baseline settings and instrument spellings of the dataset tags
 from scipy.stats import norm, truncnorm
 from scipy.stats import chi2 as chi2_dist   # p-value of a best-fit chi2 (run_prediction)
 import warnings
@@ -814,7 +814,18 @@ def load_fit(path):
     path = os.path.abspath(os.path.expanduser(path))
     with open(path, "rb") as f: fit = pickle.load(f)
     fit.meta["file"] = path   # run_nested_fit records the path only AFTER pickling, so the file on disk never carries its own name
+    _relocate_filter_paths(fit)
     return fit
+
+
+def _relocate_filter_paths(fit):
+    """Point the filter files of a saved fit's cfg at this repository's Filters/Spiderman/. The pickle stores the absolute path on the machine that ran the fit, and
+    check_fit_current, logl_from_fit and every forward-model call read the file. A stored path that exists is kept."""
+    if fit.meta.get("cfg") is None: return
+    for c in detector_cfgs(fit.meta["cfg"]):
+        path = getattr(c, "filter_path", None)
+        if isinstance(path, str) and not os.path.exists(path) and (FILTER_DIR / os.path.basename(path)).exists():
+            c.filter_path = str(FILTER_DIR / os.path.basename(path))
 
 
 def load_fits(paths):
