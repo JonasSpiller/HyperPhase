@@ -5,7 +5,7 @@
 # ---------------------------------------------------------------------------------------------------------------------
 """
 Independent re-implementation of the InstellCa_3.0 irradiance integral, written for this repository and used by
-InstellCa_Comparison.ipynb to locate the origin of InstellCa's offset from the exact irradiance. Nothing here is
+instellca_comparison.ipynb to locate the origin of InstellCa's offset from the exact irradiance. Nothing here is
 imported from InstellCa; `instellca_E` is a
 line-for-line transcription of the integration block of InstellCa_3.0.py (same integrand incl. its abs(), same
 rectangular limits, same scipy.integrate.quad calls, same P/(4 pi^2) normalisation, same 1.0573 Teff factor), and

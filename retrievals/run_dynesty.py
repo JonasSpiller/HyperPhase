@@ -117,7 +117,7 @@ def run_instrument(instrument):
     if missing: raise ValueError(f"no pset for model(s) {missing}; PSETS has {tuple(PSETS)}")
     logls = {m: make_logl(cfg, data, m, PSETS[m], labels=labels) for m in MODELS}
 
-    # Dynesty. `tag` is everything the models share - it is the DATASET (dynesty_utils.DATASET_TAG), which plot_dynesty.ipynb finds again with
+    # Dynesty. `tag` is everything the models share - it is the DATASET (dynesty_utils.DATASET_TAG), which 01_retrieval_example.ipynb finds again with
     # find_dataset. The free parameters differ per model, so "priors-..." goes LAST, after {insolation_model} (which run_nested_fit fills in): one
     # glob on tag then picks up every model of this dataset whatever it was sampled with, while runs with different free parameters still cannot
     # overwrite each other.

@@ -8,7 +8,7 @@ the files side by side and moves each finished one to done/.
     python make_runs.py                 # write the run files that are not in done/ yet (pending files whose content is unchanged are left alone,
                                         # so this is safe while run_all.sh runs)
     python make_runs.py --all           # every run file, also those in done/ (run_all.sh then runs them again)
-    python make_runs.py --outdir DIR    # save the results to DIR instead of retrievals/dynesty_results, where plot_dynesty.ipynb and dynesty_series.ipynb read them
+    python make_runs.py --outdir DIR    # save the results to DIR instead of retrievals/dynesty_results, where 01_retrieval_example.ipynb and 03_retrieval_series.ipynb read them
 
 A run saves its fits under its dataset tag and overwrites a stored run with the same tag, so use --outdir to rerun into a fresh folder.
 

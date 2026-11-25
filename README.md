@@ -64,8 +64,8 @@ plt.ylim(-50, 250); plt.xlabel("orbital phase"); plt.ylabel("relative flux [ppm]
 ```
 
 The insolation models are `"hyperillum"` (extended star), `"naive"` (point source) and `"naive_redist"` (point source with the heat
-redistribution $F$ of Kreidberg & Loeb 2016, passed as `F=`). The notebooks in `forward_model/` show the irradiance, the temperature
-maps and the thermal and reflected curves step by step.
+redistribution $F$ of Kreidberg & Loeb 2016, passed as `F=`). The numbered notebooks in `forward_model/`, starting with
+`01_irradiance.ipynb`, show the irradiance, the temperature maps and the thermal and reflected curves step by step.
 
 ## Conventions
 
@@ -90,10 +90,10 @@ maps and the thermal and reflected curves step by step.
 | Folder | Contents |
 |---|---|
 | `Utilities/` | The code. `hyperillumination_utils.py`: extended-source and point-source irradiance, heat redistribution, temperature maps. `hyperillumination_phasecurve_utils.py`: thermal (fSPIDERMAN) and reflected phase curves, stellar band fluxes, the model of the fits. `astro_utils.py`: orbits, Planck functions, brightness temperatures, stellar spectra, Roche limits. `newera_utils.py`: the NewEra spectral cube. `batman_utils.py`: transits and occultations with batman. `HItargets_utils.py`: planet parameters (NASA Exoplanet Archive and a curated table with one published source per planet), instrument bands, noise levels, the baseline settings. `simple_bias_analysis.py`: noiseless fits, Fisher uncertainties, evidence predictions, nuisance parameters, bias maps. `dynesty_utils.py`: simulated observations, likelihoods, nested-sampling retrievals. |
-| `forward_model/` | The forward model: irradiance and illumination zones, thermal, reflected and full phase curves, heat redistribution, the nightside signal, TESS candidates, speed and accuracy of the light curves. |
-| `bias_analysis/` | The noiseless analysis: albedo bias and spurious redistribution for single planets, over $(a/R_\star, T_{\rm eff})$ and for the planet sample; predicted Bayes factors; nuisance parameters; planets at their Roche limit; the blackbody against the NewEra star. |
-| `retrievals/` | Nested-sampling retrievals: `run_dynesty.py` (one run), `paper_runs/` (every retrieval of the paper), `example_runs/` (three stored retrievals of TOI-2431 b), and notebooks that inspect a run, validate the sampler and compare the retrievals with their predictions. |
-| `instellca_comparison/` | Comparison of the irradiance with InstellCa (Sadh & Gavassino 2026). |
+| `forward_model/` | The forward model, in notebooks numbered in reading order: irradiance and illumination zones, thermal, reflected and full phase curves, heat redistribution, the nightside signal. |
+| `bias_analysis/` | The noiseless analysis, in notebooks numbered in reading order: albedo bias and spurious redistribution for single planets, over $(a/R_\star, T_{\rm eff})$ and for the planet sample; predicted Bayes factors; nuisance parameters; planets at their Roche limit; unconfirmed TESS candidates. |
+| `retrievals/` | Nested-sampling retrievals: `run_dynesty.py` (one run), `paper_runs/` (every retrieval of the paper), `example_runs/` (three stored retrievals of TOI-2431 b), and numbered notebooks that inspect a stored run, validate the sampler and compare the retrievals with their predictions. |
+| `validation/` | Checks of the model: the irradiance against InstellCa (Sadh & Gavassino 2026), the speed and accuracy of the thermal light curves (fSPIDERMAN against SPIDERMAN), and the blackbody against the NewEra star. |
 | `inputs/` | What the model reads but does not compute, each with the notebooks that made it: |
 | `inputs/filters/` | Instrument throughputs (`inputs/filters/Spiderman/`). |
 | `inputs/stellar_model/` | NewEra spectral cube and limb-darkening coefficients. |
@@ -129,7 +129,7 @@ python make_runs.py      # writes one run file per planet, seed and setting
 They take about 2,000 core-hours in total and save to `retrievals/dynesty_results/`, which is not part of the repository. The three
 stored retrievals in `retrievals/example_runs/` can be read with `dynesty_utils.load_fits`. The comparison with
 [InstellCa](https://github.com/Mradumay137/InstellCa) needs a clone of InstellCa at commit 99225f4 (see the first cell of
-`instellca_comparison/InstellCa_Comparison.ipynb`).
+`validation/instellca_comparison.ipynb`).
 
 ## Limitations
 
@@ -163,5 +163,5 @@ If you use this code, please cite the paper above (see also `CITATION.cff`) and 
 
 ## License
 
-MIT, see `LICENSE`. The exception is `instellca_comparison/InstellCa_3.0_exported.py`: a modified copy of InstellCa,
+MIT, see `LICENSE`. The exception is `validation/InstellCa_3.0_exported.py`: a modified copy of InstellCa,
 Copyright (c) 2021 Mradumay137, also under the MIT License. Its header lists the changes.

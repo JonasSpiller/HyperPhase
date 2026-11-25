@@ -36,12 +36,12 @@ DEFAULT_EMISSIVITY_BOL = 1.
 DEFAULT_EMISSIVITY = 1.
 
 # Bolometric linear limb darkening u_bol of the irradiance: a model-atmosphere value instead of the grey Eddington value of 0.6.
-# For TOI-2431 b, the primary target, the bolometric profile gives 0.49 (PHOENIX) and 0.50 (MPS-ATLAS) (inputs/stellar_model/LimbDarkening.ipynb).
+# For TOI-2431 b, the primary target, the bolometric profile gives 0.49 (PHOENIX) and 0.50 (MPS-ATLAS) (inputs/stellar_model/limb_darkening.ipynb).
 DEFAULT_U_BOL = 0.5
 
 # Quadratic limb darkening (u1, u2) of the batman transit. The transit is identical in both irradiation models and cancels exactly in every
 # comparison, so the value only needs to be plausible: the median of ExoTiC-LD fits over the hosts of an earlier, twelve-planet version of the sample,
-# in the band throughputs of the forward model (inputs/stellar_model/LimbDarkening.ipynb). Not re-derived for the final sample (its hosts span the
+# in the band throughputs of the forward model (inputs/stellar_model/limb_darkening.ipynb). Not re-derived for the final sample (its hosts span the
 # same 4100-5960 K): the value does not enter any result.
 DEFAULT_U = (0.09, 0.14)
 
@@ -53,7 +53,7 @@ DEFAULT_N_ORBITS = 5
 # the orbit exactly.
 DEFAULT_N_BINS = 27
 
-# Reference Rp/R* of the (a/R*, T_eff) bias maps (simple_bias_analysis.reference_planet; Bias_Maps.ipynb, HypotheticalExtremePlanet.ipynb): the median
+# Reference Rp/R* of the (a/R*, T_eff) bias maps (simple_bias_analysis.reference_planet; 03_bias_maps.ipynb, 06_roche_limit.ipynb): the median
 # of the PAPER_PLANETS (0.0158 for the nine of the selection rule, 0.0160 with 55 Cnc e; they span 0.012-0.021). The bias barely depends on it,
 # because the mismatch and the response to A_B both scale with the planet's flux: between 0.0075 and 0.03 it changes by less than 3 % (A_B-only fit)
 # and 5 % (with F).
@@ -112,7 +112,7 @@ PAPER_PLANETS = ("TOI-2431 b", "TOI-2260 b", "K2-141 b", "K2-131 b", "TOI-561 b"
 PAPER_OUTSIDE_RULE = ("55 Cnc e",)   # the members of PAPER_PLANETS that the selection rule does not pick
 
 # The Roche limits drawn on every (a/R*, T_eff) map (simple_bias_analysis.draw_roche_frontier, main-sequence hosts) and used in
-# HypotheticalExtremePlanet.ipynb, as {label: (iron mass fraction, rho_0 / rho_mean)} of a rock/iron planet of radius ROCHE_R_P. The radius and iron
+# 06_roche_limit.ipynb, as {label: (iron mass fraction, rho_0 / rho_mean)} of a rock/iron planet of radius ROCHE_R_P. The radius and iron
 # fraction give the mean density (astro_utils.rocky_mean_density, Fortney et al. 2007 eq. 8), and with rho_0 / rho_mean the Roche period
 # (astro_utils.roche_period_h, Rappaport et al. 2013 eq. 5); simple_bias_analysis.roche_periods evaluates them.
 # - "Earth-like": Earth's iron fraction 0.33 and Earth's central concentration 13.1 / 5.51 = 2.37 (PREM). The wall for a typical rocky planet.
@@ -183,7 +183,7 @@ OVERRIDES = {
 }
 
 # Published 1-sigma uncertainties of the two reference planets, for every analysis that does not hold the geometry fixed: the nuisance fits of
-# simple_bias_analysis (bias_analysis/Nuisance_Robustness.ipynb; the paper's nuisance-robustness figure, Sec. 4.4) and the free-geometry
+# simple_bias_analysis (bias_analysis/05_nuisance_robustness.ipynb; the paper's nuisance-robustness figure, Sec. 4.4) and the free-geometry
 # dynesty runs. Defined once, here. GEOMETRY_PARAMS: the geometry as each planet's source FITTED it, in the column names of
 # simple_bias_analysis.nuisance_problem. Tas et al. fit the impact parameter b and the stellar density of TOI-2431 b and derive i = arccos(b /
 # (a/R*)), so its geometry is (a/R* at fixed b, Rp/R*, b); Malavolta et al. fit a/R* and i of K2-141 b directly. GEOMETRY_SIGMA: the Gaussian priors
@@ -589,7 +589,7 @@ CUSTOM_SIGMA_1MIN_N = {_normalise(k): v for k, v in CUSTOM_SIGMA_1MIN.items()}
 # Modes in which a planet cannot be observed: {planet name: {instrument (FILTER_LAMBDA_UM key): reason}}. rms_1min raises NoNoiseLevelError for them
 # before PandExo runs, exactly as for an instrument without any noise level: planet_bias_table fits them without a Fisher sigma (VERDICT_NO_NOISE),
 # joint fits that need the detector and the false-positive tables leave the planet out, run_dynesty.py skips the entry, and the retrieval series of
-# retrievals/dynesty_series.ipynb leave it out (observable). Planet names are matched loosely.
+# retrievals/03_retrieval_series.ipynb leave it out (observable). Planet names are matched loosely.
 _G395H_SAT_55CNC = "the host (K = 4.0) saturates NIRSpec/G395H; NIRCam grism was the only non-saturating near-infrared option (Patel et al. 2024, A&A 690, A159; Hu et al. 2024 used NIRCam F444W)"
 UNOBSERVABLE = {
     "55 Cnc e": {"JWST_NIRSpec.G395H_NRS1": _G395H_SAT_55CNC, "JWST_NIRSpec.G395H_NRS2": _G395H_SAT_55CNC},

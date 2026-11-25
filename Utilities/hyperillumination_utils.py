@@ -518,7 +518,7 @@ def plot_quad_insolmap(planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_
 
 
 # Several planets side by side, one column each, one row per insolation model, all at the same phase: the surface maps the models disagree on (e.g.
-# the Roche-limit planets of HypotheticalExtremePlanet.ipynb). Each column has its own temperature scale, 0 to 1.1 x its substellar temperature (the
+# the Roche-limit planets of 06_roche_limit.ipynb). Each column has its own temperature scale, 0 to 1.1 x its substellar temperature (the
 # same in every model: there is no substellar boost), so the panels of one planet are comparable; the colour bar of the last column labels the rows.
 # The terminator is drawn in grey, the penumbra borders in green on the hyperillum panels only. planets: {name: PlanetParams} or a list. F is passed
 # to "naive_redist" only. Returns fig, axs (shape (len(models), len(planets))).

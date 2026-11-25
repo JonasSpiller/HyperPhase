@@ -21,10 +21,10 @@ dependencies:
       - joblib==1.5.3
       - pillow==12.2.0
       - h5py==3.16.0
-      - colorama==0.4.6                # InstellCa_Comparison only
+      - colorama==0.4.6                # instellca_comparison only
       - batman-package==2.5.3
       - dynesty==3.1.0
-      - exotic-ld==3.2.0               # limb-darkening coefficients (inputs/stellar_model/LimbDarkening.ipynb)
+      - exotic-ld==3.2.0               # limb-darkening coefficients (inputs/stellar_model/limb_darkening.ipynb)
       - pandexo.engine==2026.7         # noise levels; needs the Pandeia reference data (pandeia_refdata) and PYSYN_CDBS
       - pandeia.engine==2026.7
       - synphot==1.7.0
@@ -32,4 +32,4 @@ dependencies:
       - pytest==9.2.0
       - fspiderman-package @ git+https://github.com/JonasSpiller/fSPIDERMAN.git@81d300d341454d90d89d2ff0f718600f0f17c0e9
       - -e .
-# Upstream SPIDERMAN (module spiderman) is not installed: it is only the benchmark baseline of forward_model/SpeedAccuracy_ThermalPhaseCurve.ipynb.
+# Upstream SPIDERMAN (module spiderman) is not installed: it is only the benchmark baseline of validation/speed_accuracy.ipynb.

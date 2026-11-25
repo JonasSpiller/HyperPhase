@@ -926,7 +926,7 @@ def list_datasets(results_dir):
 
 def find_dataset(results_dir, planet, instrument, subfolder=None, **settings):
     """The ONE stored dataset of `planet` and `instrument` with these settings (dataset_tag's keywords; unset ones are the baseline), whatever noise levels the run had, as the
-    stem plot_dynesty.ipynb globs on: its tag, or 'subfolder/tag' for a run in a subfolder of `results_dir` (subfolder='null_test', 'free_geometry'), so that
+    stem 01_retrieval_example.ipynb globs on: its tag, or 'subfolder/tag' for a run in a subfolder of `results_dir` (subfolder='null_test', 'free_geometry'), so that
     f"{results_dir}/{stem}_*.pkl" finds its files either way. Raises when none or several match, listing what `results_dir` holds for the planet."""
     pattern = dataset_tag(planet, instrument, None, **settings)
     folder = os.path.join(results_dir, subfolder) if subfolder else results_dir
@@ -1521,7 +1521,7 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
 
 ###########################################################################################################################
 #####
-#####   Retrievals against the linear prediction of the Bayes factor (dynesty_series.ipynb)
+#####   Retrievals against the linear prediction of the Bayes factor (03_retrieval_series.ipynb)
 #####
 ###########################################################################################################################
 

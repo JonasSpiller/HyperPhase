@@ -333,7 +333,7 @@ def band_wavelengths(lam, T_eff, logg, feh, stellar_model=STELLAR_MODEL):
 # Quadratic limb darkening of the transit, fitted with ExoTiC-LD (Grant & Wakeford 2024) to the specific intensities I(mu) of its stellar grids and
 # band-weighted with the throughput files of the forward model (ExoTiC-LD intensities are photon rates, the throughputs electrons per photon: the
 # fspiderman weighting). The NewEra cube cannot do this, it has no angular dependence. Model files are downloaded on first use into LD_DATA. exotic_ld
-# is imported inside quad_ld, so the rest of astro_utils does not depend on it. Used by inputs/stellar_model/LimbDarkening.ipynb.
+# is imported inside quad_ld, so the rest of astro_utils does not depend on it. Used by inputs/stellar_model/limb_darkening.ipynb.
 LD_DATA = str(newera_utils.NEWERA_DIR.parent / "ExoTiC-LD")   # inputs/stellar_model/ExoTiC-LD (gitignored, like NewEra/): model cache, filled on first use
 LD_GRID_TEFF_MIN = {"phoenix": 2300., "mps1": 3500., "mps2": 3500., "kurucz": 3500., "stagger": 4000.}   # [K] lower T_eff edge of each ExoTiC-LD grid; below it ExoTiC-LD silently falls back to the nearest model
 LD_MU_MIN = 0.1     # ExoTiC-LD default; the steep drop of spherical models at the very limb is not fitted

@@ -409,7 +409,7 @@ def bias_map_grid(cfg, A_B_true, a_rs_grid, y_grid, y_param, redist=False, n_job
     return tuple(np.moveaxis(out, -1, 0)) if n_out > 1 else out
 
 
-# The 1-D counterpart of bias_map_grid along a/Rs alone (the limit curve of HypotheticalExtremePlanet.ipynb): both fits with their Fisher sigmas at
+# The 1-D counterpart of bias_map_grid along a/Rs alone (the limit curve of 06_roche_limit.ipynb): both fits with their Fisher sigmas at
 # every a/Rs, one DataFrame row per point. bounds=A_B_FIT_BOUNDS by default, so A_B_fit < 0 is a valid result; `railed` (fit_railed) flags a fit on a
 # bound of `bounds`, and the fitted values are kept, so the caller decides what to do with them. rho_star [g/cm^3]: with it each point gets the period
 # a circular orbit at that a/Rs has around a star of that mean density (kepler_period_days). The period never enters the bias, only sigma_bin, so the
@@ -691,7 +691,7 @@ def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=ROCKY_MAX
 #####
 ###########################################################################################################################
 
-# Colours as in forward_model/HeatRedistribution.ipynb: F is ordered -> one-hue (blue) ramp; the models keep fixed colours
+# Colours as in forward_model/05_heat_redistribution.ipynb: F is ordered -> one-hue (blue) ramp; the models keep fixed colours
 F_COLORS = ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281"]
 C_REDIST, C_HI, C_NAIVE = "#2a78d6", "#eb6834", "#52514e"   # joint A_B + F fit (blue), hyperillumination truth (orange), A_B-only fit (grey)
 INK, INK_2, AXIS, MUTED = "#0b0b0b", "#52514e", "#c3c2b7", "#898781"
@@ -1943,11 +1943,11 @@ def _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize
 
 ###########################################################################################################################
 #####
-#####   Nightside temperature: tables and plots (NightsideTemperature.ipynb)
+#####   Nightside temperature: tables and plots (06_nightside_temperature.ipynb)
 #####
 ###########################################################################################################################
 
-# Presentation helpers of NightsideTemperature.ipynb; the rows come from its band_row (nightside signal, T_b,night, T_b,day) and fit_row (point-source
+# Presentation helpers of 06_nightside_temperature.ipynb; the rows come from its band_row (nightside signal, T_b,night, T_b,day) and fit_row (point-source
 # fit with redistribution, T_night^KL).
 
 
@@ -2063,7 +2063,7 @@ def plot_sg_comparison(sg, band_label="MIRI/LRS"):
 
 ###########################################################################################################################
 #####
-#####   Expected evidence: where the Bayes factor comes from (Evidence_Prediction.ipynb)
+#####   Expected evidence: where the Bayes factor comes from (04_evidence_prediction.ipynb)
 #####
 ###########################################################################################################################
 
@@ -2221,7 +2221,7 @@ def _band_of(cfg):
 
 ###########################################################################################################################
 #####
-#####   Robustness to nuisance parameters: one linear least-squares problem (Nuisance_Robustness.ipynb)
+#####   Robustness to nuisance parameters: one linear least-squares problem (05_nuisance_robustness.ipynb)
 #####
 ###########################################################################################################################
 
@@ -2630,7 +2630,7 @@ def deformation_limits(planet, mass_ratio, h2_true, h2_range=(1., 2.5)):
 
 ###########################################################################################################################
 #####
-#####   One-parameter sweeps of the bias (AB_Bias.ipynb, F_AB_Bias.ipynb: inclination, u_bol)
+#####   One-parameter sweeps of the bias (01_albedo_bias.ipynb, 02_redistribution_bias.ipynb: inclination, u_bol)
 #####
 ###########################################################################################################################
 

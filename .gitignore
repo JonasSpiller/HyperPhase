@@ -65,5 +65,5 @@ ENV/
 *.gif
 *.mp4
 /forward_model/Plots */
-/instellca_comparison/outfiles/
+/validation/outfiles/
 /retrievals/dynesty_results/
