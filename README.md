@@ -99,7 +99,7 @@ maps and the thermal and reflected curves step by step.
 | `inputs/stellar_model/` | NewEra spectral cube and limb-darkening coefficients. |
 | `inputs/noise/` | PandExo noise levels and their cache. |
 | `inputs/exoplanet_archive/` | Download of the archive's PSCompPars table, derived columns, and the snapshot used. |
-| `docs/` | Figures of this README. |
+| `docs/` | Which notebook computes each figure and table of the paper ([`docs/paper_figures.md`](docs/paper_figures.md)), and the image of this README. |
 | `tests/` | The test suite (see below). |
 
 ## Tests
@@ -109,7 +109,7 @@ pytest                 # about 30 s on 16 cores
 pytest -m "not slow"   # without the brute-force check of the fit with redistribution
 ```
 
-The tests check the irradiance against the closed form of the absorbed power (Eq. 5 of the paper), an adaptive quadrature and a brute-force
+The tests check the irradiance against the closed form of the absorbed power, an adaptive quadrature and a brute-force
 integration over the stellar surface; that heat redistribution conserves energy; SPIDERMAN's occultation depth and nightside flux against a
 direct integral of the temperature map, the fast light curves against direct SPIDERMAN evaluation, and that a planet inside its star raises an
 error instead of ending the process; the noiseless fits against a brute-force χ² grid; and that the stored retrievals reproduce their
