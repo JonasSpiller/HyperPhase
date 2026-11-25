@@ -17,9 +17,8 @@ nuisance parameters, and nested-sampling retrievals of simulated observations.
 (bottom), seen edge-on at quadrature (left) and at transit (right). The extended star heats a ring beyond the terminator, which is visible even when
 the nightside faces the observer.*
 
-This repository accompanies the paper **Spiller, Zieba & Wordsworth (in prep.), *Hyper-Illumination Mimics Heat Redistribution in JWST
-Phase Curves of Rocky Planets Closest to Their Stars***. It was developed during J. Spiller's MSc thesis at ETH Zurich and Harvard University,
-supervised by Sebastian Zieba, Robin Wordsworth and Sascha Quanz.
+This repository accompanies the paper **Spiller, Zieba & Wordsworth (in prep.), *Hyper-Illumination in Ultra-Short-Period Rocky Planets:
+How Finite-Star Geometry Biases Albedos and Heat Redistribution Inferred from JWST Phase Curves***.
 
 ## Installation
 
@@ -77,11 +76,12 @@ redistribution $F$ of Kreidberg & Loeb 2016, passed as `F=`). The numbered noteb
 from hyperphase.planet import PlanetParams
 from hyperphase.bands import register_band
 from hyperphase.targets import register_planet
+from hyperphase.phasecurve import full_PhaseCurve
 
-planet = PlanetParams(name="My b", period=0.3, incl=85., ecc=0., w=90., r1=0.015, r2=1., R=2.5, T2_eff=4500., a_AU=0.008, T14=1.0,
+planet = PlanetParams(name="My planet", period=0.3, incl=85., ecc=0., w=90., r1=0.015, r2=1., R=2.5, T2_eff=4500., a_AU=0.008, T14=1.0,
                       logg=4.6, feh=0.)   # r1, r2, R in any consistent units (here stellar radii); T14 in hours
 t, flux, depth = full_PhaseCurve(planet, (5e-6, 12e-6), insolation_model="hyperillum", A_B=0.2, stellar_model="blackbody")   # a 5-12 um top-hat
-register_planet(planet)   # optional: hi_planets_by_name("My b") now finds it; a table in the format of inputs/planets/ loads with load_planets
+register_planet(planet)   # optional: hi_planets_by_name("My planet") now finds it; a table in the format of inputs/planets/ loads with load_planets
 register_band("NIRCam/F444W", 3.9e-6, 5.0e-6, "/path/to/f444w_throughput.dat")   # optional: filter_lambda / filter_loc then know the band
 ```
 
@@ -153,9 +153,7 @@ python make_runs.py      # writes one run file per planet, seed and setting
 ```
 
 They take about 2,000 core-hours in total and save to `retrievals/dynesty_results/`, which is not part of the repository. The three
-stored retrievals in `retrievals/example_runs/` can be read with `hyperphase.retrieval.storage.load_fits`. The comparison with
-[InstellCa](https://github.com/Mradumay137/InstellCa) needs a clone of InstellCa at commit 99225f4 (see the first cell of
-`validation/instellca_comparison.ipynb`).
+stored retrievals in `retrievals/example_runs/` can be read with `hyperphase.retrieval.storage.load_fits`.
 
 ## Limitations
 
