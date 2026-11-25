@@ -95,9 +95,8 @@ maps and the thermal and reflected curves step by step.
 | `Dynesty Fits/` | Nested-sampling retrievals: `run_dynesty.py` (one run), `paper_runs/` (every retrieval of the paper), `example_runs/` (three stored retrievals of TOI-2431 b), and notebooks that inspect a run, validate the sampler and compare the retrievals with their predictions. |
 | `Filters/` | Instrument throughputs (`Filters/Spiderman/`) and the notebooks that made them. |
 | `Stellar Model/` | NewEra spectral cube, limb-darkening coefficients, PandExo noise levels and their cache, the blackbody against the NewEra star. |
-| `NASAExoplanetArchive/` | Download of the archive's PSCompPars table, derived columns, the snapshot used, comparisons of planet samples. |
+| `NASAExoplanetArchive/` | Download of the archive's PSCompPars table, derived columns, and the snapshot used. |
 | `InstellCa_Comparison/` | Comparison of the irradiance with InstellCa (Sadh & Gavassino 2026). |
-| `Basic PhaseCurve Test/` | Early tests of batman and SPIDERMAN. |
 | `tests/` | The test suite (see below). |
 
 ## Tests

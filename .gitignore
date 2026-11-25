@@ -6,9 +6,10 @@
 .LSOverride
 
 # ========================
-# PyCharm / JetBrains
+# Editors
 # ========================
 .idea/
+.vscode/
 
 # ========================
 # Python
@@ -25,21 +26,19 @@ build/
 *.egg-info/
 *.egg
 
-# ========================
 # Virtual environments
-# ========================
 venv/
 .venv/
 env/
 ENV/
 
+# Tests
 .pytest_cache/
 
 # ========================
 # Jupyter
 # ========================
 .ipynb_checkpoints/
-*/.ipynb_checkpoints/*
 
 # ========================
 # Environment & secrets
@@ -49,38 +48,22 @@ ENV/
 *.key
 
 # ========================
-# Generated media (animations/plots)
+# Downloaded data (not shipped; see README)
 # ========================
-*.gif
-*.mp4
-
-# ========================
-# Project related
-# ========================
-/Literature/
-/Hyperillumination/Plots/
-/SPIDERMAN_fixes/local_spiderman_fixes.md
-/Filters/raw Pandeia/
 /Filters/raw SVO/
 *.throughput.dat
-/Hyperillumination/2026-07-26-Spiderman-Performance-Analysis.ipynb
-/SPIDERMAN_fixes/local_spiderman_speed_patches.md
-/Unused/
-/Hyperillumination/Bias Analysis/
 /NASAExoplanetArchive/NASAExoArchive_*_aggregate.csv
 /NASAExoplanetArchive/pscomppars_*
-NASAExoplanetArchive/ExoArchive_analysis.ipynb
-/Hyperillumination/Supplements/
 /Stellar Model/ExoTiC-LD/
-/Dynesty Fits/more runs/OLD_before_midpoint_binning/dynesty_results/
-/Dynesty Fits/more runs/
-/Dynesty Fits/stripped_dynesty.ipynb
-/Dynesty Fits/dynesty_results/
-/Hyperillumination/Plots TOI-2431b/
-/Hyperillumination/Plots K2-141b/
-/Dynesty Fits/more runs/OLD_before_Tfloor_removal/dynesty_results/
-*.pptx
-/InstellCa_Comparison/outfiles/
 /Stellar Model/NewEra/raw/
 /Stellar Model/NewEra/newera_cube_axes.npz
 /Stellar Model/NewEra/newera_cube_flux.npy
+
+# ========================
+# Generated outputs
+# ========================
+*.gif
+*.mp4
+/Hyperillumination/Plots */
+/InstellCa_Comparison/outfiles/
+/Dynesty Fits/dynesty_results/
