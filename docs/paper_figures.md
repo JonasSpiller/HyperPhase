@@ -4,20 +4,17 @@ Each figure and table of Spiller, Zieba & Wordsworth (in prep.), with the notebo
 notebook size and set the planet, mode and settings in their first cells. Where these differ from the figure in the paper, the entry says
 what to set. § refers to a notebook's numbered sections, a quoted heading to a notebook whose sections are not numbered.
 
-Two groups need data that are not in the repository:
-
-- **The nested-sampling retrievals** (Section 4.3, Appendix E) read the 243 retrievals defined in `retrievals/paper_runs/` (see
-  [Reproducing the retrievals](../README.md#reproducing-the-retrievals)). The observation of the two corner plots is shipped in
-  `retrievals/example_runs/`.
-- **The comparison with InstellCa** (Appendix A.5) needs a clone of InstellCa (see the same section of the README).
+The nested-sampling retrievals (Section 4.3, Appendix E) need data that are not in the repository: they read the 243 retrievals defined in
+`retrievals/paper_runs/` (see [Reproducing the retrievals](../README.md#reproducing-the-retrievals)). The observation of the two corner
+plots is shipped in `retrievals/example_runs/`.
 
 ## Section 2: Hyper-illumination geometry
 
 | Item | Shows | Notebook |
 |---|---|---|
 | Figure, Sec. 2 | The geometry in a cross section through star and planet | A drawing, not made in code. |
-| Figure, Sec. 2.3 | Equilibrium temperature of TOI-2431 b against the angle from the substellar point | [`forward_model/01_irradiance.ipynb`](../forward_model/01_irradiance.ipynb), "Comparison Nguyen et al. (2020)" |
-| Figure, Sec. 2.3 | Temperature maps at quadrature and at transit | [`forward_model/01_irradiance.ipynb`](../forward_model/01_irradiance.ipynb), "Point source vs extended source at quadrature and on the nightside" (also the image of the README) |
+| Figure, Sec. 2.3 | Equilibrium temperature of TOI-2431 b against the angle from the substellar point | [`forward_model/01_irradiance.ipynb`](../forward_model/01_irradiance.ipynb) §1 |
+| Figure, Sec. 2.3 | Temperature maps at quadrature and at transit | [`forward_model/01_irradiance.ipynb`](../forward_model/01_irradiance.ipynb) §6 (also the image of the README) |
 
 ## Section 3: Methods
 
@@ -31,11 +28,11 @@ Two groups need data that are not in the repository:
 | Item | Shows | Notebook |
 |---|---|---|
 | Figure, Sec. 4.1 | The phase-curve signature: both models, the residuals of the noiseless fits, and the share of each phase bin in $\chi^2_{\min}$ | [`bias_analysis/04_evidence_prediction.ipynb`](../bias_analysis/04_evidence_prediction.ipynb) §1, for the fit without redistribution. The residuals of the fit with redistribution: [`bias_analysis/02_redistribution_bias.ipynb`](../bias_analysis/02_redistribution_bias.ipynb) §2. |
-| Figure, Sec. 4.2 | Albedo bias and spurious redistribution in every band, for TOI-2431 b and K2-141 b | [`bias_analysis/03_bias_maps.ipynb`](../bias_analysis/03_bias_maps.ipynb) §2.3 ($A_B$ in each mode, with the joint fits), §2.6 ($F$ in each mode) and §2.7 (NRS1, NRS2 and MIRI/LRS in one fit); set `retrieval_planet` to the planet. The nightside panel: [`forward_model/06_nightside_temperature.ipynb`](../forward_model/06_nightside_temperature.ipynb) §B. |
+| Figure, Sec. 4.2 | Albedo bias and spurious redistribution in every band, for TOI-2431 b and K2-141 b | [`bias_analysis/03_bias_maps.ipynb`](../bias_analysis/03_bias_maps.ipynb) §2.3 ($A_B$ in each mode, with the joint fits), §2.6 ($F$ in each mode) and §2.7 (NRS1, NRS2 and MIRI/LRS in one fit); set `retrieval_planet` to the planet. The nightside panel: [`forward_model/06_nightside_temperature.ipynb`](../forward_model/06_nightside_temperature.ipynb) §3. |
 | Figure, Sec. 4.3 | Retrievals of thirty simulated observations of TOI-2431 b | [`retrievals/03_retrieval_series.ipynb`](../retrievals/03_retrieval_series.ipynb) §7. Needs the paper's retrievals. |
-| Figure, Sec. 4.4 | Robustness to nuisance parameters | [`bias_analysis/05_nuisance_robustness.ipynb`](../bias_analysis/05_nuisance_robustness.ipynb) §5 (both fits with the same nuisance parameters) and §7 (the tidal deformation with a uniform prior on $h_2$) |
+| Figure, Sec. 4.4 | Robustness to nuisance parameters | [`bias_analysis/05_nuisance_robustness.ipynb`](../bias_analysis/05_nuisance_robustness.ipynb) §5 (both fits with the same nuisance parameters) and §6 (the tidal deformation with a uniform prior on $h_2$) |
 | Figure, Sec. 4.5 | Bias maps over $a/R_\star$ and the host's $T_{\rm eff}$ in MIRI/LRS | [`bias_analysis/03_bias_maps.ipynb`](../bias_analysis/03_bias_maps.ipynb) §1.1 (without redistribution) and §2.1 (with redistribution), as shipped (`instrument = "MIRI/LRS"`) |
-| Table, Sec. 4.5 | Bias, redistribution, nightside temperature and expected evidence of the paper's planets in the two primary modes | [`bias_analysis/03_bias_maps.ipynb`](../bias_analysis/03_bias_maps.ipynb) §1.2, §2.2 and §2.6, run once with `instrument = "JWST_NIRSpec.G395H_joint"` and once with `"MIRI/LRS"`. Expected evidence: [`bias_analysis/04_evidence_prediction.ipynb`](../bias_analysis/04_evidence_prediction.ipynb) §2. Nightside temperatures in MIRI/LRS: [`forward_model/06_nightside_temperature.ipynb`](../forward_model/06_nightside_temperature.ipynb) §A. |
+| Table, Sec. 4.5 | Bias, redistribution, nightside temperature and expected evidence of the paper's planets in the two primary modes | [`bias_analysis/03_bias_maps.ipynb`](../bias_analysis/03_bias_maps.ipynb) §1.2, §2.2 and §2.6, run once with `instrument = "JWST_NIRSpec.G395H_joint"` and once with `"MIRI/LRS"`. Expected evidence: [`bias_analysis/04_evidence_prediction.ipynb`](../bias_analysis/04_evidence_prediction.ipynb) §2. Nightside temperatures in MIRI/LRS: [`forward_model/06_nightside_temperature.ipynb`](../forward_model/06_nightside_temperature.ipynb) §2. |
 
 ## Section 5: Discussion
 
@@ -48,7 +45,7 @@ Two groups need data that are not in the repository:
 | Item | Shows | Notebook |
 |---|---|---|
 | Figure, App. A.1 | Integration geometry: a cross section (a) and the star seen from the surface (b, c) | (a) is a drawing; (b, c) are not in a notebook. The integral itself is `insolation_hyperillum` in [`hyperphase/irradiance.py`](../hyperphase/irradiance.py). |
-| Figure, App. A.1 | Edge of the fully illuminated zone and terminator against $a/R_\star$ | [`forward_model/01_irradiance.ipynb`](../forward_model/01_irradiance.ipynb), "Illuminated Fractions of Exoplanet" |
+| Figure, App. A.1 | Edge of the fully illuminated zone and terminator against $a/R_\star$ | [`forward_model/01_irradiance.ipynb`](../forward_model/01_irradiance.ipynb) §3 |
 | Table, App. A.5 | Published treatments of the extended-source irradiance | From the literature. |
 | Figure, App. A.5 | Comparison with InstellCa and with the small-disk approximation of Kopal (1954) | [`validation/instellca_comparison.ipynb`](../validation/instellca_comparison.ipynb) §6; its §1 runs InstellCa. |
 
