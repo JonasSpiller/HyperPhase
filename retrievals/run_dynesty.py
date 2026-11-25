@@ -5,7 +5,7 @@ import traceback
 
 
 def _repo_root(start):
-    """The thesis folder: the first parent of `start` that holds Utilities/. Copies of this script (e.g. the series in "more runs/" and its done/ folder) then run from any depth."""
+    """The repository root: the first parent of `start` that holds Utilities/. Copies of this script (e.g. the run files in paper_runs/ and its done/ folder) then run from any depth."""
     d = os.path.abspath(start)
     while not os.path.isdir(os.path.join(d, "Utilities")):
         parent = os.path.dirname(d)
@@ -80,7 +80,7 @@ sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10,
 ####################################################################################################
 
 
-OUTDIR = os.path.join(REPO_ROOT, "retrievals", "dynesty_results")   # every run, also one of the series in "more runs/", saves here
+OUTDIR = os.path.join(REPO_ROOT, "retrievals", "dynesty_results")   # every run saves here, also those of paper_runs/ (make_runs.py)
 
 
 def run_instrument(instrument):

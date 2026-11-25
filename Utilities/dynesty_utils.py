@@ -42,7 +42,7 @@ TRUTH_KW = dict(k_truth=200, n_layers=80, n_lo=600, n_la=300)
 
 def truth_model_kw(data, cfg):
     """The model_pcurve settings the truth of `data` was computed with, as model_pcurve keywords (n_t, n_layers, n_lo, n_la, and F for a "naive_redist" truth).
-    simulate_data records them in data["truth"]["model_kw"] (since 2026-11-08); for older data the defaults TRUTH_KW are assumed."""
+    simulate_data records them in data["truth"]["model_kw"]; data without this record are assumed to have the defaults TRUTH_KW."""
     tr = dict(data.get("truth") or {})
     kw = dict(tr.get("model_kw") or dict(n_t=TRUTH_KW["k_truth"] * cfg.n_bins, n_layers=TRUTH_KW["n_layers"], n_lo=TRUTH_KW["n_lo"], n_la=TRUTH_KW["n_la"]))
     if tr.get("F") is not None: kw.setdefault("F", tr["F"])
@@ -113,7 +113,7 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
                   k_truth=TRUTH_KW["k_truth"], n_layers=TRUTH_KW["n_layers"], n_lo=TRUTH_KW["n_lo"], n_la=TRUTH_KW["n_la"], plotting=True, labels=None, _rng=None, **model_kw):
     """Simulated phase-folded observation: binned(truth) + N(0, sigma_bin).
 
-    cfg          : FittingConfig — the only mandatory input; supplies planet, filter, stellar_grid, A_(A_B), sigma_1min, n_orbits, n_bins, u_bol, reflected.
+    cfg          : FittingConfig — supplies planet, filter, stellar_grid, A_(A_B), sigma_1min, n_orbits, n_bins, u_bol, reflected.
                    Or a detector set (list/tuple of FittingConfigs sharing the planet and binning, differing in band and noise, as in the bias analysis): one dataset per detector from the
                    same truth, with ONE noise stream continued across the detectors - the first detector's draws are exactly those of its single-detector dataset with the same seed, the
                    next detector's the following, independent ones. The output then carries the per-detector dicts in data["detectors"] next to the concatenated "t", "y_obs", "sigma".
@@ -202,7 +202,7 @@ class Normal:
 
 @dataclass(frozen=True)
 class TruncNormal:
-    """Normal(mu, sd) restricted to [lo, hi]. Use eg for r1/r2: the literature value with its error bar, hard-clipped to a physically allowed range."""
+    """Normal(mu, sd) restricted to [lo, hi]. Use e.g. for r1/r2: the literature value with its error bar, hard-clipped to a physically allowed range."""
     mu: float
     sd: float
     lo: float
@@ -698,7 +698,7 @@ def evidence_bruteforce(lnL, axes_vals, bounds=None):
         for s in (0, -1):
             edge = max(edge, float(np.max(np.take(lnL, s, axis=k))))
 
-    edge_ratio = float(np.exp(edge - m)) # L_best_on_boundry / L_best (if not <<1: L leaks out of priors, data to noisy)
+    edge_ratio = float(np.exp(edge - m)) # L_best_on_boundary / L_best (if not <<1: L leaks out of priors, data too noisy)
     return lnZ, edge_ratio
 
 
@@ -827,7 +827,7 @@ def load_fit(path):
 
 def _relocate_filter_paths(fit):
     """Point the filter files of a saved fit's cfg at this repository's inputs/filters/Spiderman/. The pickle stores the path on the machine that ran the fit
-    (Filters/Spiderman/ at the repository root before 2026-11-24; the example runs store it relative to the repository), and check_fit_current,
+    (absolute, and possibly in another folder layout; the example runs store it relative to the repository), and check_fit_current,
     logl_from_fit and every forward-model call read the file. A stored path that exists is kept, unless it is the same file as the one in
     inputs/filters/Spiderman/ under another spelling (a symlink, or a different case on a case-insensitive disk): it then takes the canonical spelling,
     which observed_band looks the instrument up by."""
@@ -953,9 +953,9 @@ def check_datasets(results_dir, datasets):
 
 
 def check_fit_current(fit, cfg=None, rtol=1e-6):
-    """Is a saved fit still a fit of TODAY's forward model? Returns the relative difference between the stellar grid the fit was run with (pickled inside its cfg) and the one the
+    """Is a saved fit still a fit of the current forward model? Returns the relative difference between the stellar grid the fit was run with (pickled inside its cfg) and the one the
     current code builds from the same inputs (star, band, filter file, stellar model), the largest over the detectors of a joint fit. 0 means identical; anything else means the
-    thermal normalisation changed since the run (stellar SED, filter convention, band-edge fix, ...), so the saved samples are not the posterior of the current likelihood and every
+    thermal normalisation changed since the run (stellar SED, filter convention, band integration, ...), so the saved samples are not the posterior of the current likelihood and every
     plot that re-evaluates the forward model would mix the two. inf (with a printed WARNING) where the planet's band itself changed since the run (a HItargets_utils.PARTIAL_BANDS
     entry: the current code would integrate another band). Also raises for a cfg saved with an older FittingConfig (missing fields), which the forward model could not evaluate anyway."""
     cfg = cfg if cfg is not None else fit.meta["cfg"]
@@ -974,7 +974,7 @@ def check_fit_current(fit, cfg=None, rtol=1e-6):
         rel_max = max(rel_max, rel)
     if rel_max > rtol:
         print(f"WARNING [{fit.meta['insolation_model']}]: the stellar grid of the current code differs from the one this fit was run with by up to {100 * rel_max:.3g} % "
-              f"(stellar model, filter or band changed since {fit.meta.get('file', 'the run')}). Its samples are not the posterior of today's likelihood: re-run the fit before quoting it.", file=sys.stderr, flush=True)
+              f"(stellar model, filter or band changed since {fit.meta.get('file', 'the run')}). Its samples are not the posterior of the current likelihood: re-run the fit before quoting it.", file=sys.stderr, flush=True)
     return np.inf if band_changed else rel_max
 
 
@@ -982,11 +982,11 @@ def logl_from_fit(fit, cfg=None, **model_kw):
     """The GaussianLogL a saved fit was run with, rebuilt from the pickle alone - what the plotting helpers that still
     evaluate the forward model (logl_slice/logl_grid, plot_posterior_predictive, derived_samples, plot_noisy_vs_truth) need.
 
-    Uses the FittingConfig (or detector set) stored in meta by run_nested_fit (with the stellar grid as it was at run time); pass `cfg` explicitly for fits saved before that was added.
+    Uses the FittingConfig (or detector set) stored in meta by run_nested_fit (with the stellar grid as it was at run time); pass `cfg` explicitly for a fit whose meta has none.
     check_fit_current warns when the current code would build a different stellar grid, i.e. when the forward model has changed since the run.
     The geometry-only caches are rebuilt here, so the first call costs a second or two."""
     cfg = cfg if cfg is not None else fit.meta.get("cfg")
-    if cfg is None: raise ValueError("this fit predates cfg being stored in meta - pass cfg=... (or re-run the fit)")
+    if cfg is None: raise ValueError("this fit has no cfg in its meta - pass cfg=... (or re-run the fit)")
     check_fit_current(fit, cfg)
     kw = {**fit.meta.get("model_kw", {}), **model_kw}
     return make_logl(cfg, fit.meta["data"], fit.meta["insolation_model"], fit.pset, labels=fit.meta.get("labels"), fixed=fit.meta.get("fixed"), **kw)   # a JointGaussianLogL for a detector set
@@ -1022,7 +1022,7 @@ def posterior_summary(fit, truth=None, quantiles=(0.16, 0.5, 0.84), verbose=True
         d = dict(med=float(med), lo=float(lo), hi=float(hi), minus=float(med - lo), plus=float(hi - med), mean=float(mean[i]), sd=float(sd[i]))
         if truth is not None and nm in truth:
             d["truth"] = float(truth[nm])
-            d["bias"] = d["med"] - d["truth"] # deviation of true parameter value to retrieved parameter value (mean of posterior)
+            d["bias"] = d["med"] - d["truth"] # retrieved (posterior median) minus true value
             d["bias_sigma"] = d["bias"] / (0.5 * (d["hi"] - d["lo"])) # bias in units of bias error/ sigmas
         params[nm] = d
 
@@ -1231,7 +1231,7 @@ def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200,
     Panel 2: (data - median model) / sigma per model.
     Panel 3: the difference of the two median curves [ppm] against +/- sigma_bin, and the per-bin delta chi2 between the two BEST-FIT (max-lnL) models as bars. Those bars sum to 2 * delta lnL_max (over all detectors for a joint fit), so they attribute the evidence to specific orbital phases.
 
-    num / den : which model is which in panel 3 - both the curve and the bars are num - den, same convention as bayes_factor(). Panel 3 previously took them from the order of `fits`, which is silent and easy to get backwards.
+    num / den : which model is which in panel 3 - both the curve and the bars are num - den, same convention as bayes_factor().
     n         : posterior draws per model (n forward models per model and detector).
     Returns fig, (ax, axr, axd) for a single detector and fig, axes (3 x n_detectors) for a joint fit."""
     colors = colors or _COLOR

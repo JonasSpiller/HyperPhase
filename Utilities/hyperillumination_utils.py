@@ -67,7 +67,7 @@ class PlanetParams:
 
     # Fractional change in substellar insolation/temperature through hyperillumination (compared to naive point-source approximation)
     def substellar_boost(self, insolation=True):
-        # the boost is not effected by hyperillumination at all, it is purely the stellar distance correction a-rp: the boost is (R/(R − r₁))² − 1 ≈ 2
+        # the boost is not affected by hyperillumination at all, it is purely the stellar distance correction a-rp: the boost is (R/(R − r₁))² − 1 ≈ 2
         # r₁/R
         if insolation: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self)) - 1
         else: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self))**0.25 - 1
@@ -167,7 +167,7 @@ def _tabulate_insolation(planet, u_bol, insolation_model, n_tab=3000):
 ###########################################################################################################################
 
 # "hyperillum": extended stellar disk, "naive": point source, "naive_redist": point source + Kreidberg & Loeb 2016 heat redistribution F (see Heat
-# Redistribution below), "hyperillum_redist": extended stellar disk + the same redistribution. The last is a TRUTH-ONLY model (2026-11-20): the
+# Redistribution below), "hyperillum_redist": extended stellar disk + the same redistribution. The last is a TRUTH-ONLY model: the
 # hyper-illuminated planet that does redistribute heat, for simple_bias_analysis.true_F_sweep. No fit and no sampler uses it (fit_redist and
 # dynesty_utils fit "naive_redist").
 INSOLATION_MODELS = ("hyperillum", "naive", "naive_redist", "hyperillum_redist")
@@ -317,8 +317,8 @@ def mean_insolation(planet, insolation_model, u_bol=DEFAULT_U_BOL, n_tab=3000):
 
 
 # Flux per unit (1-A_B) a surface element re-radiates: the insolation itself under instant re-radiation ("hyperillum", "naive"), the redistributed
-# flux under the redistribution models. u_bol: only "hyperillum_redist" needs it, for the mean insolation of the extended source ("naive_redist" keeps
-# its closed form F*S/2, bit-identical to before 2026-11-20).
+# flux under the redistribution models. u_bol: only "hyperillum_redist" needs it, for the mean insolation of the extended source ("naive_redist" uses
+# its closed form F*S/2).
 def effective_insolation(insol, planet, insolation_model, F=None, u_bol=DEFAULT_U_BOL):
     check_redistribution(insolation_model, F)
     if insolation_model not in REDIST_MODELS: return insol
@@ -392,10 +392,10 @@ def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=
             color=color, linewidth=linewidth, zorder=zorder)
 
 
-# unit="flux": re-radiated (bolometric) flux normalized to the substellar point - the insolation itself, except for "naive_redist" (needs F for both
-# units) incl [deg]: orbital inclination of the view (90 = edge-on, the default; pass planet.incl for the view as observed). The map is symmetric
-# about the star-planet axis, so only the angle between the line of sight and the substellar direction matters, cos = sin(incl) cos(2 pi phase):
-# quadrature looks the same at every inclination.
+# unit="flux": re-radiated (bolometric) flux normalized to the substellar point - the insolation itself, except for the redistribution models (need
+# F for both units). incl [deg]: orbital inclination of the view (90 = edge-on, the default; pass planet.incl for the view as observed). The map is
+# symmetric about the star-planet axis, so only the angle between the line of sight and the substellar direction matters, cos = sin(incl)
+# cos(2 pi phase): quadrature looks the same at every inclination.
 def plot_insolmap(phase, planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_tab=3000, gp_table=None, incl=90.):
 
     if unit not in ("temperature", "flux"):
@@ -450,7 +450,7 @@ def plot_insolmap(phase, planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivit
     if show_penumbra not in (None, False, "both", "inner", "outer"):
         raise ValueError("show_penumbra must be one of None, False, 'both', 'inner', 'outer'")
 
-    on_axis = np.isclose(sin_i, 1.) and (np.isclose(phase % 1.0, 0.) or np.isclose(phase % 1.0, 0.5))   # edge-on occultation / transit: no lines, as before
+    on_axis = np.isclose(sin_i, 1.) and (np.isclose(phase % 1.0, 0.) or np.isclose(phase % 1.0, 0.5))   # edge-on occultation / transit: no lines
     if (terminator or show_penumbra) and not on_axis:
         if terminator:
             _plot_iso_gamma1_line(ax, np.pi / 2., x_obs, y_obs, z_obs, color="grey")
@@ -518,11 +518,10 @@ def plot_quad_insolmap(planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_
 
 
 # Several planets side by side, one column each, one row per insolation model, all at the same phase: the surface maps the models disagree on (e.g.
-# the Roche-limit planets of
-# HypotheticalExtremePlanet.ipynb). Each column has its own temperature scale, 0 to 1.1 x its substellar temperature (the same in every model: there
-# is no substellar boost), so the panels of one planet are comparable; the colour bar of the last column labels the rows. The terminator is drawn in
-# grey, the penumbra borders in green on the hyperillum panels only. planets: {name: PlanetParams} or a list. F is passed to "naive_redist" only.
-# Returns fig, axs (shape (len(models), len(planets))).
+# the Roche-limit planets of HypotheticalExtremePlanet.ipynb). Each column has its own temperature scale, 0 to 1.1 x its substellar temperature (the
+# same in every model: there is no substellar boost), so the panels of one planet are comparable; the colour bar of the last column labels the rows.
+# The terminator is drawn in grey, the penumbra borders in green on the hyperillum panels only. planets: {name: PlanetParams} or a list. F is passed
+# to "naive_redist" only. Returns fig, axs (shape (len(models), len(planets))).
 def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None, n_grid=400, theme="black", terminator=True, show_penumbra="both", title=None, incl=90.):
     planets = list(planets.values()) if isinstance(planets, dict) else list(planets)
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
@@ -701,7 +700,7 @@ def _insolation_penumbra_mask_scalar(gamma1, planet, u_bol, nth, nom):
     return np.trapezoid(np.trapezoid(integ, om, axis=1), th)
 
 
-# Penumbra: Kopal's analytic penumbral approximation, lambda sign-corrected (only valid for r2<<R!, inaccurate for close-in Exoplanets)
+# Penumbra: Kopal's analytic penumbral approximation, lambda sign-corrected (valid only for r2 << R, inaccurate for close-in exoplanets)
 def insolation_penumbra_hyperillum_approx(gamma1, planet, u_bol=DEFAULT_U_BOL, runtime=False):
     """Small-disk closed forms of the penumbral integrals (lowest order in r2/rho), using the self-consistent sign
     x = sin(lambda) = -(rho/r2)cos(alpha)  (opposite to the printed one)."""

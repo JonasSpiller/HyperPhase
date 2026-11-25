@@ -26,7 +26,7 @@ TAP_URL = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
 # ==========================================================================
 
 # Which archive table. "pscomppars" is one row per planet already; "ps" is one row per planet per paper and would need an aggregation step this
-# pipeline no longer has.
+# pipeline does not have.
 TABLE = "pscomppars"
 
 # Restrict to planets observed to transit. (not necessarily detected by transit)

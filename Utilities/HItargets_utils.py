@@ -40,9 +40,9 @@ DEFAULT_EMISSIVITY = 1.
 DEFAULT_U_BOL = 0.5
 
 # Quadratic limb darkening (u1, u2) of the batman transit. The transit is identical in both irradiation models and cancels exactly in every
-# comparison, so the value only needs to be plausible: the median of ExoTiC-LD fits over the hosts of the twelve PAPER_PLANETS of 2026-11-02, in the
-# band throughputs of the forward model (inputs/stellar_model/LimbDarkening.ipynb). Not re-derived for the sample of 2026-11-08 (hosts of 4100-5960 K, as
-# before): the value does not enter any result.
+# comparison, so the value only needs to be plausible: the median of ExoTiC-LD fits over the hosts of an earlier, twelve-planet version of the sample,
+# in the band throughputs of the forward model (inputs/stellar_model/LimbDarkening.ipynb). Not re-derived for the final sample (its hosts span the
+# same 4100-5960 K): the value does not enter any result.
 DEFAULT_U = (0.09, 0.14)
 
 # Orbits observed and phase-folded. The periods are only 4-7 h, so five orbits are roughly 1-1.5 days of JWST time (about 27 h for TOI-2431 b, 34 h
@@ -53,11 +53,10 @@ DEFAULT_N_ORBITS = 5
 # the orbit exactly.
 DEFAULT_N_BINS = 27
 
-# Reference Rp/R* of the (a/R*, T_eff) bias maps (simple_bias_analysis.reference_planet; Bias_Maps.ipynb, HypotheticalExtremePlanet.ipynb,
-# For_Paper/Plots_Sec4.5.ipynb): the median of the
-# PAPER_PLANETS (0.0158 for the nine of the selection rule, 0.0160 with 55 Cnc e; they span 0.012-0.021). The bias barely depends on it, because the
-# mismatch and the response to A_B both scale with the planet's flux: between 0.0075 and 0.03 it changes by less than 3 % (A_B-only fit) and 5 % (with
-# F) (For_Paper/Plots_Sec4.5.ipynb, res-maps-code). Map outputs from before 2026-11-14 used 0.015.
+# Reference Rp/R* of the (a/R*, T_eff) bias maps (simple_bias_analysis.reference_planet; Bias_Maps.ipynb, HypotheticalExtremePlanet.ipynb): the median
+# of the PAPER_PLANETS (0.0158 for the nine of the selection rule, 0.0160 with 55 Cnc e; they span 0.012-0.021). The bias barely depends on it,
+# because the mismatch and the response to A_B both scale with the planet's flux: between 0.0075 and 0.03 it changes by less than 3 % (A_B-only fit)
+# and 5 % (with F).
 DEFAULT_MAP_RP_RS = 0.016
 
 # Parameter ranges, shared by the least-squares bias analysis (simple_bias_analysis) and the nested sampling (dynesty_utils, run_dynesty.py).
@@ -70,7 +69,7 @@ F_BOUNDS = (0., 0.5)
 # point-source model stays defined where it needs more absorbed energy than the star delivers to a point (A_B,fit < 0, which an observer's physical
 # prior would cut off at 0). Only (1-A_B) enters the temperature, so a negative A_B is a valid model evaluation. The lower end is never reached in
 # practice (the deepest fit found is about -1.2: true A_B = 0 near the contact limit); a fit there, or at A_B = 1, still counts as railed. Pass
-# bounds=A_B_BOUNDS to fit within the physical range instead (railed at A_B = 0, as before 2026-11-08).
+# bounds=A_B_BOUNDS to fit within the physical range instead (railed at A_B = 0).
 A_B_FIT_BOUNDS = (-2., 1.)
 # Uniform prior of the free baseline offset of the dynesty fits [ppm]; the least-squares fits profile the offset out analytically.
 OFFSET_BOUNDS = (-50., 50.)
@@ -100,17 +99,17 @@ MAX_R1_OVER_R2 = 0.3
 # Single definition, shared by best_hi_planets and simple_bias_analysis.rocky_sample / overlay_planets.
 ROCKY_MAX_RADE = 1.7
 
-# The planets of the paper (tab:targets): the confirmed rocky planets (Rp < ROCKY_MAX_RADE) with a/R* < 3 and ESM > 4 (Kempton et al. 2018; the
-# archive's value), ordered by a/R* (the CUSTOM values, 2026-11-08). The a/R* cut keeps the stellar half-angle above 19.5 deg; the ESM cut keeps the
-# planets whose A_B the per-planet figures can constrain at all (K2-157 b, K2-223 b, KOI-1843.03, K2-183 b, K2-301 c, Kepler-990 c fail it with ESM
-# 0.7-1.9; K2-106 b with 3.0). Every member has a CUSTOM entry, so the sample does not move with archive updates. Dropped on the a/R* cut: TOI-6255 b,
-# TOI-431 b, GJ 367 b (3.10-3.35, ESM 15-22; three of the five GO 8864 targets) and TOI-6324 b (4.29). best_hi_planets is NOT this set: it ranks by (1
-# - Rp/R*)/(a/R*) and has no brightness cut. 55 Cnc e (2026-11-18) is added outside the rule as the common reference of the hyper-illumination
-# literature (Carter et al. 2024, Sadh & Gavassino 2026, Sadh 2026) and of the lava-world observations: it fails both the radius cut (1.87 R_E) and
-# the a/R* cut (3.52). Its host (K = 4.0) saturates NIRSpec/G395H, so it has no noise level there (UNOBSERVABLE): MIRI/LRS only, and that only over
-# 6.7-10.5 um, since it saturates the blue end of the band too (PARTIAL_BANDS).
+# The planets of the paper (its table of targets): the confirmed rocky planets (Rp < ROCKY_MAX_RADE) with a/R* < 3 and ESM > 4 (Kempton et al. 2018;
+# the archive's value), ordered by a/R* (the CUSTOM values). The a/R* cut keeps the stellar half-angle above 19.5 deg; the ESM cut keeps the planets
+# whose A_B the per-planet figures can constrain at all (K2-157 b, K2-223 b, KOI-1843.03, K2-183 b, K2-301 c, Kepler-990 c fail it with ESM 0.7-1.9;
+# K2-106 b with 3.0). Every member has a CUSTOM entry, so the sample does not move with archive updates. Dropped on the a/R* cut: TOI-6255 b, TOI-431
+# b, GJ 367 b (3.10-3.35, ESM 15-22; three of the five GO 8864 targets) and TOI-6324 b (4.29). best_hi_planets is NOT this set: it ranks by (1 -
+# Rp/R*)/(a/R*) and has no brightness cut. 55 Cnc e is added outside the rule as the common reference of the hyper-illumination literature (Carter et
+# al. 2024, Sadh & Gavassino 2026, Sadh 2026) and of the lava-world observations: it fails both the radius cut (1.87 R_E) and the a/R* cut (3.52). Its
+# host (K = 4.0) saturates NIRSpec/G395H, so it has no noise level there (UNOBSERVABLE): MIRI/LRS only, and that only over 6.7-10.5 um, since it
+# saturates the blue end of the band too (PARTIAL_BANDS).
 PAPER_PLANETS = ("TOI-2431 b", "TOI-2260 b", "K2-141 b", "K2-131 b", "TOI-561 b", "Kepler-78 b", "TOI-1444 b", "TOI-1798.02", "HD 80653 b", "55 Cnc e")
-PAPER_OUTSIDE_RULE = ("55 Cnc e",)   # the members of PAPER_PLANETS that the selection rule does not pick (For_Paper/Numbers_Sec3.ipynb checks the others against the archive selection)
+PAPER_OUTSIDE_RULE = ("55 Cnc e",)   # the members of PAPER_PLANETS that the selection rule does not pick
 
 # The Roche limits drawn on every (a/R*, T_eff) map (simple_bias_analysis.draw_roche_frontier, main-sequence hosts) and used in
 # HypotheticalExtremePlanet.ipynb, as {label: (iron mass fraction, rho_0 / rho_mean)} of a rock/iron planet of radius ROCHE_R_P. The radius and iron
@@ -145,14 +144,14 @@ AU_IN_R_SUN = float(const.au / const.R_sun)
 # hi_planets_by_name returns these objects, and apply_custom writes them into every archive frame.
 CUSTOM = {
     # ---- the closest-in rocky planets with a well-constrained geometry and a bright host (the paper's sample is PAPER_PLANETS) ---------------------
-    "TOI-2431 b":       PlanetParams(name="TOI-2431 b", period=0.22419578, incl=74.0, ecc=0.0, w=90.0, r1=0.02131, r2=1.0, R=2.08, T2_eff=4109.0, a_AU=0.00630, T14=0.748, logg=4.68, feh=-0.02),   # Tas et al. 2026 (A&A 707, A238) Tab. 1-2 (FCO fit): P, Rp/R*, i = 74, b = 0.573, a = 0.0063 AU, R* = 0.651, star. No a/R* in the paper: 2.08 = a / R* (Coy et al. 2026 Tab. 5 print 2.08 +- 0.05; the fitted rho* = 3.25 would give 2.05). T14 from the geometry (none published; ExoFOP's 0.29 h is wrong)
+    "TOI-2431 b":       PlanetParams(name="TOI-2431 b", period=0.22419578, incl=74.0, ecc=0.0, w=90.0, r1=0.02131, r2=1.0, R=2.08, T2_eff=4109.0, a_AU=0.00630, T14=0.748, logg=4.68, feh=-0.02),   # Tas et al. 2026 (A&A 707, A238) Tab. 1-2 (FCO fit): P, Rp/R*, i = 74, b = 0.573, a = 0.0063 AU, R* = 0.651, star. No a/R* in the paper: 2.08 = a / R* (Coy et al. 2026 Tab. 5 print 2.08 +- 0.05; the fitted rho* = 3.25 would give 2.05). T14 from the geometry (none published; ExoFOP's 0.29 h is inconsistent with it)
     "TOI-2260 b":       PlanetParams(name="TOI-2260 b", period=0.3524728, incl=69.7, ecc=0.0, w=90.0, r1=0.0158, r2=1.0, R=2.22, T2_eff=5534.0, a_AU=0.0097, T14=0.87, logg=4.62, feh=0.22),       # Giacalone et al. 2022 (AJ 163, 99) Tab. 2-3: P, b = 0.77 +- 0.04, a = 0.0097 AU, Rp = 1.62, R* = 0.94, M* = 0.99, star. No fitted a/R*, Rp/R*, i: a/R* = a / R*, Rp/R* = Rp / R*, i = acos(b / (a/R*)). T14 from the geometry. No RV mass; the archive's i = 90 is a placeholder
     "K2-141 b":         PlanetParams(name="K2-141 b", period=0.2803244, incl=86.3, ecc=0.0, w=90.0, r1=0.02037, r2=1.0, R=2.292, T2_eff=4599.0, a_AU=0.00726, T14=0.94, logg=4.62, feh=-0.06),     # Malavolta et al. 2018 (AJ 155, 107) Tab. 2-3 (R* 0.681); T14 Barragán et al. 2018. Zieba et al. 2022 (joint K2+Spitzer) get a/R* = 2.365, Rp/R* = 0.02061, i = 85.2
     "TOI-561 b":        PlanetParams(name="TOI-561 b", period=0.4465697, incl=87.0, ecc=0.0, w=90.0, r1=0.01519, r2=1.0, R=2.683, T2_eff=5372.0, a_AU=0.01052, T14=1.308, logg=4.50, feh=-0.40),   # Piotto et al. 2024 (MNRAS 535, 2763) Tab. 2; star Lacedelli et al. 2022 (MNRAS 511, 4551) Tab. 1 (R* 0.843): metal-poor, alpha-enhanced. JWST G395H gives Rp/R* = 0.0146 (Boucher et al. 2026)
     "TOI-6255 b":       PlanetParams(name="TOI-6255 b", period=0.23818244, incl=74.4, ecc=0.0, w=90.0, r1=0.0267, r2=1.0, R=3.10, T2_eff=3421.0, a_AU=0.00533, T14=0.36, logg=4.85, feh=-0.14),    # Dai et al. 2024 (AJ 168, 101) Tab. 1-2 (R* 0.370); b = 0.84. T14 from the geometry (none published; ExoFOP's 0.48 h is not from the fit). P/P_Roche = 1.13: ellipsoidal variations of tens of ppm expected
-    "TOI-6324 b":       PlanetParams(name="TOI-6324 b", period=0.2792210, incl=82.36, ecc=0.0, w=90.0, r1=0.03217, r2=1.0, R=4.29, T2_eff=3247.0, a_AU=0.00585, T14=0.435, logg=4.93, feh=-0.32),  # geometry Gomez Barrientos et al. 2025 (AJ 170, 148) Tab. 3 (a/R* 4.29 +0.61/-0.69, b 0.57, i 82.36 +- 2.94, TESS Rp/R*); star and P Lee et al. 2025 (ApJL 983, L36) Tab. 1 (R* 0.293). Lee's own fit (a/R* 3.17, i 74.6) rests on a stellar density mislabelled by the factor rho_sun (10.7 solar = 15.1 g/cm^3). T14 from the geometry
+    "TOI-6324 b":       PlanetParams(name="TOI-6324 b", period=0.2792210, incl=82.36, ecc=0.0, w=90.0, r1=0.03217, r2=1.0, R=4.29, T2_eff=3247.0, a_AU=0.00585, T14=0.435, logg=4.93, feh=-0.32),  # geometry Gomez Barrientos et al. 2025 (AJ 170, 148) Tab. 3 (a/R* 4.29 +0.61/-0.69, b 0.57, i 82.36 +- 2.94, TESS Rp/R*); star and P Lee et al. 2025 (ApJL 983, L36) Tab. 1 (R* 0.293). Lee's own fit (a/R* 3.17, i 74.6) is not used: it implies rho* = 7.7 g/cm^3, close to 10.7 / 1.41 rather than the star's 10.7 rho_sun = 15.1 g/cm^3. T14 from the geometry
     "TOI-431 b":        PlanetParams(name="TOI-431 b", period=0.490054945, incl=84.7, ecc=0.0, w=90.0, r1=0.0161, r2=1.0, R=3.35, T2_eff=4850.0, a_AU=0.01139, T14=1.10, logg=4.60, feh=0.20),     # Smith et al. 2026 (arXiv:2609.03029) Tab. 1-2, joint TESS+RV fit with Osborn's density prior; star Osborn et al. 2021 (MNRAS 507, 2782) Tab. 2 (R* 0.731). The archive's a/R* = 3.42 +- 1.71 (Kokori et al. 2023) is a catalogue value, not a fit
-    # ---- 55 Cnc e: in PAPER_PLANETS outside the selection rule (common reference; 2026-11-18) ------------------------------------------------------
+    # ---- 55 Cnc e: in PAPER_PLANETS outside the selection rule (common reference) ------------------------------------------------------------------
     "55 Cnc e":         PlanetParams(name="55 Cnc e", period=0.7365474, incl=83.59, ecc=0.0, w=90.0, r1=0.0182, r2=1.0, R=3.52, T2_eff=5172.0, a_AU=0.01544, T14=1.532, logg=4.43, feh=0.35),          # Bourrier et al. 2018 (A&A 619, A1) Tab. 4: P, a/R* 3.52 +- 0.01, Rp/R* 0.0182 +- 0.0002 (HST/STIS), i 83.59 +0.47/-0.44 (b = 0.39), a 0.01544 AU (e = 0.05 +- 0.03 set to 0); star Tab. 1 (R* 0.943 von Braun et al. 2011; T_eff, log g, [Fe/H] Yee et al. 2017). Rp = 1.87 R_E > ROCKY_MAX_RADE. T14 from the geometry (none in Bourrier)
     "GJ 367 b":         PlanetParams(name="GJ 367 b", period=0.3219225, incl=79.89, ecc=0.0, w=90.0, r1=0.01399, r2=1.0, R=3.327, T2_eff=3522.0, a_AU=0.00709, T14=0.629, logg=4.776, feh=-0.01),  # Goffo et al. 2023 (ApJL 955, L3) Tab. 1-2 (R* 0.458; e = 0.06 +0.07/-0.04 set to 0; b = 0.584); a/R* = 3.327 as adopted from Goffo by Zhang et al. 2024 (ApJL 961, L44) Sect. 2 (Lee et al. 2026, arXiv:2606.18355: 3.33 +- 0.17, b = 0.68, Rp/R* = 0.0148)
     # ---- other close-in rocky planets: well-constrained geometry and host --------------------------------------------------------------------------
@@ -170,7 +169,7 @@ CUSTOM = {
     # priors), faint hosts, statistical validation ----
     "KOI-1843.03":      PlanetParams(name="KOI-1843.03", period=0.1768913, incl=72.0, ecc=0.0, w=90.0, r1=0.01225, r2=1.0, R=1.9, T2_eff=3584.0, a_AU=0.00398, T14=0.65, logg=4.80, feh=0.0),          # = Kepler-974 c. Rappaport et al. 2013 (ApJL 773, L15) Tab. 1: a/R* 1.9 +0.3/-0.5, i 72 +12/-20, depth 150 ppm (Rp/R* = sqrt), T14 0.65; star as adopted there (Dressing & Charbonneau 2013: R* 0.45, T_eff 3584, log g 4.80). 30-min cadence only; Gaia-era star (TICv8, R* 0.538) would give a/R* 2.00. Tidally distorted (axis ratio >= 1.3)
     "K2-183 b":         PlanetParams(name="K2-183 b", period=0.469285, incl=90.0, ecc=0.0, w=90.0, r1=0.0117, r2=1.0, R=2.5, T2_eff=5519.0, a_AU=0.01128, T14=1.541, logg=4.43, feh=0.09),             # Adams et al. 2021 (PSJ 2, 152) Tab. 2: a/R* 2.5 +0.3/-0.4, i 90.1 +20/-10, Rp/R* 0.0117 (free fit, no density prior); T14 Kruse et al. 2019; star Livingston et al. 2018b (AJ 156, 277; Gaia, R* 0.97: Adams used Mayo's 0.87). Kepler III from the star gives 2.56
-    "EPIC 206042996 c": PlanetParams(name="EPIC 206042996 c", period=0.354884, incl=89.9, ecc=0.0, w=90.0, r1=0.0223, r2=1.0, R=2.6, T2_eff=4055.0, a_AU=0.00815, T14=1.07, logg=4.58, feh=0.0),       # = K2-301 c. Adams et al. 2021 Tab. 2: a/R* 2.6 +- 0.5, i 89.9 +20/-10, Rp/R* 0.0223; T14 Vanderburg et al. 2016 (b = 0.25); star TICv8 (Stassun et al. 2019; R* 0.674, the EPIC 0.50 Adams used is wrong, so Rp ~ 1.63 not 1.2). Kp 16, validated only via the multiplicity boost, no imaging
+    "EPIC 206042996 c": PlanetParams(name="EPIC 206042996 c", period=0.354884, incl=89.9, ecc=0.0, w=90.0, r1=0.0223, r2=1.0, R=2.6, T2_eff=4055.0, a_AU=0.00815, T14=1.07, logg=4.58, feh=0.0),       # = K2-301 c. Adams et al. 2021 Tab. 2: a/R* 2.6 +- 0.5, i 89.9 +20/-10, Rp/R* 0.0223; T14 Vanderburg et al. 2016 (b = 0.25); star TICv8 (Stassun et al. 2019; R* 0.674 instead of the EPIC 0.50 Adams used, so Rp ~ 1.63 not 1.2). Kp 16, validated only via the multiplicity boost, no imaging
     "Kepler-990 c":     PlanetParams(name="Kepler-990 c", period=0.53835407, incl=82.87, ecc=0.0, w=90.0, r1=0.01264, r2=1.0, R=2.693, T2_eff=5577.0, a_AU=0.01202, T14=1.5045, logg=4.40, feh=-0.11), # transit Kepler DR25 KOI table (a/R* 2.693 +- 0.554, consistent with Kepler III from the star, 2.76); star Fulton & Petigura 2018 (AJ 156, 264) Tab. 2 (R* 0.960), log g TICv8. Ks 12.9
     "EPIC 220554210 c": PlanetParams(name="EPIC 220554210 c", period=0.705310, incl=90.0, ecc=0.0, w=90.0, r1=0.0146, r2=1.0, R=3.0, T2_eff=5523.0, a_AU=0.01311, T14=1.704, logg=4.47, feh=0.15),     # = K2-282 c. Adams et al. 2021 Tab. 2: a/R* 3.0 +0.3/-0.5, i 91.3 +- 10 (= 88.7; 90 adopted); Rp/R* 0.0146 Heller et al. 2019 (A&A 627, A66) Tab. 1 (b = 0.25); T14 Kruse et al. 2019; star Livingston et al. 2018b (spectroscopic, R* 0.94). Planet b's density and the star both favour a/R* ~ 3.4-3.5
     "Kepler-1323 b":    PlanetParams(name="Kepler-1323 b", period=0.929906166, incl=88.59, ecc=0.0, w=90.0, r1=0.00956, r2=1.0, R=3.37, T2_eff=6063.0, a_AU=0.01911, T14=1.743, logg=4.354, feh=0.00), # a/R* = a / R* of Fulton & Petigura 2018 Tab. 2-3 (a 0.01911 AU, R* 1.221; also T_eff, [Fe/H]); the DR25 KOI fit (4.14 +- 0.15) is the b = 0 branch of the degeneracy and inconsistent with the star; Rp/R*, i, T14 DR25 KOI; log g Berger et al. 2020. Note: i = 88.59 with a/R* 3.37 overpredicts the measured T14 (2.0 vs 1.74 h). SNR 80, Ks 11.1
@@ -184,7 +183,7 @@ OVERRIDES = {
 }
 
 # Published 1-sigma uncertainties of the two reference planets, for every analysis that does not hold the geometry fixed: the nuisance fits of
-# simple_bias_analysis (bias_analysis/Nuisance_Robustness.ipynb), fig:res_nuisance (paper_plot_utils.nuisance_robustness) and the free-geometry
+# simple_bias_analysis (bias_analysis/Nuisance_Robustness.ipynb; the paper's nuisance-robustness figure, Sec. 4.4) and the free-geometry
 # dynesty runs. Defined once, here. GEOMETRY_PARAMS: the geometry as each planet's source FITTED it, in the column names of
 # simple_bias_analysis.nuisance_problem. Tas et al. fit the impact parameter b and the stellar density of TOI-2431 b and derive i = arccos(b /
 # (a/R*)), so its geometry is (a/R* at fixed b, Rp/R*, b); Malavolta et al. fit a/R* and i of K2-141 b directly. GEOMETRY_SIGMA: the Gaussian priors
@@ -202,15 +201,15 @@ GEOMETRY_SIGMA = {
 }
 # PLANET_MASSES: M_p [M_Earth] and its 1 sigma, M_star [M_sun] and its 1 sigma. They set the expected amplitudes of the ellipsoidal terms
 # (simple_bias_analysis.ellipsoidal_prior, deformation_prior). ELLIPSOIDAL_U_RANGE, ELLIPSOIDAL_G_RANGE: the bracket of the linear limb-darkening and
-# of the gravity-darkening coefficient of the star in the infrared that alpha_ell of the stellar ellipsoidal term is evaluated over (NOT from a table
-# yet; K dwarfs).
+# of the gravity-darkening coefficient of the star in the infrared that alpha_ell of the stellar ellipsoidal term is evaluated over (NOT from a table;
+# K dwarfs).
 PLANET_MASSES = {"TOI-2431 b": (6.2, 1.6, 0.661, 0.0225),    # Tas et al. 2026 (A&A 707, A238) Tab. 1-2 (FCO fit; M_star +0.021/-0.024 symmetrised)
                  "K2-141 b":   (5.08, 0.41, 0.708, 0.028)}   # Malavolta et al. 2018 (AJ 155, 107) Tab. 2-3
 M_EARTH_SUN = 3.0035e-6   # M_Earth / M_Sun (IAU 2015 nominal values)
 ELLIPSOIDAL_U_RANGE, ELLIPSOIDAL_G_RANGE = (0.1, 0.3), (0.1, 0.4)
-# Fluid Love number h2 of the planets' tidal deformation (simple_bias_analysis.deformation_limits; the row "+ planetary deformation" of
-# fig:res_nuisance): the true value, 2 for rocky planets (Correia 2014, A&A 570, L5, after Yoder 1995; Earth's moment of inertia in his Darwin-Radau
-# relation gives 1.93), and the range a fit may use, from all mass at the centre (1) to a homogeneous body (2.5).
+# Fluid Love number h2 of the planets' tidal deformation (simple_bias_analysis.deformation_limits; the row "+ planetary deformation" of the paper's
+# nuisance-robustness figure, Sec. 4.4): the true value, 2 for rocky planets (Correia 2014, A&A 570, L5, after Yoder 1995; Earth's moment of inertia
+# in his Darwin-Radau relation gives 1.93), and the range a fit may use, from all mass at the centre (1) to a homogeneous body (2.5).
 DEFORMATION_H2_TRUE, DEFORMATION_H2_RANGE = 2., (1., 2.5)
 
 # --------------------------------------------------------------------------
@@ -439,7 +438,7 @@ FILTER_LAMBDA_UM = {
     "MIRI/F1500W":   [13.5, 16.6],   # MIRI imaging TSO. Used on TRAPPIST-1 (15 um CO2 band), long wavelengths suit a cold nightside
     "MIRI/F1800W":   [16.5, 19.5],   # MIRI imaging TSO. MIRI's thermal background climbs steeply past ~15 um
     "MIRI/LRS":      [5.0, 10.5],    # LRS runs to ~12 um, but the red end is trimmed where the throughput drops
-    "Spitzer/IRAC2": [4.0, 5.0],     # Spitzer IRAC channel 2 (4.5 um), to compare with the measured occultation depth fp = 142 ppm (Zieba 2022)
+    "Spitzer/IRAC2": [4.0, 5.0],     # Spitzer IRAC channel 2 (4.5 um), to compare with the measured occultation depth fp = 142 ppm (Zieba et al. 2022)
     "JWST_NIRSpec.G395H_NRS1": [2.9, 3.7], # two arrays of NIRSpec/G395H
     "JWST_NIRSpec.G395H_NRS2": [3.8, 5.2] # two arrays of NIRSpec/G395H
 }
@@ -589,8 +588,8 @@ CUSTOM_SIGMA_1MIN_N = {_normalise(k): v for k, v in CUSTOM_SIGMA_1MIN.items()}
 
 # Modes in which a planet cannot be observed: {planet name: {instrument (FILTER_LAMBDA_UM key): reason}}. rms_1min raises NoNoiseLevelError for them
 # before PandExo runs, exactly as for an instrument without any noise level: planet_bias_table fits them without a Fisher sigma (VERDICT_NO_NOISE),
-# joint fits that need the detector and the false-positive tables leave the planet out, run_dynesty.py skips the entry, and paper_plot_utils.ns_series
-# expects no runs (observable). Planet names are matched loosely.
+# joint fits that need the detector and the false-positive tables leave the planet out, run_dynesty.py skips the entry, and the retrieval series of
+# retrievals/dynesty_series.ipynb leave it out (observable). Planet names are matched loosely.
 _G395H_SAT_55CNC = "the host (K = 4.0) saturates NIRSpec/G395H; NIRCam grism was the only non-saturating near-infrared option (Patel et al. 2024, A&A 690, A159; Hu et al. 2024 used NIRCam F444W)"
 UNOBSERVABLE = {
     "55 Cnc e": {"JWST_NIRSpec.G395H_NRS1": _G395H_SAT_55CNC, "JWST_NIRSpec.G395H_NRS2": _G395H_SAT_55CNC},
@@ -610,7 +609,7 @@ def observable(planet_name, instrument):
 # applies it to every config of the planet on the instrument's standard band (observed_band), so instrument_cfg, planet_bias_table, run_dynesty.py and
 # every replace(cfg, planet=...) get it; rms_1min bins the PandExo spectrum over it. Planet names are matched loosely; a planet renamed around the
 # same host (simple_bias_analysis.moved_planet, the Roche cases) does not inherit the entry, although the saturation belongs to the host. A partial
-# band changes the forward model: dynesty runs made before the entry was added are flagged by dynesty_utils.check_fit_current.
+# band changes the forward model: a dynesty run made over another band is flagged by dynesty_utils.check_fit_current.
 PARTIAL_BANDS = {
     # PandExo (MIRI/LRS, ngroup optimised to the minimum of 2): 31 of the 166 pixels of 5.0-10.5 um fully saturated, 5.02-6.67 um; the first clean
     # pixel is at 6.71 um, and the noise of 6.7-10.5 um equals that of the clean pixels of 5.0-10.5 um. Hu et al. 2024 (Nature 630, 609;
@@ -645,10 +644,10 @@ _INSTRUMENT_OF_FILE = {os.path.realpath(str(FILTER_DIR / f)): ins for ins, f in 
 # Calculate the rms noise per minute of observation
 def rms_1min_pandexo(result, T14, lambda_range, visualize=False, extra=False):
     """The uncertainty per transit time interval is sqrt(2) times smaller than the transit precision itself.
-    Or differently said, lets say you know that the precision (or rms) of 1 hour of observations is 10 ppm, and your transit has a duration of 1 hour, the precision youll measure the transit depth is 10 * sqrt(2) ppm because you always measure the transit relative to the baseline.
-    This example assumes in transit time = out of transit time. More precisely its
-            rms_transit = rms_integration * sqrt(1 / Nin + 1 / Nout)
-    , with Nin=Nout being the number of integrations in transit and rms_integration the precision per integration.
+    In other words: if the precision (or rms) of 1 hour of observations is 10 ppm and the transit lasts 1 hour, the transit depth is measured to 10 * sqrt(2) ppm, because the transit is always measured relative to the baseline.
+    This example assumes in-transit time = out-of-transit time. More precisely,
+            rms_transit = rms_integration * sqrt(1 / Nin + 1 / Nout),
+    with Nin = Nout the number of integrations in transit and rms_integration the precision per integration.
     """
     l1, l2 = lambda_range*1e6 # wavelength range in um
     rms_transit_bin = binning(l1, l2, result, visualize=visualize)
@@ -812,7 +811,7 @@ class NoNoiseLevelError(ValueError):
 # from other inputs is never served. The file is locked while it is read or written (fcntl), so parallel kernels and joblib workers can share it. To
 # force a rerun: rms_1min(..., use_cache=False), which replaces the row, or delete rows / the file.
 PANDEXO_CACHE = Path(__file__).resolve().parent.parent / "inputs" / "noise" / "pandexo_cache.csv"
-PANDEXO_NOISE_VERSION = 2   # version of the noise computation from a PandExo result (binning, rms_1min_pandexo); bump it when that changes. 2: summed electrons (2026-11-06)
+PANDEXO_NOISE_VERSION = 2   # version of the noise computation from a PandExo result (binning, rms_1min_pandexo), part of the cache key; bump it when that changes
 _PANDEXO_KEY_PARAMS = ("rp_rearth", "rs_rsun", "teff", "logg", "metal", "t14_h", "mag", "ref_wave")   # pandexo_params without the period, which PandExo does not use
 _PANDEXO_TEXT = ("planet", "instrument", "mode", "mag_band", "settings", "pandexo_version", "pandeia_version", "created")   # read as text, so "2026.10" stays a version
 

@@ -160,8 +160,8 @@ F_SCAN_FRAC = np.array([0., 0.004, 0.01, 0.02, 0.04, 0.08, 0.15, 0.3, 0.6, 1.])
 # bounded Brent as fit_naive, chi2_p(F) = min_A_B chi2(A_B, F); chi2_p is scanned on F_SCAN_FRAC to bracket its global minimum, then refined with
 # bounded Brent inside that bracket (the scan node wins if it is lower, so F = F_bounds[0] exactly is a possible result). Why not a 2-D local
 # optimizer: the K&L nightside is T ∝ F^(1/4), so the model's response to F switches on extremely flat at F = 0 (residual change ∝ F^~1.5; measured,
-# MIRI/LRS, a/Rs = 2.42, T_eff = 4000 K). The F = 0 edge is then a near-stationary trap: the former Nelder-Mead fit, started on it, collapsed onto F =
-# 0 in about half the bias-map cells (chi2 0.445 instead of 0.226 there), and gradient methods see ~zero dchi2/dF. Profiling also makes the outer
+# MIRI/LRS, a/Rs = 2.42, T_eff = 4000 K). The F = 0 edge is then a near-stationary trap: a Nelder-Mead fit started on it collapses onto F = 0 in
+# about half the bias-map cells (chi2 0.445 instead of 0.226 there), and gradient methods see ~zero dchi2/dF. Profiling also makes the outer
 # problem insensitive to the inner tolerance (the profile error is second order in the A_B error). ~250 model evaluations per fit.
 def fit_redist(cfg, truth, free_offset=True, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, xatol=1e-5, F_xatol=1e-5, **kw):
     resid, cost, _ = _chi2_problem(cfg, truth, "naive_redist", free_offset=free_offset, **kw)
@@ -314,7 +314,7 @@ def fisher_covariance(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A
 
 
 # Calculate the Fisher sigma for A_B (and F): the marginal sigmas sqrt(diag(C)) of fisher_covariance.
-# sigma_F gets truncated by the prior boundry F=0, so it is not trustworthy.
+# sigma_F gets truncated by the prior boundary F=0, so it is not trustworthy.
 def fisher_sigma(cfg, insolation_model, A_B_, F=None, **kw):
     return np.sqrt(np.diag(fisher_covariance(cfg, insolation_model, A_B_, F=F, **kw)))
 
@@ -597,7 +597,7 @@ def reference_planet(a_rs=2.5, rp_rs=DEFAULT_MAP_RP_RS, T_eff=4000., incl=90., p
 # a_AU likewise. Rp/R*, the inclination (so the impact parameter shrinks with a/R*), the star and its log g / [Fe/H] are kept. With period_h = the
 # planet's Roche period (roche_periods) it is the most extreme version of a known system: the same planet and star at the Roche limit of that
 # composition. T14 is NaN (only PandExo needs it; give the moved planet its parent's sigma_1min). Raises if the planet would touch the star (a/R* <= 1
-# + Rp/R*: SPIDERMAN aborts there).
+# + Rp/R*: SPIDERMAN raises a ValueError there).
 def moved_planet(pl, period_h, name=None):
     s = (period_h / 24. / pl.period) ** (2. / 3.)
     if pl.R * s <= pl.r1 + pl.r2: raise ValueError(f"{pl.name} at P = {period_h:.2f} h would touch its star (a/R* = {pl.R * s / pl.r2:.3f})")
@@ -855,12 +855,11 @@ def _mark_limits(ax, contact, roche_a_rs, anchors):
 
 # The limit curve: a bias_vs_a_rs sweep (both models) on a log a/Rs axis, three stacked panels - the geometry of sweep_geometry (area fractions,
 # stellar angular radius on the right axis), the biases (Delta A_B of both fits, the spurious F on the right axis, hollow markers where a fit railed,
-# the fitted A_B = 0 line where a fit goes below it, and sweep_ubol0's
-# A_B-only bias as the limb-darkening sensitivity, if given) and the measurability (|Delta A_B| / sigma of both fits, sqrt(dchi2_F) of the spurious F,
-# sqrt(chi2) of the best A_B-only fit; all four scale as 1 / sigma_1min and as sqrt(n_orbits), so another noise level is a vertical shift of every
-# curve on the log axis). _mark_limits on every panel; roche_a_rs {label: a/R*} are the Roche lines, anchors {name: PlanetParams} the planets marked.
-# cfg: the sweep's config (sigma_1min, n_orbits, n_bins for the labels and the right axis); rp_rs: the sweep's Rp/Rs (the contact limit). titles:
-# (geometry, bias, measurability) panel titles.
+# the fitted A_B = 0 line where a fit goes below it, and sweep_ubol0's A_B-only bias as the limb-darkening sensitivity, if given) and the
+# measurability (|Delta A_B| / sigma of both fits, sqrt(dchi2_F) of the spurious F, sqrt(chi2) of the best A_B-only fit; all four scale as 1 /
+# sigma_1min and as sqrt(n_orbits), so another noise level is a vertical shift of every curve on the log axis). _mark_limits on every panel;
+# roche_a_rs {label: a/R*} are the Roche lines, anchors {name: PlanetParams} the planets marked. cfg: the sweep's config (sigma_1min, n_orbits, n_bins
+# for the labels and the right axis); rp_rs: the sweep's Rp/Rs (the contact limit). titles: (geometry, bias, measurability) panel titles.
 def plot_limit_curve(sweep, geo, cfg, rp_rs, roche_a_rs, anchors, sweep_ubol0=None, u_bol=None, titles=(None, None, None), suptitle=None):
     contact = 1. + rp_rs
     bad, badJ = sweep["railed"], sweep["railed_J"]
@@ -1128,12 +1127,10 @@ def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=9
     return sig_crit
 
 
-# One row of planet_bias_table: the planet's own geometry and its own sigma_1min, everything else inherited from cfg. The planets of a per-planet
-# table whose host the stellar model can represent. A host outside the NewEra cube (T_eff, log g or [Fe/H], newera_utils.CUBE_*) or off the stellar
-# grid's
-# T_eff nodes would raise inside the worker pool and abort the whole table, so such planets are left out with a note instead. Checked here in the
-# parent process, where building a planet's stellar grid takes ~0.02 s. A band-less template cfg (l1 = l2 = nan) has no grid to check, so it keeps
-# every planet.
+# The planets of a per-planet table whose host the stellar model can represent. A host outside the NewEra cube (T_eff, log g or [Fe/H],
+# newera_utils.CUBE_*) or off the stellar grid's T_eff nodes would raise inside the worker pool and abort the whole table, so such planets are left
+# out with a note instead. Checked here in the parent process, where building a planet's stellar grid takes ~0.02 s. A band-less template cfg (l1 = l2
+# = nan) has no grid to check, so it keeps every planet.
 def drop_unsupported_hosts(cfg, pls, verbose=True):
     keep, dropped = [], []
     for pl in pls:
@@ -1195,6 +1192,7 @@ def _per_detector_crit(tab, factor):
     return tab
 
 
+# One row of planet_bias_table: the planet's own geometry and its own sigma_1min, everything else inherited from cfg.
 def _planet_bias_row(cfg, A_B_true, pl, s1, redist, bounds, F_bounds, kw):
     has_noise = _has_noise(s1)   # no noise level -> fitted at cfg's own sigma_1min, no Fisher sigma (VERDICT_NO_NOISE)
     c = _planet_cfg(cfg, pl, s1)
@@ -1310,7 +1308,7 @@ def _bias_table_pair(fits, A_B_true, bounds, F_bounds, n_orbits):
         if a.get("model") != model: raise ValueError(f"fits: (A_B-only table, joint table) expected, got the models {[t.attrs.get('model') for t in fits]}")
         got = (a["A_B_true"], tuple(a["bounds"]), tuple(a["F_bounds"]), a["n_orbits"])
         if got != want: raise ValueError(f"fits: the {model} table has (A_B_true, bounds, F_bounds, n_orbits) = {got}, this call {want}")
-        if "chi2" not in tab: raise ValueError(f"fits: the {model} table has no chi2 column (made before it was stored): re-run it")
+        if "chi2" not in tab: raise ValueError(f"fits: the {model} table has no chi2 column: re-make it with planet_bias_table or instrument_retrievals")
     return fits
 
 
@@ -1497,8 +1495,7 @@ def instrument_cfg(cfg, instrument, sigma_1min=None):
 
 
 # Several detectors fitted jointly (a detector set, see is_detector_set) are one "instrument" of instrument_retrievals: given as a tuple/list of
-# FILTER_LAMBDA_UM keys or as a
-# JOINT_INSTRUMENTS alias (resolve_instrument), carried in the tables as one key joined with "+", e.g.
+# FILTER_LAMBDA_UM keys or as a JOINT_INSTRUMENTS alias (resolve_instrument), carried in the tables as one key joined with "+", e.g.
 # "JWST_NIRSpec.G395H_NRS1+JWST_NIRSpec.G395H_NRS2". detectors() turns any of the three spellings into the list of bands (a single instrument is its
 # own one-element set) and rejects an unknown band.
 JOINT_SEP = "+"
@@ -2429,10 +2426,9 @@ def nuisance_both_fits(problem, problem_redist, A_B_true, nuisances=(), priors=N
 # prior cuts to (lo, hi); given x, every other parameter p is Gaussian, N(p_hat + beta_p (x - x_hat), C_pp - beta_p C_px) with beta_p = C_px / C_xx.
 # peak: where the likelihood peaks, (A_B[, F], the shift of every nuisance of sol["names"]), by default the solution of `sol`. The extended-source
 # model reproduces the noiseless truth, so its likelihood has the same covariance (to first order) and peaks at the truth: peak = (A_B_true, 0, ...,
-# 0) with the
-# A_B-only `sol`. mass: the share of N(x_hat, C_xx) within (lo, hi), the factor by which the prior range cuts the evidence relative to an unbounded
-# prior of the same density. Returns dict(mass, x_mean, x_sd [posterior of the shift], median, sd [A_B, and F for a problem with j_F: the medians by
-# root finding on the mixture, the sd exact], delta, sigma_post [posterior mean and sd of the shift of every nuisance of sol["names"]]).
+# 0) with the A_B-only `sol`. mass: the share of N(x_hat, C_xx) within (lo, hi), the factor by which the prior range cuts the evidence relative to an
+# unbounded prior of the same density. Returns dict(mass, x_mean, x_sd [posterior of the shift], median, sd [A_B, and F for a problem with j_F: the
+# medians by root finding on the mixture, the sd exact], delta, sigma_post [posterior mean and sd of the shift of every nuisance of sol["names"]]).
 def bounded_posterior(sol, name, lo, hi, peak=None, n_nodes=96):
     from scipy.stats import norm, truncnorm
     from scipy.optimize import brentq
@@ -2673,14 +2669,14 @@ def bias_sweep(cfg, A_B_true, values, transform, models=("naive", "naive_redist"
 
 
 # A hyper-illuminated planet that DOES redistribute heat, fitted with the point-source model with redistribution: the sweep over the true F (paper
-# App. G.2, "True redistribution"). Truth: "hyperillum_redist" at (A_B_true, F_true), i.e. Eq. KL with the extended-source irradiance; fit: fit_redist
-# ("naive_redist"), with its Fisher sigmas at the fit. The A_B-only point-source fit is left out: against a planet with a warm nightside it fails for
-# a reason that has nothing to do with the irradiation model. Columns: value (= F_true), A_B_fit_J, bias_J, sigma_J, bias_sigma_J, F_fit, bias_F (=
-# F_fit - F_true), sigma_F, bias_F_sigma, chi2_J and lnB_mean_J = chi2_J / 2. The last is the expected ln B of the extended-source model with
-# redistribution against the point-source model with redistribution: both have the parameters (A_B, F), so their Occam factors cancel as for the two
-# bare-rock models, as long as F_true lies well above the prior edge F = 0 (at F_true = 0 the edge cuts the posterior of the extended-source model
-# only, so there chi2_J / 2 is not the expected ln B). At F_true = 0 the row is the fit with redistribution of every other table (bias_F = F_fit, the
-# spurious redistribution).
+# App. G.2, "True redistribution"). Truth: "hyperillum_redist" at (A_B_true, F_true), i.e. Kreidberg & Loeb (2016) eq. 1 with the extended-source
+# irradiance; fit: fit_redist ("naive_redist"), with its Fisher sigmas at the fit. The A_B-only point-source fit is left out: against a planet with a
+# warm nightside it fails for a reason that has nothing to do with the irradiation model. Columns: value (= F_true), A_B_fit_J, bias_J, sigma_J,
+# bias_sigma_J, F_fit, bias_F (= F_fit - F_true), sigma_F, bias_F_sigma, chi2_J and lnB_mean_J = chi2_J / 2. The last is the expected ln B of the
+# extended-source model with redistribution against the point-source model with redistribution: both have the parameters (A_B, F), so their Occam
+# factors cancel as for the two bare-rock models, as long as F_true lies well above the prior edge F = 0 (at F_true = 0 the edge cuts the posterior of
+# the extended-source model only, so there chi2_J / 2 is not the expected ln B). At F_true = 0 the row is the fit with redistribution of every other
+# table (bias_F = F_fit, the spurious redistribution).
 def _true_F_point(cfg, A_B_true, F_true, bounds, F_bounds, kw):
     truth = truth_curves(cfg, A_B_true, F_true=F_true, **kw)
     A_fit, F_fit, chi2, _ = fit_redist(cfg, truth, free_offset=True, bounds=bounds, F_bounds=F_bounds, **kw)

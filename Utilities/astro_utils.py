@@ -268,7 +268,7 @@ def planck_fraction_below(T, lambda_cutoff):
 # Throughput-weighted mean spectral radiance [W m^-2 sr^-1 m^-1] of a blackbody at temperature T, averaged across the band.
 def band_avg_planck(T, lambda_range, filter_path=None, n=300):
     """
-    filter_path=None  -> tophat over lambda_range, photon-weighted (SPIDERMAN's filter=False is energy-weighted, so this does NOT match it; T_bright no longer uses this function)
+    filter_path=None  -> tophat over lambda_range, photon-weighted (SPIDERMAN's filter=False is energy-weighted, so this does NOT match it; T_bright does not use this function)
     filter_path given -> real throughput on the file's own grid
     """
     lam, w = load_filter(lambda_range, filter_path=filter_path, n=n)

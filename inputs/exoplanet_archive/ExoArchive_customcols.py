@@ -81,7 +81,7 @@ SHORT_COLUMNS = [
     "a_over_r2",                # true semi-major axis / r2; differs from pl_ratdor when e > 0
     "pl_orbsmax",               # semi-major axis [AU]
     "pl_orbeccen",              # eccentricity, often fixed at 0 rather than measured
-    "pl_orbincl",                # inclination , often fixed at 0 rather than measured
+    "pl_orbincl",               # inclination [deg], 90 where missing (pl_orbincl_derived)
     "pl_orblper",               # argument of periastron
     "e_fitted",                 # True only if the eccentricity was actually fit
     "st_teff",                  # stellar effective temperature [K]
@@ -127,7 +127,7 @@ SHORT_ROUNDING = {
 
 
 # --------------------------------------------------------------------------
-# Helpers  (-> Utilities/phasecurve_utils.py, astro_utils.py)
+# Helpers  (the physics helpers planck_ratio, transit_duration_t14 and roche_radius_over_r1 come from Utilities/astro_utils.py)
 # --------------------------------------------------------------------------
 
 def symmetric_sigma(df, base):
@@ -162,12 +162,12 @@ HERE = Path(__file__).resolve().parent
 # Load Table
 
 input_path = sorted(HERE.glob(INPUT_GLOB))[-1]      # dated names sort chronologically
-df = pd.read_csv(input_path, header=0)              # no .iloc[:, 1:]; written index=False
+df = pd.read_csv(input_path, header=0)              # the downloader writes no index column (index=False)
 df["is_custom"] = False
 print(f"Loaded {input_path.name}: {len(df)} rows x {len(df.columns)} columns")
 
 
-# Drop blacklisted papers
+# Blank the values of the papers in MASK_BIBCODES
 
 if MASK_BIBCODES:
     pattern = "|".join(re.escape(b) for b in MASK_BIBCODES)
@@ -185,7 +185,7 @@ df = pd.concat([df, custom], ignore_index=True)
 df["is_custom"] = df["is_custom"].fillna(False).astype(bool)
 
 
-# tellar-parameter overrides
+# Stellar-parameter overrides
 for name, fields in STELLAR_OVERRIDES.items():
     for col, value in fields.items():
         df.loc[df["pl_name"] == name, col] = value
@@ -272,8 +272,9 @@ df["delta_Na"] = (df["RR_RE"] * R_EARTH_IN_R_SUN / df["st_rad"]) ** 2 * 1e6 # tr
 
 
 # Ephemeris drift
-# How far the predicted transit time has drifted by T_REF_JD, in minutes. Large values mean the ephemeris is stale and you would miss the transit
-# today. The propagation assumes T0 and P came from one fit and so share a covariance; in PSCompPars they need not, hence ephem_same_ref.
+# How far the predicted transit time has drifted by T_REF_JD, in minutes. Large values mean the ephemeris is stale and an observation scheduled
+# from it could miss the transit. The propagation assumes T0 and P came from one fit and so share a covariance; in PSCompPars they need not, hence
+# ephem_same_ref.
 n_orbits = (T_REF_JD - df["pl_tranmid"]) / df["pl_orbper"]
 df["t0_n_err"] = np.sqrt((n_orbits * symmetric_sigma(df, "pl_orbper")) ** 2 + symmetric_sigma(df, "pl_tranmid") ** 2) * 24 * 60
 df["ephem_same_ref"] = df["pl_tranmid_reflink"] == df["pl_orbper_reflink"]

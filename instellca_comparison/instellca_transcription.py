@@ -4,8 +4,9 @@
 # reference: Sadh & Gavassino 2026, ApJ 997, 167. The MIT permission notice is reproduced in InstellCa_3.0_exported.py.
 # ---------------------------------------------------------------------------------------------------------------------
 """
-Independent re-implementation of the InstellCa_3.0 irradiance integral, used by InstellCa_Comparison.ipynb to locate
-the InstellCa bias (Jonas Spiller). Nothing here is imported from InstellCa; `instellca_E` is a
+Independent re-implementation of the InstellCa_3.0 irradiance integral, written for this repository and used by
+InstellCa_Comparison.ipynb to locate the origin of InstellCa's offset from the exact irradiance. Nothing here is
+imported from InstellCa; `instellca_E` is a
 line-for-line transcription of the integration block of InstellCa_3.0.py (same integrand incl. its abs(), same
 rectangular limits, same scipy.integrate.quad calls, same P/(4 pi^2) normalisation, same 1.0573 Teff factor), and
 the notebook checks it against the output of the actual script.
@@ -129,7 +130,7 @@ def exact_xlimits(th, la, g):
 
 def exact_E_quad(la, g, u=0.6, order=96, epsrel=1e-11):
     """Exact irradiance for InstellCa's star: adaptive quad in latitude, Gauss-Legendre in longitude over the exact
-    admissible interval (smooth integrand). Independent of the thesis implementation."""
+    admissible interval (smooth integrand). Independent of hyperillumination_utils."""
     I0 = intensity_scale(g, u)
     rs, rp, al = g.rs, g.rp, g.al
     rho = math.sqrt(al ** 2 + rp ** 2 - 2 * al * rp * math.cos(la))

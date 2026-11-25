@@ -191,8 +191,8 @@ def orbital_reflected_lightcurve(t, planet, t0=0., n_eps=300, A=DEFAULT_A, u_bol
     f = astro_utils.true_anomaly(t, period, ecc, w, t0=t0)
     epsilon = np.arccos(-np.sin(np.radians(incl)) * np.sin(np.radians(w) + f))
 
-    # THE CURRENT CODE NEGLECTS CHANGES IN R THROUGHOUT THE ORBIT! All functions are designed for scalar R, which is why the formula below currently
-    # fails. Needs adjustment for ecc>0. The current code fixes the planet-star distance to the semi-major axis R
+    # The planet-star distance is fixed to the semi-major axis R (a circular orbit): all functions take a scalar R. An eccentric orbit (ecc > 0)
+    # would need the instantaneous distance
     # R_real = R * (1. - ecc**2) / (1. + ecc * np.cos(f))
 
     # evaluating the expensive integral on a coarse monotonic epsilon grid, then interpolate onto t
@@ -324,10 +324,10 @@ def occultation_depth(spider_params, stellar_grid, emissivity=DEFAULT_EMISSIVITY
 
 
 # The A_B-INDEPENDENT half of custom_temperature_grid: the insolation map on the (lo, la) grid. It depends only on geometry, so a fit that varies only
-# A_B computes it ONCE and rescales (ee insolation_cache / model_pcurve(insol=...) in the Fitting section)
+# A_B computes it ONCE and rescales (see insolation_cache / model_pcurve(insol=...) in the Fitting section)
 def insolation_grid(planet, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insolation_model="hyperillum"):
-    # THE CURRENT CODE NEGLECTS CHANGES IN R THROUGHOUT THE ORBIT! All functions are designed for scalar R, which is why the formula below currently
-    # fails. Needs adjustment for ecc>0. The current code fixes the planet-star distance to the semi-major axis R
+    # The planet-star distance is fixed to the semi-major axis R (a circular orbit): all functions take a scalar R. An eccentric orbit (ecc > 0)
+    # would need the instantaneous distance
     # R_real = R * (1. - ecc**2) / (1. + ecc * np.cos(f))
 
     lo = np.linspace(-180, 180, n_lo)  # longitude [deg], 0 = substellar meridian
@@ -386,10 +386,10 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=D
 
     lo, la, temp_grid = custom_temperature_grid(planet, u_bol=u_bol, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, F=F, A_B = A_B, emissivity_bol=emissivity_bol)   # F: used by "hyperillum_redist" only (a direct_T map like "hyperillum"), ignored by "hyperillum" and "naive"
 
-    # pass indexing='ij' meshgrids in deg and the transposed temp_grid (wrong orientation fails silently!)
+    # pass indexing='ij' meshgrids in deg and the transposed temp_grid (a wrong orientation fails silently)
     # The map goes in as is, nightside at exactly 0 K for "naive": the installed fspiderman clamps the direct_T bicubic to the cell corners (README of
     # github.com/JonasSpiller/fSPIDERMAN, "4. Bicubic clamp"). Upstream SPIDERMAN overshoots below 0 K at the sharp terminator and exit()s ("CANNOT DO
-    # NEGATIVE TEMPERATURES"), which is why older versions of this code floored the map at 100-200 K.
+    # NEGATIVE TEMPERATURES"), so with it the map would need a floor of 100-200 K.
     LO_deg, LA_deg = np.meshgrid(lo, la, indexing='ij')  # longitude/latitude meshgrids [deg]
     grid = sp.format_grid(LO_deg, LA_deg, temp_grid.T)
 
@@ -546,10 +546,10 @@ def in_occultation(spider_params, t, pad=0.03):
 
 
 def fast_lightcurve(spider_params, stellar_grid, t, n_phase=40, pad=0.03, split_totality=True):
-    # SPIDERMAN lightcurve evaluated cheaply by splitting the orbit in smooth, out-of-occultation part and occulation part. only first few fourier
-    # coefficients contribute to lightcurve -> only few interpolation points n_phase needed (Nyquist) inside totality the planet is fully hidden, so
-    # the flux is exactly the stellar flux (1) -> only the two ingress/egress ramps still need SPIDERMAN. split_totality=False restores the
-    # whole-window behaviour.
+    # SPIDERMAN lightcurve evaluated cheaply by splitting the orbit into a smooth out-of-occultation part and the occultation part. Only the first few
+    # Fourier coefficients contribute to the light curve -> only a few interpolation points n_phase are needed (Nyquist). Inside totality the planet
+    # is fully hidden, so the flux is exactly the stellar flux (1) -> only the two ingress/egress ramps still need SPIDERMAN. split_totality=False
+    # evaluates the whole occultation window with SPIDERMAN.
 
     t = np.asarray(t, dtype=float)
     orig_eclipse = spider_params.eclipse
@@ -573,7 +573,7 @@ def fast_lightcurve(spider_params, stellar_grid, t, n_phase=40, pad=0.03, split_
                 spider_params.eclipse = True
                 out[m] = spider_params.lightcurve(t[m], stellar_grid=stellar_grid) # occultation calculated exactly, one call for both ramps
     finally:
-        spider_params.eclipse = orig_eclipse # restore even if lightcurve() raised, else spider_params is left dirty
+        spider_params.eclipse = orig_eclipse # restore even if lightcurve() raised, else spider_params keeps the changed eclipse flag
 
     return out
 

@@ -115,7 +115,7 @@ hpu.thermal_PhaseCurve(planet, filter_lambda("MIRI/LRS"), filter_path=filter_loc
 
 
 def test_planet_inside_its_star_raises(root):
-    """A planet inside its star raises ValueError (fSPIDERMAN patch 7). Upstream SPIDERMAN and older fSPIDERMAN builds end the process with
+    """A planet inside its star raises ValueError (fSPIDERMAN patch 7). Upstream SPIDERMAN and fSPIDERMAN builds before 81d300d end the process with
     exit status 0 instead, which would stop this test run without a summary and report it as passed: so the call runs in a process of its own."""
     run = subprocess.run([sys.executable, "-c", INSIDE_THE_STAR, str(root / "Utilities")], cwd=root, capture_output=True, text=True, timeout=300)
     error = run.stderr.strip().splitlines()[-1] if run.stderr.strip() else ""
