@@ -13,7 +13,7 @@ import io
 import numpy as np
 import pandas as pd
 
-from hyperphase.bias.detectors import is_detector_set, template_cfg
+from hyperphase.bias.detectors import detectors, instrument_key, is_detector_set, template_cfg
 from hyperphase.bias.fits import _chi2_problem, fit_AB_only
 from hyperphase.bias.tables import instrument_retrievals, planet_list
 from hyperphase.defaults import A_B_FIT_BOUNDS, F_BOUNDS
@@ -86,21 +86,30 @@ def evidence_probability(chi2, threshold, time_factor=1.):
     return norm.sf((threshold - 0.5 * c) / np.sqrt(c))
 
 
-def evidence_table(cfg, planets, instruments, A_B_true, thresholds=(2.5, 5.), bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
+def evidence_table(cfg, planets, instruments, A_B_true, thresholds=(2.5, 5.), bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, verbose=True, **kw):
     """The expected-evidence table: every planet on every entry of `instruments` (instrument_retrievals per planet: own geometry and noise) with both
     point-source fits, one row per (planet, instrument, fit). The A_B-only rows add lnB_mean = chi2 / 2, lnB_sd = sqrt(chi2) and P_lnB_gt_<x> for
     each threshold, at cfg.n_orbits. The naive_redist rows get none (their chi2 / 2 lacks the Occam term of the F prior, see the module docstring)
-    but z_F = sqrt(chi2_naive - chi2), the significance of the spurious F. Rows without a noise level: see VERDICT_NO_NOISE."""
-    parts = []
+    but z_F = sqrt(chi2_naive - chi2), the significance of the spurious F. Rows without a noise level: see VERDICT_NO_NOISE; verbose lists them in
+    one line."""
+    parts, no_noise = [], {}   # {(bands without a noise level, joint fits left out): [planets]}
+    keys = [instrument_key(ins) for ins in instruments]
     for pl in planet_list(planets):
-        tab = instrument_retrievals(cfg, pl, instruments, A_B_true, bounds=bounds, F_bounds=F_bounds, n_jobs=n_jobs, **kw)
-        with contextlib.redirect_stdout(io.StringIO()):   # the same notes as the first call
-            tab_J = instrument_retrievals(cfg, pl, instruments, A_B_true, redist=True, sigma_1min=tab.attrs["sigma_1min"], bounds=bounds, F_bounds=F_bounds, n_jobs=n_jobs, **kw)
+        tab = instrument_retrievals(cfg, pl, instruments, A_B_true, bounds=bounds, F_bounds=F_bounds, n_jobs=n_jobs, verbose=False, **kw)
+        have = tab.attrs["sigma_1min"]
+        missing = (tuple(k for k in keys if len(detectors(k)) == 1 and k not in have),
+                   tuple(k for k in keys if len(detectors(k)) > 1 and not all(d in have for d in detectors(k))))
+        if any(missing): no_noise.setdefault(missing, []).append(pl.name)
+        with contextlib.redirect_stdout(io.StringIO()):   # any note repeats the first call's
+            tab_J = instrument_retrievals(cfg, pl, instruments, A_B_true, redist=True, sigma_1min=tab.attrs["sigma_1min"], bounds=bounds, F_bounds=F_bounds, n_jobs=n_jobs, verbose=False, **kw)
         # same rows in the same order: both tables come from the same instruments and noise levels
         tab_J["z_F"] = np.sqrt(np.clip(tab["chi2"].to_numpy() - tab_J["chi2"].to_numpy(), 0., None))
         for model, t in (("naive", tab), ("naive_redist", tab_J)):
             t = t.copy(); t.insert(0, "fit", model); t.insert(0, "planet", pl.name)
             parts.append(t)
+    if no_noise and verbose:
+        print("no noise level, so fitted without one and no Fisher sigma: " + "; ".join(
+            (", ".join(nn) + (f" (joint fit {', '.join(jo)} left out)" if jo else "")).strip() + f" for {', '.join(names)}" for (nn, jo), names in no_noise.items()))
     out = pd.concat(parts, ignore_index=True)
     out["half_chi2"] = 0.5 * out["chi2"]
     ps = out["fit"] == "naive"
