@@ -14,8 +14,10 @@
 #   3. Numerical knobs for convergence tests, all defaulting to the original behaviour: INSTELLCA_EPSREL / INSTELLCA_EPSABS /
 #      INSTELLCA_LIMIT are passed to both scipy.integrate.quad calls (original: scipy defaults), INSTELLCA_NLAT sets the number
 #      of latitude points (original: 500), INSTELLCA_TAG is appended to the output file names.
+#   4. INSTELLCA_MANUAL=1 skips the catalog folder: the script takes the path it takes when ./Exoplanet_Catalogs holds no
+#      CSV file, i.e. manual entry without the catalog question, and runs from any working directory without a clone of
+#      InstellCa. Default (unset or 0): the original behaviour, which must run with the InstellCa clone as working directory.
 #   The physics, integration limits, integrand and normalisation are unchanged.
-#   The script must still be run with the InstellCa clone as working directory (it reads ./Exoplanet_Catalogs).
 #
 # MIT License
 #
@@ -78,8 +80,9 @@ cwd=os.getcwd()
 extension = 'csv'
 cwd1=cwd+"/Exoplanet_Catalogs"
 cwd2=cwd+"/Limb_darkening_data"
-os.chdir(cwd1)
-files = glob.glob('*.{}'.format(extension))
+MANUAL = os.environ.get("INSTELLCA_MANUAL", "0") == "1"   # MOD
+if not MANUAL: os.chdir(cwd1)   # MOD: was os.chdir(cwd1)
+files = [] if MANUAL else glob.glob('*.{}'.format(extension))   # MOD: was files = glob.glob('*.{}'.format(extension))
 l=len(files)
 namef="exoplanet.eu_catalog.csv"
 exo=[]
