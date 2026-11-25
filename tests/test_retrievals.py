@@ -7,6 +7,20 @@ import pytest
 
 import dynesty_utils as du
 
+FIXED_GEOMETRY = ["TOI-2431b_MIRI-LRS_*.pkl", "TOI-2431b_JWST_NIRSpec*.pkl"]
+FREE_GEOMETRY = ["free_geometry/TOI-2431b_MIRI-LRS_*.pkl"]
+
+
+def example_fits(root, pattern):
+    fits = du.load_fits(str(root / "Dynesty Fits" / "example_runs" / pattern))
+    assert set(fits) == {"hyperillum", "naive", "naive_redist"}
+    return fits
+
+
+def best_sample(fit):
+    i = np.argmax(fit.results.logl)
+    return fit.results.samples[i], fit.results.logl[i]
+
 
 def test_simulated_noise_is_reproducible(cfg_lrs):
     """The noise of a simulated observation is sigma_bin times default_rng(seed).normal, so every run can be regenerated from its seed."""
@@ -16,27 +30,38 @@ def test_simulated_noise_is_reproducible(cfg_lrs):
     assert np.allclose(z, np.random.default_rng(7).normal(0., 1., z.size), rtol=0., atol=1e-10)
 
 
-@pytest.mark.parametrize("pattern", ["TOI-2431b_MIRI-LRS_*.pkl", "TOI-2431b_JWST_NIRSpec*.pkl", "free_geometry/TOI-2431b_MIRI-LRS_*.pkl"])
-def test_example_runs_reproduce_their_likelihood(root, newera_cube, pattern):
-    """The shipped retrievals load on any machine (their filter paths move into this repository), were run with the current forward model
-    (check_fit_current = 0), and their rebuilt likelihood reproduces the stored best fit."""
-    fits = du.load_fits(str(root / "Dynesty Fits" / "example_runs" / pattern))
-    assert set(fits) == {"hyperillum", "naive", "naive_redist"}
-    for fit in fits.values():
-        assert du.check_fit_current(fit) == 0.
-    fit = fits["naive"]
-    best = fit.results.samples[np.argmax(fit.results.logl)]
-    assert du.logl_from_fit(fit)(best) == pytest.approx(fit.results.logl.max(), abs=1e-6)
+@pytest.mark.parametrize("pattern", FIXED_GEOMETRY)
+def test_example_runs_reproduce_their_likelihood(root, pattern, monkeypatch):
+    """The shipped retrievals load on any machine (their filter paths move into this repository), and for every model the likelihood the current
+    code rebuilds from the pickle reproduces the stored best fit. The pickle carries the stellar grid of the run, so this needs no NewEra cube;
+    whether that grid is still the one the current code builds is checked by test_example_runs_are_current."""
+    monkeypatch.setattr(du, "check_fit_current", lambda *args, **kwargs: 0.)   # builds today's stellar grid, which needs the NewEra cube
+    for model, fit in example_fits(root, pattern).items():
+        theta, logl = best_sample(fit)
+        assert du.logl_from_fit(fit)(theta) == pytest.approx(logl, abs=1e-6), model
+
+
+@pytest.mark.parametrize("pattern", FIXED_GEOMETRY + FREE_GEOMETRY)
+def test_example_runs_are_current(root, newera_cube, pattern):
+    """With the NewEra cube: every shipped retrieval was run with the stellar grid the current code builds (check_fit_current = 0). The
+    free-geometry runs rebuild the stellar grid at every sampled geometry, so their likelihood is checked here too."""
+    for model, fit in example_fits(root, pattern).items():
+        assert du.check_fit_current(fit) == 0., model
+        if pattern in FREE_GEOMETRY:
+            theta, logl = best_sample(fit)
+            assert du.logl_from_fit(fit)(theta) == pytest.approx(logl, abs=1e-6), model
 
 
 def test_runs_from_another_machine_find_their_filters(root, tmp_path):
     """A pickle stores the absolute filter path of the machine that ran it; loading it elsewhere points the path into this repository."""
     source = sorted((root / "Dynesty Fits" / "example_runs").glob("TOI-2431b_JWST_NIRSpec*naive_priors*.pkl"))[0]
-    fit = pickle.load(open(source, "rb"))
+    with open(source, "rb") as f:
+        fit = pickle.load(f)
     for cfg in du.detector_cfgs(fit.meta["cfg"]):
         cfg.filter_path = "/another/machine/HyperPhase/Filters/Spiderman/" + Path(cfg.filter_path).name
     moved = tmp_path / source.name
-    pickle.dump(fit, open(moved, "wb"))
+    with open(moved, "wb") as f:
+        pickle.dump(fit, f)
     for cfg in du.detector_cfgs(du.load_fit(moved).meta["cfg"]):
         assert Path(cfg.filter_path).parent == root / "Filters" / "Spiderman"
         assert Path(cfg.filter_path).exists()

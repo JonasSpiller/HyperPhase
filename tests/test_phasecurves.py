@@ -1,14 +1,55 @@
 """Thermal and reflected phase curves with fSPIDERMAN and batman (Section 3.1 and Appendix B)."""
+from dataclasses import replace
+
 import numpy as np
 import pytest
+from scipy.constants import c, h, k
 
 import astro_utils
 import hyperillumination_phasecurve_utils as hpu
+import hyperillumination_utils as hu
 
 
 def thermal(planet, band, model, **kw):
     (l1, l2), path = band
     return hpu.thermal_PhaseCurve(planet, (l1, l2), filter_path=path, insolation_model=model, stellar_model="blackbody", **kw)
+
+
+def band_radiance(T, band):
+    """Photon-counting band radiance of a blackbody, the integral of B_lambda(T) R(lambda) lambda over the band, with the throughput R of the filter
+    file (electrons per photon): written out here, independently of SPIDERMAN and astro_utils."""
+    (l1, l2), path = band
+    lam_file, throughput = np.loadtxt(path).T
+    lam = np.linspace(l1, l2, 2001)
+    T = np.atleast_1d(T)[:, None]
+    with np.errstate(over="ignore", divide="ignore"):
+        B = 2. * h * c**2 / lam**5 / np.expm1(h * c / (lam * k * T))   # 0 at T = 0
+    return np.trapezoid(B * np.interp(lam, lam_file, throughput) * lam, lam, axis=1)
+
+
+def disk_flux(planet, band, model, hemisphere, **kw):
+    """F_p/F_star [ppm] of the hemisphere centred on the substellar ("day") or antistellar ("night") point, seen edge-on along the star-planet axis:
+    (R_p/R*)^2 2 int B(T(gamma)) |cos gamma| sin gamma dgamma / B(T_eff), with the surface temperature T(gamma) of hyperillumination_utils."""
+    gamma = np.linspace(0., np.pi / 2., 1001) if hemisphere == "day" else np.linspace(np.pi / 2., np.pi, 1001)
+    B = band_radiance(hu.surface_temperature(gamma, planet, model, **kw), band)
+    integral = 2. * np.trapezoid(B * np.abs(np.cos(gamma)) * np.sin(gamma), gamma)
+    return 1e6 * (planet.r1 / planet.r2)**2 * integral / band_radiance(planet.T2_eff, band)[0]
+
+
+@pytest.mark.parametrize("model", ["naive", "hyperillum"])
+def test_disk_integrated_flux_matches_direct_integration(toi2431b, lrs, model):
+    """SPIDERMAN's occultation depth and mid-transit nightside flux against the disk integral of the temperature map, edge-on. Catches a rotated or
+    transposed direct_T grid (which fails silently), a wrong stellar normalisation and a wrong band weighting. The penumbra is a thin ring along
+    the limb at mid-transit, so the nightside needs many more radial layers than SPIDERMAN's default (40 layers: 5 % too faint)."""
+    planet = replace(toi2431b, incl=90.)
+    kw = dict(A_B=0.2, emissivity_bol=1., u_bol=0.5)
+    _, _, depth, _ = thermal(planet, lrs, model, emissivity=1., include_transit=False, **kw)
+    assert depth == pytest.approx(disk_flux(planet, lrs, model, "day", **kw), rel=2e-3)
+    night, _ = hpu.nightside_flux(planet, lrs[0], model, filter_path=lrs[1], stellar_model="blackbody", emissivity=1., N_LAYERS=400, **kw)
+    if model == "naive":
+        assert night == 0.   # the point-source nightside is at 0 K
+    else:
+        assert night == pytest.approx(disk_flux(planet, lrs, model, "night", **kw), rel=5e-3)
 
 
 def test_point_source_without_redistribution(toi2431b, lrs):

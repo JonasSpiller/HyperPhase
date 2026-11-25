@@ -1,15 +1,16 @@
 # ---------------------------------------------------------------------------------------------------------------------
-# Modified copy of InstellCa_3.0.py (InstellCa, Exoplanet Instellation Calculator)
-#   Original: https://github.com/Mradumay137/InstellCa, commit 99225f4 (file last changed 2025-09-15),
-#   Copyright (c) 2021 Mradumay137 (Mradumay Sadh), MIT License. Reference: Sadh & Gavassino 2026, ApJ 997, 167.
-#   The MIT permission notice is reproduced at the end of this header; the original LICENSE file is at https://github.com/Mradumay137/InstellCa (commit 99225f4).
+# Modified copy of InstellCa_3.0.py (InstellCa, Exoplanet Instellation Calculator) by Mradumay Sadh
+#   Original: https://github.com/Mradumay137/InstellCa, commit 99225f4 (file last changed 2025-09-15).
+#   Reference: Sadh & Gavassino 2026, ApJ 997, 167.
+#   Distributed under the original's MIT License, whose copyright and permission notice end this header.
 #
 # Modifications (Jonas Spiller, 2026-11-01), marked "# MOD" below; everything else is verbatim:
 #   1. The limb-darkening coefficient u (hard-wired to 0.6 in the original) is read from the environment variable
 #      INSTELLCA_U (default 0.6), so the u = 0 branch of the original code can be run without editing the file.
-#   2. The computed arrays are written to a text file in a subfolder next to this script (they were only plotted in the original):
-#      (in the subfolder outfiles/); columns = angle from the substellar point [deg], geometric (extended-source) model [kW/m^2], inverse-square
-#      model [kW/m^2]. The figure is saved next to it as well, under the same name.
+#   2. The plotted arrays of the last planet are also written to a text file in outfiles/ next to this script (columns:
+#      angle from the substellar point [deg], geometric (extended-source) model [kW/m^2], inverse-square model [kW/m^2]),
+#      and the figure is saved there under the same name as a .png (the original saved it as <planet>.jpg in the working
+#      directory, or under a name typed in when several planets were plotted).
 #   3. Numerical knobs for convergence tests, all defaulting to the original behaviour: INSTELLCA_EPSREL / INSTELLCA_EPSABS /
 #      INSTELLCA_LIMIT are passed to both scipy.integrate.quad calls (original: scipy defaults), INSTELLCA_NLAT sets the number
 #      of latitude points (original: 500), INSTELLCA_TAG is appended to the output file names.
@@ -17,15 +18,26 @@
 #   The script must still be run with the InstellCa clone as working directory (it reads ./Exoplanet_Catalogs).
 #
 # MIT License
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
-# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice
-# and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS
-# PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
-# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-# ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#
+# Copyright (c) 2021 Mradumay137
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 # ---------------------------------------------------------------------------------------------------------------------
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-

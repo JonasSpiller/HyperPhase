@@ -810,7 +810,7 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
         try:
             with open(path, "wb") as f: pickle.dump(fit, f)
             meta["file"] = path
-            if scfg.print_progress: print(f"   saved -> {path}")
+            if scfg.print_progress: print(f"   saved -> {os.path.relpath(path)}")   # relative to the working directory, so notebook outputs carry no local path
         except Exception as e:   # a failed save must never destroy an hour-long run
             warnings.warn(f"could not save to {path}: {type(e).__name__}: {e}; the NestedFit is still returned", RuntimeWarning, stacklevel=2)
     return fit

@@ -1,6 +1,6 @@
 """Shared fixtures. The tests use a blackbody star, so they run without the NewEra spectral cube; the tests that need the cube skip without it.
 
-Run from the repository root:  pytest          (about a minute)
+Run from the repository root:  pytest          (about 30 s)
                                 pytest -m "not slow"
 """
 import contextlib

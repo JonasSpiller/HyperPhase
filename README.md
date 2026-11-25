@@ -10,7 +10,7 @@ redistribution and an albedo biased low. The code covers noiseless fits with Fis
 nuisance parameters, and nested-sampling retrievals of simulated observations.
 
 <p align="center">
-  <img src="docs/temperature_maps_TOI-2431b.png" width="560" alt="Surface temperature maps of TOI-2431 b for a point source and an extended star">
+  <img src="temperature_maps_TOI-2431b.png" width="560" alt="Surface temperature maps of TOI-2431 b for a point source and an extended star">
 </p>
 
 *Surface temperature of the bare rock TOI-2431 b ($a/R_\star = 2.08$, Bond albedo 0.2) for a point-source star (top) and the extended star
@@ -107,9 +107,10 @@ pytest -m "not slow"   # without the brute-force check of the fit with redistrib
 ```
 
 The tests check the irradiance against the closed form of the absorbed power (Eq. 5 of the paper), an adaptive quadrature and a brute-force
-integration over the stellar surface; that heat redistribution conserves energy; the fast light curves against direct SPIDERMAN evaluation; the
-noiseless fits against a brute-force χ² grid; and that the stored retrievals reproduce their likelihood. They use a blackbody star, so they run
-without the NewEra cube; the tests that need the cube or PandExo 2026.7 are skipped otherwise.
+integration over the stellar surface; that heat redistribution conserves energy; SPIDERMAN's occultation depth and nightside flux against a
+direct integral of the temperature map, and the fast light curves against direct SPIDERMAN evaluation; the noiseless fits against a brute-force
+χ² grid; and that the stored retrievals reproduce their likelihood. They use a blackbody star, so they run without the NewEra cube; the tests
+that need the cube (whether the stored retrievals were run with the current stellar grid) or PandExo 2026.7 are skipped otherwise.
 
 ## Reproducing the retrievals
 
@@ -150,8 +151,7 @@ stored retrievals in `Dynesty Fits/example_runs/` can be read with `dynesty_util
 - Stellar spectra: NewEra (Hauschildt et al. 2025, A&A 698, A47).
 - Limb darkening: ExoTiC-LD (Grant & Wakeford 2024).
 - Light curves: SPIDERMAN (Louden & Kreidberg 2018) through fSPIDERMAN, and batman (Kreidberg 2015). Nested sampling: dynesty (Speagle 2020).
-- `InstellCa_Comparison/InstellCa_3.0_exported.py` is a modified copy of InstellCa (Sadh & Gavassino 2026), MIT License; its header lists
-  the modifications.
+- Irradiance comparison: InstellCa (Sadh & Gavassino 2026), run from a modified copy (see License).
 
 ## Citation
 
@@ -159,4 +159,5 @@ If you use this code, please cite the paper above (see also `CITATION.cff`) and 
 
 ## License
 
-MIT, see `LICENSE`.
+MIT, see `LICENSE`. The exception is `InstellCa_Comparison/InstellCa_3.0_exported.py`: a modified copy of InstellCa,
+Copyright (c) 2021 Mradumay137, also under the MIT License. Its header lists the changes.
