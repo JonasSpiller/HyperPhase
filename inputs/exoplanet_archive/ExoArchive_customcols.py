@@ -24,8 +24,11 @@ from hyperphase.stellar import planck_ratio, planck_ratio_logderiv
 # Input: the newest file matching this pattern.
 INPUT_GLOB = "pscomppars_*.csv"
 
-# Extra planets to splice in. Lines starting with "#" are disabled. Columns absent from the file are left as NaN, and a custom planet replaces the
-# archive row of the same name.
+# Optional: planets the archive lacks, spliced into the table (the file does not exist by default). Format: a comma-separated header line of
+# archive column names (pl_name first, e.g. pl_orbper, pl_rade, pl_ratror, pl_ratdor, st_teff, st_rad, sy_kmag, sy_jmag), then one planet per line,
+# whitespace padded; lines starting with "#" are disabled. Columns absent from the file are left as NaN, and a custom planet replaces the archive
+# row of the same name. A planet the archive has needs no entry: curated parameters go into inputs/planets/curated_planets.csv, which takes
+# precedence over the archive whenever the package reads it.
 CUSTOM_PLANETS_FILE = "custom_planets.txt"
 
 # ADS bibcodes whose values get blanked out, e.g. ["2017AJ....153..136S"] for Stassun et al. 2017. Matched against the *_reflink columns. There is no
@@ -110,7 +113,7 @@ SHORT_COLUMNS = [
     "pl_trandur",               # transit duration T14 [hours]
     "delta_Na",                 # Roche-lobe-filling cloud depth [ppm], bound on a Na tail
     "disc_facility",            # discovery facility
-    "is_custom",                # True for planets spliced in from CUSTOM_PLANETS_FILE
+    "is_custom",                # True for planets spliced in from CUSTOM_PLANETS_FILE (if it exists)
 ]
 
 # Decimal places for the trimmed table.
@@ -143,7 +146,7 @@ def fill_derived(df, col, values):
 
 
 def read_custom_planets(path, columns):
-    """Parse custom_planets.txt: a comma-separated header line, then one planet per line, whitespace padded. Lines starting with "#" are disabled."""
+    """Parse CUSTOM_PLANETS_FILE: a comma-separated header line, then one planet per line, whitespace padded. Lines starting with "#" are disabled."""
     lines = [l.strip() for l in Path(path).read_text().splitlines() if l.strip() and not l.strip().startswith("#")]
     rows = [[field.strip() for field in line.split(",")] for line in lines]
     df = pd.DataFrame(rows[1:], columns=rows[0])
@@ -179,11 +182,13 @@ if MASK_BIBCODES:
 
 # Add custom planets
 
-custom = read_custom_planets(HERE / CUSTOM_PLANETS_FILE, [c for c in df.columns if c != "is_custom"])
-custom["is_custom"] = True
-df = df[~df["pl_name"].isin(custom["pl_name"])]
-df = pd.concat([df, custom], ignore_index=True)
-df["is_custom"] = df["is_custom"].fillna(False).astype(bool)
+if (HERE / CUSTOM_PLANETS_FILE).exists():
+    custom = read_custom_planets(HERE / CUSTOM_PLANETS_FILE, [c for c in df.columns if c != "is_custom"])
+    custom["is_custom"] = True
+    df = df[~df["pl_name"].isin(custom["pl_name"])]
+    df = pd.concat([df, custom], ignore_index=True)
+    df["is_custom"] = df["is_custom"].fillna(False).astype(bool)
+    print(f"Added {len(custom)} custom planets from {CUSTOM_PLANETS_FILE}")
 
 
 # Stellar-parameter overrides
