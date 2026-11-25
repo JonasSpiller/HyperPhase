@@ -40,9 +40,9 @@ Data that are not in the repository:
 
 - **Stellar spectra.** By default (`stellar_model="newera"`) the planet-to-star contrast is normalised by NewEra model spectra
   (Hauschildt et al. 2025) at each host's $T_{\rm eff}$, $\log g$ and [Fe/H]. This needs a 113 MB spectral cube that is not in the
-  repository: build it once with `stellar_model/NewEra/build_newera.ipynb` from the NewEra JWST product
+  repository: build it once with `inputs/stellar_model/NewEra/build_newera.ipynb` from the NewEra JWST product
   ([doi:10.25592/uhhfdm.18108](https://doi.org/10.25592/uhhfdm.18108), about 12 GB). Without it, pass `stellar_model="blackbody"`.
-- **Noise levels.** `stellar_model/Pandexo/pandexo_cache.csv` holds the PandExo precision of the planets and bands of the paper for
+- **Noise levels.** `inputs/noise/pandexo_cache.csv` holds the PandExo precision of the planets and bands of the paper for
   PandExo and Pandeia 2026.7. Other planets, bands or versions run PandExo, which needs the Pandeia reference data (`pandeia_refdata`) and
   the CDBS files (`PYSYN_CDBS`).
 
@@ -91,12 +91,15 @@ maps and the thermal and reflected curves step by step.
 |---|---|
 | `Utilities/` | The code. `hyperillumination_utils.py`: extended-source and point-source irradiance, heat redistribution, temperature maps. `hyperillumination_phasecurve_utils.py`: thermal (fSPIDERMAN) and reflected phase curves, stellar band fluxes, the model of the fits. `astro_utils.py`: orbits, Planck functions, brightness temperatures, stellar spectra, Roche limits. `newera_utils.py`: the NewEra spectral cube. `batman_utils.py`: transits and occultations with batman. `HItargets_utils.py`: planet parameters (NASA Exoplanet Archive and a curated table with one published source per planet), instrument bands, noise levels, the baseline settings. `simple_bias_analysis.py`: noiseless fits, Fisher uncertainties, evidence predictions, nuisance parameters, bias maps. `dynesty_utils.py`: simulated observations, likelihoods, nested-sampling retrievals. |
 | `forward_model/` | The forward model: irradiance and illumination zones, thermal, reflected and full phase curves, heat redistribution, the nightside signal, TESS candidates, speed and accuracy of the light curves. |
-| `bias_analysis/` | The noiseless analysis: albedo bias and spurious redistribution for single planets, over $(a/R_\star, T_{\rm eff})$ and for the planet sample; predicted Bayes factors; nuisance parameters; planets at their Roche limit. |
+| `bias_analysis/` | The noiseless analysis: albedo bias and spurious redistribution for single planets, over $(a/R_\star, T_{\rm eff})$ and for the planet sample; predicted Bayes factors; nuisance parameters; planets at their Roche limit; the blackbody against the NewEra star. |
 | `retrievals/` | Nested-sampling retrievals: `run_dynesty.py` (one run), `paper_runs/` (every retrieval of the paper), `example_runs/` (three stored retrievals of TOI-2431 b), and notebooks that inspect a run, validate the sampler and compare the retrievals with their predictions. |
-| `filters/` | Instrument throughputs (`filters/Spiderman/`) and the notebooks that made them. |
-| `stellar_model/` | NewEra spectral cube, limb-darkening coefficients, PandExo noise levels and their cache, the blackbody against the NewEra star. |
-| `exoplanet_archive/` | Download of the archive's PSCompPars table, derived columns, and the snapshot used. |
 | `instellca_comparison/` | Comparison of the irradiance with InstellCa (Sadh & Gavassino 2026). |
+| `inputs/` | What the model reads but does not compute, each with the notebooks that made it: |
+| `inputs/filters/` | Instrument throughputs (`inputs/filters/Spiderman/`). |
+| `inputs/stellar_model/` | NewEra spectral cube and limb-darkening coefficients. |
+| `inputs/noise/` | PandExo noise levels and their cache. |
+| `inputs/exoplanet_archive/` | Download of the archive's PSCompPars table, derived columns, and the snapshot used. |
+| `docs/` | Figures of this README. |
 | `tests/` | The test suite (see below). |
 
 ## Tests

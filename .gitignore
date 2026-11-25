@@ -50,14 +50,14 @@ ENV/
 # ========================
 # Downloaded data (not shipped; see README)
 # ========================
-/filters/raw SVO/
+/inputs/filters/raw SVO/
 *.throughput.dat
-/exoplanet_archive/NASAExoArchive_*_aggregate.csv
-/exoplanet_archive/pscomppars_*
-/stellar_model/ExoTiC-LD/
-/stellar_model/NewEra/raw/
-/stellar_model/NewEra/newera_cube_axes.npz
-/stellar_model/NewEra/newera_cube_flux.npy
+/inputs/exoplanet_archive/NASAExoArchive_*_aggregate.csv
+/inputs/exoplanet_archive/pscomppars_*
+/inputs/stellar_model/ExoTiC-LD/
+/inputs/stellar_model/NewEra/raw/
+/inputs/stellar_model/NewEra/newera_cube_axes.npz
+/inputs/stellar_model/NewEra/newera_cube_flux.npy
 
 # ========================
 # Generated outputs

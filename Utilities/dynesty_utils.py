@@ -826,10 +826,11 @@ def load_fit(path):
 
 
 def _relocate_filter_paths(fit):
-    """Point the filter files of a saved fit's cfg at this repository's filters/Spiderman/. The pickle stores the absolute path on the machine that ran the fit, and
-    check_fit_current, logl_from_fit and every forward-model call read the file. A stored path that exists is kept, unless it is the same file as the one in
-    filters/Spiderman/ under another spelling (the folder was Filters/ before 2026-11-24, which a case-insensitive disk still resolves; or a symlink): it then
-    takes the canonical spelling, which observed_band looks the instrument up by."""
+    """Point the filter files of a saved fit's cfg at this repository's inputs/filters/Spiderman/. The pickle stores the path on the machine that ran the fit
+    (Filters/Spiderman/ at the repository root before 2026-11-24; the example runs store it relative to the repository), and check_fit_current,
+    logl_from_fit and every forward-model call read the file. A stored path that exists is kept, unless it is the same file as the one in
+    inputs/filters/Spiderman/ under another spelling (a symlink, or a different case on a case-insensitive disk): it then takes the canonical spelling,
+    which observed_band looks the instrument up by."""
     if fit.meta.get("cfg") is None: return
     for c in detector_cfgs(fit.meta["cfg"]):
         path = getattr(c, "filter_path", None)

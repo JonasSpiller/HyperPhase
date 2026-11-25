@@ -24,7 +24,7 @@ dependencies:
       - colorama==0.4.6                # InstellCa_Comparison only
       - batman-package==2.5.3
       - dynesty==3.1.0
-      - exotic-ld==3.2.0               # limb-darkening coefficients (stellar_model/LimbDarkening.ipynb)
+      - exotic-ld==3.2.0               # limb-darkening coefficients (inputs/stellar_model/LimbDarkening.ipynb)
       - pandexo.engine==2026.7         # noise levels; needs the Pandeia reference data (pandeia_refdata) and PYSYN_CDBS
       - pandeia.engine==2026.7
       - synphot==1.7.0
