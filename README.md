@@ -31,10 +31,10 @@ conda activate hyperphase
 ```
 
 The thermal phase curves use [fSPIDERMAN](https://github.com/JonasSpiller/fSPIDERMAN), a fork of SPIDERMAN (Louden & Kreidberg 2018) with
-fixes for numpy ≥ 2, a faster light curve, a corrected band integration and a temperature-map interpolation that keeps a 0 K nightside at
-0 K. It is a C extension, so building it needs a C compiler. To use an existing environment instead, install fSPIDERMAN from its repository
-and this repository with `pip install -e .` (editable: the modules find the filter curves, stellar spectra and noise cache relative to the
-repository).
+fixes for numpy ≥ 2, a faster light curve, a corrected band integration, a temperature-map interpolation that keeps a 0 K nightside at
+0 K, and errors that raise Python exceptions where SPIDERMAN ends the process (a planet inside its star). It is a C extension, so building it
+needs a C compiler. To use an existing environment instead, install fSPIDERMAN from its repository and this repository with `pip install -e .`
+(editable: the modules find the filter curves, stellar spectra and noise cache relative to the repository).
 
 Data that are not in the repository:
 
@@ -108,9 +108,10 @@ pytest -m "not slow"   # without the brute-force check of the fit with redistrib
 
 The tests check the irradiance against the closed form of the absorbed power (Eq. 5 of the paper), an adaptive quadrature and a brute-force
 integration over the stellar surface; that heat redistribution conserves energy; SPIDERMAN's occultation depth and nightside flux against a
-direct integral of the temperature map, and the fast light curves against direct SPIDERMAN evaluation; the noiseless fits against a brute-force
-χ² grid; and that the stored retrievals reproduce their likelihood. They use a blackbody star, so they run without the NewEra cube; the tests
-that need the cube (whether the stored retrievals were run with the current stellar grid) or PandExo 2026.7 are skipped otherwise.
+direct integral of the temperature map, the fast light curves against direct SPIDERMAN evaluation, and that a planet inside its star raises an
+error instead of ending the process; the noiseless fits against a brute-force χ² grid; and that the stored retrievals reproduce their
+likelihood. They use a blackbody star, so they run without the NewEra cube; the tests that need the cube (whether the stored retrievals were
+run with the current stellar grid) or PandExo 2026.7 are skipped otherwise.
 
 ## Reproducing the retrievals
 

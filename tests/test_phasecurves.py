@@ -1,4 +1,6 @@
 """Thermal and reflected phase curves with fSPIDERMAN and batman (Section 3.1 and Appendix B)."""
+import subprocess
+import sys
 from dataclasses import replace
 
 import numpy as np
@@ -98,3 +100,24 @@ def test_extended_star_brightens_the_planet(toi2431b, lrs):
     night = {m: hpu.nightside_flux(toi2431b, lrs[0], insolation_model=m, **kw)[0] for m in ("hyperillum", "naive")}
     assert depth["hyperillum"] > depth["naive"]
     assert night["hyperillum"] > night["naive"]
+
+
+INSIDE_THE_STAR = """
+import sys
+sys.path.insert(0, sys.argv[1])
+from dataclasses import replace
+import hyperillumination_phasecurve_utils as hpu
+from HItargets_utils import filter_lambda, filter_loc, hi_planets_by_name
+planet = hi_planets_by_name("TOI-2431 b")
+planet = replace(planet, R=1.01 * planet.r2)   # a/R* = 1.01 < 1 + R_p/R* = 1.02
+hpu.thermal_PhaseCurve(planet, filter_lambda("MIRI/LRS"), filter_path=filter_loc("MIRI/LRS"), stellar_model="blackbody")
+"""
+
+
+def test_planet_inside_its_star_raises(root):
+    """A planet inside its star raises ValueError (fSPIDERMAN patch 7). Upstream SPIDERMAN and older fSPIDERMAN builds end the process with
+    exit status 0 instead, which would stop this test run without a summary and report it as passed: so the call runs in a process of its own."""
+    run = subprocess.run([sys.executable, "-c", INSIDE_THE_STAR, str(root / "Utilities")], cwd=root, capture_output=True, text=True, timeout=300)
+    error = run.stderr.strip().splitlines()[-1] if run.stderr.strip() else ""
+    assert error.startswith("ValueError") and "inside the star" in error, \
+        "fspiderman ends the process instead of raising: install fSPIDERMAN 81d300d or later (environment.yml)\n" + run.stdout[-2000:] + run.stderr[-2000:]
