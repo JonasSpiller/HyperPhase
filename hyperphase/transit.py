@@ -14,9 +14,7 @@ au = const.au.value
 
 
 def light_travel_time_correction(t, planet, t0=0.):
-    """
-    Returns timestamps corrected for the light travel time delay.
-    """
+    """The times t [days] shifted by the light travel time across the orbit (t0: mid-transit)."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     a_phys = a_AU * au  #physical semi-major axis in m
@@ -29,62 +27,55 @@ def light_travel_time_correction(t, planet, t0=0.):
 
 
 def flux_occultation(planet, fp, t, t0=0.):
-    """
-    Returns the secondary eclipse / occultation light curve (normalized flux array) computed via batman.
-    """
+    """Occultation light curve (normalised flux) from batman, for the planet-to-star flux ratio fp (the occultation depth)."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
-    params_occultation = batman.TransitParams() # called params_eclipse in Batman tutorials
+    params_occultation = batman.TransitParams()
 
-    params_occultation.t0 = t0  # time of transit center (units consistent with period)
-    params_occultation.per = period  # orbital period
-    params_occultation.rp = r1/r2  # planet radius (in units of stellar radii)
-    params_occultation.a = R/r2  # semi-major axis (in units of stellar radii)
-    params_occultation.inc = incl  # orbital inclination (in degrees)
-    params_occultation.ecc = ecc  # eccentricity
-    params_occultation.w = w  # longitude of periastron (in degrees)
+    params_occultation.t0 = t0  # time of mid-transit (units of period)
+    params_occultation.per = period
+    params_occultation.rp = r1/r2
+    params_occultation.a = R/r2
+    params_occultation.inc = incl  # [deg]
+    params_occultation.ecc = ecc
+    params_occultation.w = w  # argument of periastron [deg]
 
     params_occultation.limb_dark = "quadratic"  # required by batman, irrelevant for the occultation
     params_occultation.u = DEFAULT_U
 
-    params_occultation.fp = fp  # planet-to-star flux ratio (occultation depth)
-    params_occultation.t_secondary = occultation_time(period, ecc, w, t0=t0)  # time of occultation center
+    params_occultation.fp = fp
+    params_occultation.t_secondary = occultation_time(period, ecc, w, t0=t0)  # time of mid-occultation
 
-    m_occultation = batman.TransitModel(params_occultation, t, transittype="secondary", max_err=0.001)  # initializes model
+    m_occultation = batman.TransitModel(params_occultation, t, transittype="secondary", max_err=0.001)
 
     return m_occultation.light_curve(params_occultation)
 
 
 def flux_transit(planet, t, t0=0., u=DEFAULT_U):
-    """
-    Returns the primary transit light curve (normalized flux array) computed via batman.
-    Quadratic stellar limb darkening with coefficients u = [u1, u2].
-    """
+    """Transit light curve (normalised flux) from batman, with quadratic stellar limb darkening u = (u1, u2)."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     params_transit = batman.TransitParams()
 
-    params_transit.t0 = t0  # time of transit center (units consistent with period)
-    params_transit.per = period  # orbital period
-    params_transit.rp = r1/r2  # planet radius (in units of stellar radii)
-    params_transit.a = R/r2  # semi-major axis (in units of stellar radii)
-    params_transit.inc = incl  # orbital inclination (in degrees)
-    params_transit.ecc = ecc  # eccentricity
-    params_transit.w = w  # longitude of periastron (in degrees)
+    params_transit.t0 = t0  # time of mid-transit (units of period)
+    params_transit.per = period
+    params_transit.rp = r1/r2
+    params_transit.a = R/r2
+    params_transit.inc = incl  # [deg]
+    params_transit.ecc = ecc
+    params_transit.w = w  # argument of periastron [deg]
 
-    params_transit.limb_dark = "quadratic"  # limb darkening model
-    params_transit.u = u  # limb darkening coefficients [u1, u2]
+    params_transit.limb_dark = "quadratic"
+    params_transit.u = u
 
-    m_transit = batman.TransitModel(params_transit, t, max_err=0.001)  # initializes model
+    m_transit = batman.TransitModel(params_transit, t, max_err=0.001)
 
     return m_transit.light_curve(params_transit)
 
 
 def Cosine_PhaseCurve(planet, fp, offset=0, t=None, t0=0., Amp=1., u=DEFAULT_U):
-    """
-    Returns (t, flux): timestamps and the full phase curve combining transit, secondary eclipse / occultation, and sinusoidal phase modulation.
-    Phase modulation is computed from the true anomaly (correct for eccentric orbits); offset shifts the atmospheric hotspot in degrees.
-    """
+    """Returns (t, flux): the times corrected for the light travel time, and a phase curve of the transit, the occultation and a sinusoidal phase
+    modulation. The modulation follows the true anomaly (valid for eccentric orbits); offset shifts the hotspot [deg]."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     if t is None: t = np.linspace(0., period, 10000)

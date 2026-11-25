@@ -37,37 +37,34 @@ class PlanetParams:
         return (self.period, self.incl, self.ecc, self.w,
                 self.r1, self.r2, self.R, self.T2_eff, self.a_AU)
 
-    def terminator_penumbra(self, unit="rad"):  # arccos(x1): end of the fully-illuminated zone
+    def terminator_penumbra(self, unit="rad"):
+        """Angle from the substellar point where the fully illuminated zone ends, arccos((r1 + r2)/R), in unit "rad" or "deg"."""
         gp = np.arccos((self.r1 + self.r2) / self.R)
         return np.degrees(gp) if unit == "deg" else gp
 
-    def terminator_nightside(self, unit="rad"):  # arccos(x2): end of the penumbra / start of the night-side
+    def terminator_nightside(self, unit="rad"):
+        """Angle from the substellar point where the penumbra ends and the nightside begins, arccos((r1 - r2)/R), in unit "rad" or "deg"."""
         gp = np.arccos((self.r1 - self.r2) / self.R)
         return np.degrees(gp) if unit == "deg" else gp
 
-    def fraction_illuminated(self, extra=False): # Carter 2019
+    def fraction_illuminated(self, extra=False):
+        """Fraction of the surface that receives starlight (Carter 2019); extra=True splits it into the fully illuminated zone and the penumbra."""
         fraction_fullyilluminated = (1. - (self.r1 + self.r2) / self.R) / 2.
         fraction_penumbra = self.r2 / self.R
         if extra:
             return {"fully illuminated": fraction_fullyilluminated, "penumbra": fraction_penumbra}
         return fraction_fullyilluminated + fraction_penumbra
 
-    # Fractional change in substellar insolation/temperature through hyperillumination (compared to naive point-source approximation)
     def substellar_boost(self, insolation=True):
-        # the boost is not affected by hyperillumination at all, it is purely the stellar distance correction a-rp: the boost is (R/(R − r₁))² − 1 ≈ 2
-        # r₁/R
+        """Fractional excess of the substellar insolation (insolation=True) or temperature over the point-source value. A distance effect only: the
+        substellar point is r1 closer to the star, so the insolation boost is (R/(R - r1))^2 - 1 ~ 2 r1/R."""
         if insolation: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self)) - 1
         else: return (insolation_fullyilluminated_hyperillum(0, self)/naive_insolation(0, self))**0.25 - 1
 
-    def approx_occ_depth(self, eff_wavelength_range, A_B=None, f=2/3, emissivity_bol=None, emissivity=None, A_g=0.0, n_wl=400):
+    def approx_occ_depth(self, eff_wavelength_range, A_B=DEFAULT_A_B, f=2/3, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, A_g=0.0, n_wl=400):
         """Approximate (point-source) occultation depth [ppm] of a grey planet around a blackbody star: emissivity (r1/r2)^2 <B(T_day)> / <B(T2_eff)>
-        + A_g (r1/R)^2, with <.> the band average over eff_wavelength_range [m] weighted by the stellar photon flux. f is the redistribution factor of
-        Cowan & Agol (2011): 1/4 full redistribution, 1/2 uniform dayside, 2/3 no redistribution (disk-integrated), 1 substellar."""
-        # A_B, emissivity_bol and emissivity default to the baseline settings, resolved here: they are imported only after this class (see below)
-        if A_B is None: A_B = DEFAULT_A_B
-        if emissivity_bol is None: emissivity_bol = DEFAULT_EMISSIVITY_BOL
-        if emissivity is None: emissivity = DEFAULT_EMISSIVITY
-
+        + A_g (r1/R)^2, with <.> the photon-weighted top-hat average over eff_wavelength_range [m]. f is the redistribution factor of Cowan & Agol
+        (2011): 1/4 full redistribution, 1/2 uniform dayside, 2/3 no redistribution (disk-integrated), 1 substellar."""
         wl_min, wl_max = eff_wavelength_range # [m]
 
         # Point-source value ignoring hyper-illumination.

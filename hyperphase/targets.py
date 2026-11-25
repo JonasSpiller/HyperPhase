@@ -1,5 +1,5 @@
 """Planet parameters: the NASA Exoplanet Archive snapshot in inputs/exoplanet_archive/ and the curated parameters of
-inputs/planets/curated_planets.csv, which take precedence over the archive.
+inputs/planets/curated_planets.csv, which take precedence over the archive (see CUSTOM).
 
 hi_planets_by_name looks a planet up by name. register_planet and load_planets add planets (or replace curated ones) for the session; a
 PlanetParams built by hand needs neither, since every forward-model function takes the object itself."""
@@ -20,15 +20,15 @@ from hyperphase.roche import main_sequence_M_star, main_sequence_R_star
 #####   Archive
 ############################################################################################################################################
 
-# Aggregate table from ExoArchive_customcols.py. The newest match is used.
+# Aggregate table written by ExoArchive_customcols.py; the newest match is used.
 INPUT_GLOB = "NASAExoArchive_*_aggregate_short.csv"
 
 # Reject companions comparable in size to their star (white dwarf systems, unconverged grazing fits).
 MAX_R1_OVER_R2 = 0.3
 
-# Rocky planets: Rp < ROCKY_MAX_RADE Earth radii. The cut is on the ABSOLUTE radius pl_rade, not on Rp/Rs: a giant around an evolved star has a small
-# ratio (Kepler-91 b, Rp/Rs = 0.022 but 15.3 R_Earth) and would otherwise pass. A planet without pl_rade is dropped, as it cannot be confirmed rocky.
-# Single definition, shared by best_hi_planets, rocky_sample and plotting.maps.overlay_planets.
+# Rocky planets: Rp < ROCKY_MAX_RADE Earth radii. The cut is on the absolute radius pl_rade, not on Rp/Rs: a giant around an evolved star has a
+# small ratio (Kepler-91 b, Rp/Rs = 0.022 but 15.3 R_Earth) and would otherwise pass. A planet without pl_rade cannot be confirmed rocky and
+# is dropped.
 ROCKY_MAX_RADE = 1.7
 
 # Argument of periastron where the archive has none. 90 deg is the transit convention and is irrelevant at e = 0.
@@ -40,26 +40,23 @@ AU_IN_R_SUN = float(const.au / const.R_sun)
 #####   Curated planets
 ############################################################################################################################################
 
-# Planets with hand-curated parameters (inputs/planets/curated_planets.csv), each from a PUBLISHED source so that every value in the paper's target
-# table can be cited. The rule: a/R*, Rp/R* and i are the published fit; where no paper fits a/R*, the ratio of the paper's own tabulated a and R*
-# (TOI-2431 b, TOI-2260 b, Kepler-1323 b) or of its tabulated stellar density (TOI-1798.02); an inclination without a published value is acos(b /
-# (a/R*)) from the published b, or 90 deg where nothing is published (stated per entry); T14 is published where it exists and otherwise follows from
-# the published geometry (it only enters the PandExo in-transit integration count). Stellar parameters are published spectroscopic values or a named
-# catalogue (TICv8, Fulton & Petigura 2018, Berger et al. 2020). r2 = 1, so R is a/R*. T14 in hours. a_AU = (a/R*) x R* of the adopted star: it only
-# feeds the light-travel-time correction, and it lets apply_custom recover R* and Rp for the archive frame. Close-in rocky planets without a
-# citable, physically consistent geometry are deliberately NOT here: Kepler-780 b, -1340 b, -1368 b, -1547 b, -1566 b, -879 c. The source of each
-# entry is in the table's `source` column.
-# CUSTOM ({name: PlanetParams}) takes precedence over the archive everywhere: hi_planets_by_name returns these objects, and apply_custom writes them
-# into every archive frame. register_planet and load_planets add to it for the session.
+# Curated planets (inputs/planets/curated_planets.csv; register_planet and load_planets add more for the session): CUSTOM = {name: PlanetParams}.
+# They take precedence over the archive everywhere: hi_planets_by_name returns these objects, and apply_custom writes them into every archive frame.
+# Every value comes from a published source (the table's `source` column): a/R*, Rp/R* and i as fitted; where no paper fits a/R*, the ratio of
+# the paper's tabulated a and R* (TOI-2431 b, TOI-2260 b, Kepler-1323 b) or its stellar density (TOI-1798.02); i = acos(b / (a/R*)) from the
+# published b, or 90 deg where nothing is published (stated per entry); T14 as published, else from the geometry (it only sets PandExo's
+# in-transit integration count). Stellar parameters are published spectroscopic values or a named catalogue (TICv8, Fulton & Petigura 2018,
+# Berger et al. 2020). r2 = 1, so R is a/R*; T14 in hours. a_AU = (a/R*) x R* of the adopted star: it only feeds the light-travel-time
+# correction, and apply_custom recovers R* and Rp from it. Left out for lack of a citable, consistent geometry: Kepler-780 b, -1340 b, -1368 b,
+# -1547 b, -1566 b, -879 c.
 _PLANET_FIELDS = ("period", "incl", "ecc", "w", "r1", "r2", "R", "T2_eff", "a_AU", "T14", "logg", "feh")
 CUSTOM = {}
 SOURCES = {}   # name -> the source of a curated planet's values, where the table gives one
 
 
 def register_planet(planet, source=None, overwrite=False):
-    """Add a PlanetParams to the curated planets for this session (CUSTOM): hi_planets_by_name then returns it, and every archive frame
-    (apply_custom) carries its values. Set a_AU = (a/R*) x R* of the adopted star, so that the archive frame can recover R* and Rp from it. A planet
-    that is already curated raises unless overwrite=True. A PlanetParams can also be passed to every forward-model function without registering it."""
+    """Add a PlanetParams to the curated planets (CUSTOM) for this session; set its a_AU as described there. A planet that is already curated
+    raises unless overwrite=True."""
     key = _normalise(planet.name)
     old = next((k for k in CUSTOM if _normalise(k) == key), None)
     if old is not None and not overwrite: raise KeyError(f"{planet.name!r} is already a curated planet; pass overwrite=True to replace it")
@@ -90,27 +87,22 @@ def _curated(name):
 def _archive():
     """The aggregate table, loaded once, with the ranking metric and validity mask attached."""
     path = sorted(ARCHIVE_DIR.glob(INPUT_GLOB))[-1]
-    df = apply_custom(pd.read_csv(path, low_memory=False))   # the curated planets take precedence over the archive, also in the ranking metric below
+    df = apply_custom(pd.read_csv(path, low_memory=False))   # curated planets applied
     df["hyperillum_metric"] = (df["pl_ratror"] - 1.0) / df["a_over_r2"]   # (r1 - r2) / R
-    df["hyperillum_valid"] = (df["pl_ratror"] < MAX_R1_OVER_R2) & (df["a_over_r2"] > 1.0 + df["pl_ratror"]) # & df["st_teff"].notna()
+    df["hyperillum_valid"] = (df["pl_ratror"] < MAX_R1_OVER_R2) & (df["a_over_r2"] > 1.0 + df["pl_ratror"])
     df["_key"] = df["pl_name"].str.lower().str.replace(r"[\s\-_]", "", regex=True)
     return df
 
 
-# Archive columns that a PlanetParams field of a curated planet replaces, so that every consumer of the archive table sees the curated
-# values.
+# Archive columns that a PlanetParams field of a curated planet replaces.
 _FIELD_COLUMNS = {"period": "pl_orbper", "incl": "pl_orbincl", "ecc": "pl_orbeccen", "w": "pl_orblper", "T2_eff": "st_teff", "logg": "st_logg", "feh": "st_met", "a_AU": "pl_orbsmax", "T14": "pl_trandur"}
 R_EARTH_IN_R_SUN = float(const.R_earth / const.R_sun)
 
 
-# A copy of an archive table with the curated planets (CUSTOM) written into it, so that they take precedence over the archive not only in
-# hi_planets_by_name but also in the sample cuts and background scatter of the bias maps (rocky_sample / plotting.maps.overlay_planets /
-# planet_archive_value) and in best_hi_planets. A curated planet replaces pl_orbper, pl_orbincl, pl_orbeccen, pl_orblper, pl_ratror (r1/r2), pl_rprs2,
-# a_over_r2 and pl_ratdor (R/r2; e = 0 for all of them), st_teff, st_logg, st_met, pl_orbsmax (a_AU), pl_trandur (T14), st_rad = a_AU / (a/R*) (the
-# curated entries set a_AU = (a/R*) x R* of the adopted star for exactly this) and pl_rade = Rp/R* x st_rad. Columns derived from these in
-# ExoArchive_customcols.py (pl_Teq, the occultation depths, ESM, ...) are NOT recomputed. A curated planet the table does not have is left out
-# (nothing to patch), with no note: the table is what it is. Rows are matched on the normalised name.
 def apply_custom(df):
+    """A copy of an archive table with the curated planets (CUSTOM) written in, matched on the normalised name; a curated planet the table lacks
+    is skipped. It replaces the _FIELD_COLUMNS, pl_ratror and pl_rprs2 (r1/r2), a_over_r2 and pl_ratdor (R/r2), st_rad = a_AU / (a/R*) and
+    pl_rade = Rp/R* x st_rad. Columns derived from these in ExoArchive_customcols.py (pl_Teq, the occultation depths, ESM, ...) are not recomputed."""
     df = df.copy()
     key = df["pl_name"].map(_normalise)
     for name, pl in CUSTOM.items():
@@ -127,7 +119,7 @@ def apply_custom(df):
     return df
 
 
-_NOTED = set()   # (planet, note) pairs already printed, so each stellar-parameter fallback is reported once per session
+_NOTED = set()   # (planet, note) pairs already printed
 
 
 def _note_once(name, msg):
@@ -135,15 +127,12 @@ def _note_once(name, msg):
         _NOTED.add((name, msg)); print(f"{name}: {msg}")
 
 
-# log g and [Fe/H] of the host from an archive row (only the stellar SED uses them, stellar.stellar_spectrum), with fallbacks that are reported
-# instead of silent:
-# - no st_logg: log g = log10(G M / R^2) with M the main-sequence mass at st_teff (roche.main_sequence_M_star) and R = st_rad (the main-sequence
-#   radius where st_rad is missing too); the archive has no stellar-mass column. Where st_logg IS known this reproduces it to +0.003 dex (median;
-#   16-84 %: +-0.04, M dwarfs +-0.06-0.09), while a fixed 4.5 is off by -0.28 dex for
-#   M dwarfs (log g 4.5 instead of 5.0 shifts the LRS stellar flux by ~6 % at 2600 K). Without st_teff, 4.5 (such a host has no stellar spectrum
-#     anyway).
-# - no st_met: solar [Fe/H] = 0, the standard assumption (k changes by <= 0.8 % per 0.1 dex; inputs/stellar_model/NewEra/build_newera.ipynb).
 def _stellar_logg_feh(row):
+    """{"logg", "feh"} of the host from an archive row (only the stellar SED uses them), with reported fallbacks:
+    no st_logg: log10(G M / R^2), M the main-sequence mass at st_teff (the archive has no stellar mass) and R = st_rad, or the main-sequence
+      radius. Where st_logg is known, this reproduces it within +-0.04 dex (16-84 %), while a fixed 4.5 is off by -0.28 dex for M dwarfs.
+      Without st_teff: 4.5.
+    no st_met: solar [Fe/H] = 0."""
     name, out = row["pl_name"], {}
     logg = row["st_logg"]
     if pd.isna(logg):
@@ -185,15 +174,15 @@ def _params_from_row(row):
     return PlanetParams(**fields)
 
 
-# --------------------------------------------------------------------------
-# Planet Parameter Functions
-# --------------------------------------------------------------------------
+############################################################################################################################################
+#####   Planet parameter functions
+############################################################################################################################################
 def best_hi_planets(n_planets, max_rade=ROCKY_MAX_RADE):
-    """The n_planets ROCKY archive planets (pl_rade < max_rade Earth radii) most suitable for hyper-illumination, as {name: PlanetParams}, ordered strongest first.
-    max_rade=None drops the radius cut (giant planets included)."""
+    """The n_planets rocky archive planets (pl_rade < max_rade Earth radii; None: no cut) most suitable for hyper-illumination, ranked by
+    hyperillum_metric = (r1 - r2) / R, strongest first: {name: PlanetParams}."""
     df = _archive()
     ok = df["hyperillum_valid"]
-    if max_rade is not None: ok = ok & (df["pl_rade"] < max_rade)   # NaN radius -> False: cannot be confirmed rocky
+    if max_rade is not None: ok = ok & (df["pl_rade"] < max_rade)   # NaN radius -> False
     selected = df[ok].nsmallest(n_planets, "hyperillum_metric")
     return {row["pl_name"]: _curated(row["pl_name"]) or _params_from_row(row) for _, row in selected.iterrows()}
 
@@ -206,8 +195,8 @@ def _archive_row(name):
 
 
 def hi_planets_by_name(names):
-    """The PlanetParams of one planet, or {name: PlanetParams} for a list of names. Accepts loose spellings ('TOI-2431b'). Curated planets are returned
-    whether or not they exist in the archive. An unknown name raises KeyError."""
+    """The PlanetParams of one planet, or {name: PlanetParams} for a list of names. Accepts loose spellings ('TOI-2431b'). Curated planets
+    are returned whether or not they exist in the archive. An unknown name raises KeyError."""
     if isinstance(names, str):
         custom = _curated(names)
         if custom is not None:
@@ -227,7 +216,7 @@ def hi_planets_by_name(names):
 
 
 def best_hi_planets_df(n_planets, max_rade=ROCKY_MAX_RADE):
-    """Returns df of n_planets most suitable (rocky, see best_hi_planets) planets for hyper-illumination, including simple metrics."""
+    """best_hi_planets as a DataFrame, with simple hyper-illumination metrics."""
     planets = best_hi_planets(n_planets, max_rade=max_rade)
     df = pd.DataFrame([[name, *params.args, params.T14, params.terminator_penumbra(unit="deg"), params.terminator_nightside(unit="deg"), params.fraction_illuminated()*100, params.substellar_boost()*100] for name, params in planets.items()],
                         columns=["Name", "Period [d]", "Incl [°]", "Ecc", "w [°]", "Rp/Rs", "Rs/Rs", "a/Rs", "Ts_eff [K]", "a [AU]", "T14 [h]", "gamma_f [°]", "gamma_t [°]", "f_illum [%]", "sub_boost [%]"])
@@ -235,8 +224,9 @@ def best_hi_planets_df(n_planets, max_rade=ROCKY_MAX_RADE):
 
 
 def archive_densities(name):
-    """(rho_star, rho_p) [g/cm^3] of an archive planet by loose name: the host from st_logg and st_rad (rho = 3 g / (4 pi G R), the archive has no mass column), the planet from
-    pl_bmasse and pl_rade. NaN where the archive lacks a value; KeyError for a planet the archive does not have (the curated planets are not consulted)."""
+    """(rho_star, rho_p) [g/cm^3] of an archive planet by loose name: the host from st_logg and st_rad (rho = 3 g / (4 pi G R); the archive has
+    no stellar mass), the planet from pl_bmasse and pl_rade. NaN where the archive lacks a value; KeyError for a planet the archive does not
+    have (the curated planets are not consulted)."""
     row = _archive_row(name)
     g = 10. ** row["st_logg"]                                                   # [cm/s^2]
     R = row["st_rad"] * const.R_sun.cgs.value
@@ -248,19 +238,14 @@ def archive_densities(name):
 #####   The archive sample of the bias maps and per-planet tables
 ############################################################################################################################################
 
-# The archive aggregate table (path AGG) as every function here reads it: with the curated planets written into it (apply_custom), so
-# that the curated geometry and stellar parameters take precedence over the archive in the sample cuts, the background scatter and the per-planet
-# rows, exactly as in hi_planets_by_name. Cached per path: planet_archive_value is called once per planet and the CSV read is the slow part. Columns
-# derived in ExoArchive_customcols.py (ESM, pl_Teq, ...) stay the archive's.
 @lru_cache(maxsize=4)
 def archive_frame(AGG):
+    """The archive aggregate table at path AGG with the curated planets applied (apply_custom), one row per planet; cached per path."""
     return apply_custom(pd.read_csv(AGG)).drop_duplicates("pl_name")
 
 
-# ESM of a single archive planet by name, for a target drawn outside overlay_planets (the notebook's own planet). One archive value for a planet by
-# name, NaN where the archive has none or the value is missing: "ESM" for the tick labels / rows, "pl_rade" for the Rp row (curated
-# planets applied).
 def planet_archive_value(AGG, pl_name, column):
+    """One archive value (e.g. "ESM", "pl_rade") of a planet by loose name, curated planets applied; NaN where the planet or the value is missing."""
     d = archive_frame(AGG)
     row = d[d.pl_name.map(_normalise) == _normalise(pl_name)]
     return float(row[column].iloc[0]) if len(row) and pd.notna(row[column].iloc[0]) else np.nan
@@ -270,26 +255,23 @@ def planet_esm(AGG, pl_name):
     return planet_archive_value(AGG, pl_name, "ESM")
 
 
-# The archive planets that fall inside a bias map (x = a/Rs = `a_over_r2`, y = `ykey`), restricted to ROCKY planets, Rp < `max_rade` Earth radii. The
-# cut must be on the ABSOLUTE radius `pl_rade`, not on Rp/Rs (see ROCKY_MAX_RADE, the shared default, also used by best_hi_planets).
-# Factored out of overlay_planets so the maps and the per-planet bar figures select from exactly one sample definition; `exclude` takes loose
-# spellings. Reads the archive through archive_frame, i.e. with the curated planets applied (apply_custom).
 def rocky_sample(AGG, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=ROCKY_MAX_RADE, exclude=None):
-    _exo = archive_frame(AGG)   # curated planets applied: a/Rs, Rp/Rs, T_eff and Rp of the curated planets are the curated values, not the archive's
+    """The rocky archive planets (pl_rade < max_rade, see ROCKY_MAX_RADE) inside a bias map: a/Rs (a_over_r2) within a_rs_lim and ykey within
+    ylim, curated planets applied (archive_frame). exclude: names to leave out (loose spellings)."""
+    _exo = archive_frame(AGG)
     drop = [exclude] if isinstance(exclude, str) else list(exclude or [])
     keep = ~_exo.pl_name.map(_normalise).isin({_normalise(n) for n in drop})
     _phys = _exo[np.isfinite(_exo.a_over_r2) & np.isfinite(_exo.st_teff) & np.isfinite(_exo.pl_ratror)
                  & (_exo.pl_ratror > 0) & (_exo.pl_ratror < 1)
-                 & np.isfinite(_exo.pl_rade) & (_exo.pl_rade < max_rade)   # rocky cut (NaN radius -> dropped, cannot be confirmed rocky)
+                 & np.isfinite(_exo.pl_rade) & (_exo.pl_rade < max_rade)   # rocky cut (NaN radius -> dropped)
                  & keep].drop_duplicates("pl_name").copy()
     x = "a_over_r2"
     return _phys[(_phys[x] >= a_rs_lim[0]) & (_phys[x] <= a_rs_lim[1])
                  & (_phys[ykey] >= ylim[0]) & (_phys[ykey] <= ylim[1])]
 
 
-# The n rocky archive planets (Rp < max_rade) with the smallest a/Rs, by archive name, from archive_frame (curated planets applied), optionally
-# without `exclude` (loose spellings).
 def closest_in(AGG, n, max_rade=ROCKY_MAX_RADE, exclude=None):
+    """Archive names of the n rocky planets (pl_rade < max_rade) with the smallest a/Rs, curated planets applied. exclude: loose spellings."""
     d = archive_frame(AGG)
     drop = {_normalise(x) for x in ([exclude] if isinstance(exclude, str) else list(exclude or []))}
     ok = (np.isfinite(d.a_over_r2) & np.isfinite(d.pl_ratror) & (d.pl_ratror > 0) & (d.a_over_r2 > 1. + d.pl_ratror) & np.isfinite(d.pl_rade) & (d.pl_rade < max_rade)

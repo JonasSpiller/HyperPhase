@@ -11,10 +11,8 @@ from hyperphase.defaults import DEFAULT_A_B, DEFAULT_EMISSIVITY_BOL, DEFAULT_U_B
 from hyperphase.irradiance import _tabulate_insolation, check_redistribution, effective_insolation, surface_temperature, temperature_from_insolation
 
 
-# Dotted horizontal line marking the stellar flux on plots of the observed signal with the transit included (the "phase curve" views): y = 0 for F/F_s
-# - 1 in ppm, y = 1 (or 1e6) for normalised flux. Draws on ax (default: current axes); kw overrides the style. Shows up in the legend as "Stellar
-# Flux".
 def stellar_flux_line(ax=None, y=0., **kw):
+    """Dotted line at the stellar flux, labelled "Stellar Flux": y = 0 for F/F_s - 1 in ppm, 1 (or 1e6) for normalised flux; kw sets the style."""
     ax = ax or plt.gca()
     return ax.axhline(y, **{"color": "k", "ls": ":", "lw": 1., "label": "Stellar Flux", "zorder": 1, **kw})
 
@@ -33,12 +31,14 @@ def _plot_iso_gamma1_line(ax, gamma1_val, x_obs, y_obs, z_obs, color, linewidth=
             color=color, linewidth=linewidth, zorder=zorder)
 
 
-# unit="flux": re-radiated (bolometric) flux normalized to the substellar point - the insolation itself, except for the redistribution models (need
-# F for both units). incl [deg]: orbital inclination of the view (90 = edge-on, the default; pass planet.incl for the view as observed). The map is
-# symmetric about the star-planet axis, so only the angle between the line of sight and the substellar direction matters, cos = sin(incl)
-# cos(2 pi phase): quadrature looks the same at every inclination.
 def plot_insolmap(phase, planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, min_temp=None, max_temp=None, n_grid=1000, ax=None, theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_tab=3000, gp_table=None, incl=90.):
-
+    """The planet's visible disk at orbital `phase`, coloured by surface temperature or flux. Returns ax.
+    phase: 0 faces the dayside to the observer (occultation), 0.5 the nightside (transit); the light curves put the transit at t = 0 instead.
+    unit: "temperature", or "flux": the re-radiated bolometric flux normalised to the substellar point (the insolation itself, except for the
+    redistribution models, which need F for both units).
+    incl [deg]: inclination of the view (90 = edge-on; planet.incl for the view as observed). The map is symmetric about the star-planet axis,
+    so only the angle between the line of sight and the substellar direction matters, cos = sin(incl) cos(2 pi phase): quadrature looks the
+    same at every inclination."""
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
     check_redistribution(insolation_model, F)
@@ -46,9 +46,8 @@ def plot_insolmap(phase, planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivit
     mycmap = plt.cm.inferno   # same colormap spiderman's plot_planet defaults to
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
 
-    # body frame: x = substellar direction, z = spin axis (= orbit normal). The sub-observer direction lies at longitude `phase` from the substellar
-    # direction and 90 - incl above the orbital plane (incl = 90: the equatorial, edge-on view); "up" in the image is the spin axis projected onto the
-    # sky
+    # Body frame: x = substellar direction, z = spin axis (= orbit normal). The sub-observer direction lies at longitude `phase` from the
+    # substellar direction and 90 - incl above the orbital plane; "up" in the image is the spin axis projected onto the sky.
     sin_i, cos_i = np.sin(np.radians(incl)), np.cos(np.radians(incl))
     z_obs = np.array([sin_i * np.cos(2*np.pi*phase), -sin_i * np.sin(2*np.pi*phase), cos_i])    # direction toward the observer
     y_obs = np.array([-cos_i * np.cos(2*np.pi*phase), cos_i * np.sin(2*np.pi*phase), sin_i])    # projected spin axis -- unit and perp to z_obs
@@ -120,7 +119,7 @@ def plot_insolmap(phase, planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivit
 def plot_quad_insolmap(planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, min_temp=None, max_temp=None, n_grid=500,
                        theme='black', show_cax=True, show_axes=False, terminator=False, show_penumbra=None,
                        insolation_model="hyperillum", F=None, unit="flux", phase1=0., phase2=0.25, phase3=0.5, phase4=0.75, n_tab=3000, incl=90.):
-
+    """plot_insolmap at phase1..phase4 in a 2 x 2 grid with one colour scale. Returns fig."""
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
     check_redistribution(insolation_model, F)
@@ -158,12 +157,11 @@ def plot_quad_insolmap(planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_
     return fig
 
 
-# Several planets side by side, one column each, one row per insolation model, all at the same phase: the surface maps the models disagree on (e.g.
-# the Roche-limit planets of 06_roche_limit.ipynb). Each column has its own temperature scale, 0 to 1.1 x its substellar temperature (the
-# same in every model: there is no substellar boost), so the panels of one planet are comparable; the colour bar of the last column labels the rows.
-# The terminator is drawn in grey, the penumbra borders in green on the hyperillum panels only. planets: {name: PlanetParams} or a list. F is passed
-# to "naive_redist" only. Returns fig, axs (shape (len(models), len(planets))).
 def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None, n_grid=400, theme="black", terminator=True, show_penumbra="both", title=None, incl=90.):
+    """Surface temperature maps at one phase: one column per planet, one row per insolation model.
+    Each column has its own scale, 0 to 1.1 x its substellar temperature (the same in every model: there is no substellar boost), so the panels
+    of one planet are comparable. Terminator in grey, penumbra borders in green (hyperillum panels only). planets: {name: PlanetParams} or a list.
+    F goes to "naive_redist" only. Returns fig, axs (len(models) x len(planets))."""
     planets = list(planets.values()) if isinstance(planets, dict) else list(planets)
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")
     fig, axs = plt.subplots(len(models), len(planets), figsize=(4.3 * len(planets), 4.3 * len(models)), facecolor=bg, squeeze=False)
@@ -180,7 +178,7 @@ def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_
 
 def animation_insolmap(planet, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, filename="output_map", u_bol=DEFAULT_U_BOL, min_temp=None, max_temp=None, n_grid=500, theme='black', show_cax=True,
                        show_axes=False, terminator=False, show_penumbra=None, insolation_model="hyperillum", F=None, unit="flux", n_frames=1000, fps=50, phase_start=0., phase_end=1., n_tab=3000, incl=90.):
-
+    """plot_insolmap animated from phase_start to phase_end, written to <filename>.mp4 and <filename>.gif."""
     if unit not in ("temperature", "flux"):
         raise ValueError("unit must be either 'temperature' or 'flux'")
     check_redistribution(insolation_model, F)
@@ -200,8 +198,7 @@ def animation_insolmap(planet, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVIT
         if max_temp is None: max_temp = 1.0
 
 
-    # seed palette: the full inferno gradient (every color any frame's heatmap could possibly use) plus the background, terminator-line,
-    # penumbra-border, and colorbar-text colors
+    # GIF palette: the full inferno gradient (every colour a frame can use) plus the line and text colours
     grad = (plt.cm.inferno(np.linspace(0., 1., 200))[:, :3] * 255).astype(np.uint8)
     extra = np.array([bg_rgb, (128, 128, 128), (0, 128, 0), tc_rgb], dtype=np.uint8)   # background, terminator grey, penumbra green, colorbar text
     seed = np.concatenate([grad, extra], axis=0).reshape(1, -1, 3)

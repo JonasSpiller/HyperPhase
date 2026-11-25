@@ -44,7 +44,7 @@ class Normal:
 
 @dataclass(frozen=True)
 class TruncNormal:
-    """Normal(mu, sd) restricted to [lo, hi]. Use e.g. for r1/r2: the literature value with its error bar, hard-clipped to a physically allowed range."""
+    """Normal(mu, sd) truncated to [lo, hi], e.g. a literature value with its error bar, clipped to the physical range."""
     mu: float
     sd: float
     lo: float
@@ -61,23 +61,23 @@ class TruncNormal:
 # -------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Parameter:
-    name: str                # must be one of _KNOWN below
+    name: str                # one of _KNOWN below, or "offset_<label>"
     prior: object            # callable u -> value, e.g. Uniform(*A_B_BOUNDS)
     label: str = None        # LaTeX label for plots; defaults to the name
 
 
 @dataclass(frozen=True)
 class ParameterSet:
-    """This class defines the priors: the ordered free parameters of a fit.
-    Call by e.g.: pset = ParameterSet((Parameter("A_B", Uniform(*A_B_BOUNDS), r"$A_B$"), Parameter("offset", Uniform(*OFFSET_BOUNDS), "offset [ppm]")))
-    The ranges are the shared ones of defaults: A_B_BOUNDS, F_BOUNDS (physical) and OFFSET_BOUNDS.
+    """The priors: the ordered free parameters of a fit, with the shared ranges of defaults (A_B_BOUNDS, F_BOUNDS, OFFSET_BOUNDS), e.g.
+
+        pset = ParameterSet((Parameter("A_B", Uniform(*A_B_BOUNDS), r"$A_B$"), Parameter("offset", Uniform(*OFFSET_BOUNDS), "offset [ppm]")))
     """
     params: tuple
 
     def __post_init__(self):
         if not self.params: raise ValueError("a ParameterSet needs at least one free Parameter")
         if len(set(self.names)) != len(self.names): raise ValueError(f"duplicate parameter names in {self.names}")
-        bad = [n for n in self.names if n not in _KNOWN and not n.startswith("offset_")]   # "offset_<label>": one baseline per detector of a joint fit (JointGaussianLogL)
+        bad = [n for n in self.names if n not in _KNOWN and not n.startswith("offset_")]
         if bad: raise ValueError(f"unsupported parameter(s) {bad}; supported: {_KNOWN} and offset_<label> for the detectors of a joint fit")
 
     @property
@@ -97,7 +97,7 @@ class ParameterSet:
         return self.prior_transform(u)
 
     def sample(self, n, seed=0):
-        """n draws from the prior, shape (n, ndim). Feed straight to check_likelihood()."""
+        """n draws from the prior, shape (n, ndim)."""
         u = np.random.default_rng(seed).random((int(n), self.ndim))
         return np.array([self.prior_transform(ui) for ui in u])
 
@@ -114,9 +114,7 @@ class ParameterSet:
 # Geometry parameters model_pcurve accepts by name (its own kwarg spelling: a_rs = R/r2, rp_rs = r1/r2).
 _GEOMETRY = ("a_rs", "T_s", "rp_rs")
 
-# F (heat redistribution) belongs to insolation_model="naive_redist" alone: required there, rejected for the other models. The orbital inclination,
-# sampled either directly ("incl" [deg]) or through the impact parameter ("b", with i = arccos(b / (a/R*)) at the sampled or the planet's own a/R*):
-# whichever the planet's source fitted (Tas et al. 2026 fit b for TOI-2431 b, Malavolta et al. 2018 fit i for K2-141 b). Not a model_pcurve keyword:
-# _orbit_cfg puts it into the planet.
+# The orbital inclination, as "incl" [deg] or the impact parameter "b" (whichever the planet's source fitted: paper.GEOMETRY_PARAMS).
+# Not a model_pcurve keyword: _orbit_cfg puts it into the planet. F is for insolation_model="naive_redist" only.
 _ORBIT = ("incl", "b")
 _KNOWN = ("A_B", "offset", "F") + _GEOMETRY + _ORBIT

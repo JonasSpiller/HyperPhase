@@ -33,10 +33,7 @@ def eccentric_to_true(E, ecc):
 
 
 def occultation_time(period, ecc, w, t0=0.):
-    """
-    Returns the time (same units as period) of secondary eclipse / occultation.
-    Uses true-anomaly → eccentric anomaly → mean anomaly conversion (Kepler's equation).
-    """
+    """Time of mid-occultation (units of period), t0 the time of mid-transit, from the true, eccentric and mean anomalies (Kepler's equation)."""
     w_rad = np.radians(w)
     f_transit = np.pi / 2. - w_rad
     f_occultation = 3. * np.pi / 2. - w_rad
@@ -56,10 +53,7 @@ def AU_to_RS(a, rs):
 
 
 def true_anomaly(t, period, ecc, w, t0=0.):
-    """
-    Returns the true anomaly (radians, in [0, 2π)) at each timestamp in t.
-    t0 is the time of transit center.
-    """
+    """True anomaly (radians, in [0, 2 pi)) at the times t, t0 the time of mid-transit."""
     w_rad = np.radians(w)
     f_transit = np.pi / 2. - w_rad
     M_transit = eccentric_to_mean(true_to_eccentric(f_transit, ecc), ecc)
@@ -70,11 +64,8 @@ def true_anomaly(t, period, ecc, w, t0=0.):
 
 
 def transit_duration_t14(period_days, a_over_r2, r1_over_r2, inclination_deg):
-    """
-    First to fourth transit contact T14 in hours (Winn 2010, eq. 14).
-    NaN where the impact parameter exceeds 1 + r1/r2, i.e. the geometry does not actually transit.
-    Assumes circular orbit
-    """
+    """First to fourth transit contact T14 [h] for a circular orbit (Winn 2010, eq. 14). Takes pandas Series (it uses Series.where). NaN where the
+    planet does not transit (impact parameter above 1 + r1/r2)."""
     inc = np.radians(inclination_deg)
     b = a_over_r2 * np.cos(inc)
     arg = (1.0 + r1_over_r2) ** 2 - b ** 2

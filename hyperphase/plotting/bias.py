@@ -21,9 +21,9 @@ from hyperphase.plotting.style import (AXIS, C_HI, C_NAIVE, C_REDIST, FIT_ZERO, 
 #####   Bias against the true albedo, per-planet bars and retrieval scatter plots
 ############################################################################################################################################
 
-# Delta chi^2 landscape of the joint fit (d_chi2 from chi2_landscape minus the best fit) with the 68 % / 95 % contours for two parameters.
-# Returns fig, ax so the notebook can mark its fits and set the title.
 def plot_chi2_landscape(F_grid, AB_grid, d_chi2, F_max, vmax=30., figsize=(10, 7.5)):
+    """Delta chi^2 landscape of the joint fit (d_chi2 from chi2_landscape minus the best fit) with the 68 % / 95 % contours for two parameters.
+    Returns fig, ax."""
     fig, ax = plt.subplots(figsize=figsize)
     im = ax.pcolormesh(cell_edges(F_grid, 0., F_max), cell_edges(AB_grid, AB_grid[0], AB_grid[-1]), d_chi2,
                        cmap=SEQ_BLUE, vmin=0., vmax=vmax, shading="flat", rasterized=True)
@@ -36,14 +36,15 @@ def plot_chi2_landscape(F_grid, AB_grid, d_chi2, F_max, vmax=30., figsize=(10, 7
     return fig, ax
 
 
-# Bias summary of bias_vs_true_AB(..., redist=True) in one row: absolute | relative A_B bias | fitted F.
-# The joint fit is solid, the A_B-only fit dashed; i0 indexes the target, drawn as the green star with target_label.
 def plot_joint_bias_vs_true_AB(A_B_grid, sweep, i0, target_label, title):
+    """bias_vs_true_AB(..., redist=True) in one row: absolute and relative A_B bias, and the fitted F. Joint fit solid, A_B-only fit dashed;
+    i0 indexes the target, drawn as the green star with target_label. Returns fig, axs."""
     naive, joint = sweep["naive"], sweep["naive_redist"]
     panels = [(joint["bias_A_B"], naive["bias_A_B"], r"absolute bias  $A_{B,\rm fit}-A_B$", r"Absolute bias in recovered $A_B$"),
               (100. * joint["bias_A_B"] / A_B_grid, 100. * naive["bias_A_B"] / A_B_grid, r"relative bias  $(A_{B,\rm fit}-A_B)/A_B$ [%]", r"Relative bias in recovered $A_B$"),
               (joint["F_fit"], None, r"fitted $F$  (= bias, since $F_{\rm true}$ = 0)", r"Fitted heat redistribution $F$")]
-    below = (np.asarray(joint["A_B_fit"]) < 0.).any() or (np.asarray(naive["A_B_fit"]) < 0.).any()   # some fit below A_B = 0: draw that line on the two bias panels
+    # some fit below A_B = 0: draw the FIT_ZERO line on the two bias panels
+    below = (np.asarray(joint["A_B_fit"]) < 0.).any() or (np.asarray(naive["A_B_fit"]) < 0.).any()
     fit_zero = [-np.asarray(A_B_grid, dtype=float), np.full(len(A_B_grid), -100.), None]   # Delta A_B = -A_B, i.e. -100 %
     fig, axs = plt.subplots(1, 3, figsize=(21, 5.5))
     for a_, (y, y_naive, ylab, ttl), y0 in zip(axs, panels, fit_zero):
@@ -62,27 +63,27 @@ def plot_joint_bias_vs_true_AB(A_B_grid, sweep, i0, target_label, title):
     return fig, axs
 
 
-# One measurability panel: |bias| / sigma^Fisher on a log axis for each (y, style, label) curve, with the 1-sigma and 0.3-sigma reference lines. The
-# right axis is the same curve scaled by cfg.sigma_1min: the per-minute precision at which the bias is a 1-sigma effect (sigma^Fisher is strictly
-# proportional to sigma_1min).
 def measurability_panel(ax, A_B_grid, curves, i0, cfg, target_label, ylabel, title):
+    """One measurability panel: |bias| / sigma^Fisher on a log axis per (y, fmt, color, label) curve, with the 1-sigma and 0.3-sigma lines.
+    The right axis is the same curve times cfg.sigma_1min: the per-minute precision at which the bias is a 1-sigma effect (measurability)."""
     for y, fmt, color, label in curves:
         ax.plot(A_B_grid, y, fmt, color=color, lw=1.5, ms=5, label=label)
     ax.plot(A_B_grid[i0], curves[-1][0][i0], label=target_label, **TARGET)
     ax.axhline(1., color=INK, lw=.9, ls="--", label=r"bias $=1\,\sigma$  ($\sigma_{1\rm min}$ = $\sigma_{1\rm min, crit}$)")
     ax.axhline(.3, color=INK, lw=.8, ls=":", label=r"bias $=0.3\,\sigma$  (negligible: $+4\%$ on the total error)")
     ax.set_yscale("log")
-    sec = ax.secondary_yaxis("right", functions=(lambda v: cfg.sigma_1min * v, lambda v: v / cfg.sigma_1min))   # linear rescale -> a shift on the log axis
+    # linear rescale -> a shift on the log axis
+    sec = ax.secondary_yaxis("right", functions=(lambda v: cfg.sigma_1min * v, lambda v: v / cfg.sigma_1min))
     sec.set_ylabel(r"required $\sigma_{1\rm min, crit}$ [ppm/min]")
     ax.spines["right"].set_visible(True)
-    ax.legend(fontsize=9, frameon=True, facecolor="#fcfcfb", edgecolor="none", framealpha=0.9)   # the frame keeps the reference lines from running through the text
+    # the frame keeps the reference lines from running through the text
+    ax.legend(fontsize=9, frameon=True, facecolor="#fcfcfb", edgecolor="none", framealpha=0.9)
     ax.set_xlabel(r"true Bond albedo $A_B$"); ax.set_ylabel(ylabel); ax.set_title(title)
 
 
-# Measurability of the joint-fit biases, side by side: |Delta A_B| / sigma_A_B (joint solid, A_B-only dashed) and F_fit / sigma_F (the truth has F =
-# 0, so F_fit is the bias). Both sigmas are marginal Fisher widths with the baseline marginalised; sigma_A_B of the joint fit already includes the
-# widening from the F degeneracy.
 def plot_joint_measurability(A_B_grid, sweep, i0, cfg, target_label, title):
+    """Measurability of the joint-fit biases, side by side: |Delta A_B| / sigma_A_B (joint solid, A_B-only dashed) and F_fit / sigma_F (the
+    truth has F = 0, so F_fit is the bias). Marginal Fisher sigmas, baseline marginalised. Returns fig, axs."""
     naive, joint = sweep["naive"], sweep["naive_redist"]
     bs_naive, _ = measurability(naive["bias_A_B"], naive["sigma_A_B"], cfg.sigma_1min)
     bs_joint, _ = measurability(joint["bias_A_B"], joint["sigma_A_B"], cfg.sigma_1min)
@@ -98,11 +99,10 @@ def plot_joint_measurability(A_B_grid, sweep, i0, cfg, target_label, title):
     return fig, axs
 
 
-# The hyperillumination truth next to the best point-source fits of fit_truth (A_B-only and, if present, joint; baselines refitted) with one mock
-# noise realisation at sigma_bin, and the residuals truth - model before (naive at the true A_B) and after absorbing the bias, against the same noise.
-# fit: a fit_truth result for cfg at A_B_true; kw: its model_pcurve keywords. Times in hours from transit. Returns fig, ax so the notebook can set the
-# suptitle.
 def plot_fit_vs_truth(cfg, A_B_true, fit, seed=43, title=None, **kw):
+    """The hyperillumination truth next to the best point-source fits of fit_truth (A_B-only and, if present, joint; baselines refitted) with one
+    mock noise draw at sigma_bin, and the residuals truth - model before (naive at the true A_B) and after absorbing the bias.
+    fit: a fit_truth result for cfg at A_B_true; kw: its model_pcurve keywords. Times in hours from transit. Returns fig, ax."""
     t_, truth = model_pcurve(cfg, "hyperillum", A_B_true, **kw)
     naive_0 = model_pcurve(cfg, "naive", A_B_true, **kw)[1]
     fits = [("naive", "best $A_B$-only fit", "--", C_NAIVE), ("naive_redist", "best joint fit", "-.", C_REDIST)]
@@ -134,24 +134,22 @@ def plot_fit_vs_truth(cfg, A_B_true, fit, seed=43, title=None, **kw):
     return fig, ax
 
 
-# Bar chart of the expected significance z_F of the spurious F per row of a false-positive table, with the threshold z as a dashed line; bars at or
-# above it (FALSE_POSITIVE) in the hyperillumination colour. Rows under the axis: the fitted F and the nightside temperature it implies, the delivered
-# and critical noise, and the critical observing time. plot_false_F_bars: one planet on several instruments (instrument_false_F).
-# plot_planet_false_F_bars: several planets on one instrument (planet_false_F_table), the bars of `planets` (required, e.g.
-# paper.PAPER_PLANETS) in that order (select_planets), labelled with a/Rs.
 def plot_false_F_bars(tab, title=None, figsize=None, ax=None):
+    """Bars of the expected significance z_F of the spurious F, one per instrument of an instrument_false_F table, with the threshold z dashed;
+    bars at or above it (FALSE_POSITIVE) in the hyperillumination colour. Rows under the axis: the fitted F, the nightside temperature it
+    implies, the delivered and critical noise, and the critical observing time. Returns fig, ax."""
     if "name" in tab: raise TypeError("a per-planet table: use plot_planet_false_F_bars(tab, planets=...)")
     return _false_F_bars(tab, title, figsize, ax)
 
 
-# plot_planet_bias_bars shows one delivered and one critical noise per planet, which a joint fit of several detectors does not have (one level per
-# detector, sigma_1min:<label>); the false-positive bars (_false_F_bars) list them per detector instead.
 def _one_noise_level(tab):
+    """Refuse a joint fit's table (one noise level per detector) in plot_planet_bias_bars."""
     if any(c.startswith("sigma_1min:") for c in tab.columns):
         raise ValueError("a joint fit of several detectors has one noise level per detector (sigma_1min:<label> columns), not the single sigma_1min the bars show: print the table (noise_cols) or use plot_planet_retrievals")
 
 
 def plot_planet_false_F_bars(tab, title=None, figsize=None, ax=None, *, planets, verbose=True):
+    """plot_false_F_bars for a planet_false_F_table: one bar per planet of `planets`, in that order (select_planets), labelled with a/Rs."""
     return _false_F_bars(select_planets(tab, planets, verbose), title, figsize, ax)
 
 
@@ -177,12 +175,13 @@ def _false_F_bars(tab, title, figsize, ax):
         ax.set_xticks(x, [instrument_label(ins) for ins in tab["instrument"]], fontsize=8)
     ax.set_xlim(-0.6, len(tab) - 0.4)
     ax.grid(axis="x", visible=False)
-    def noise_label(col):   # "sigma_1min" / "sigma_1min_crit", or the per-detector column of a joint fit's per-planet table ("sigma_1min:NRS1")
+    def noise_label(col):
+        """Label of "sigma_1min", "sigma_1min_crit" or a joint fit's per-detector column ("sigma_1min:NRS1")."""
         base, _, det = col.partition(":")
         return (r"$\sigma_{1\,\rm min,\,crit}$" if base.endswith("_crit") else r"$\sigma_{1\,\rm min}$") + (f" {det}" if det else "") + " [ppm/min]"
     rows = [(r"fitted $F$", tab["F_fit"], "{:.4f}"),
             (r"implied $T_{\rm night}$ [K]", tab["T_night_fit"], "{:.0f}"),
-            *[(noise_label(c), tab[c], "{:.0f}") for c in noise_cols(tab)],   # the delivered and the critical noise, per detector for a joint fit's per-planet table
+            *[(noise_label(c), tab[c], "{:.0f}") for c in noise_cols(tab)],   # delivered and critical noise, per detector for a joint fit
             (r"$t_{\rm crit}$ [h]", tab["t_crit"], "{:.0f}")]
     below = _param_rows(ax, x, rows, y0=-0.17, dy=0.055)
     handles = [plt.Rectangle((0, 0), 1, 1, color=C_HI, label=f"{FALSE_POSITIVE} ($\\geq$ {z:g}$\\sigma$)"), plt.Rectangle((0, 0), 1, 1, color=C_NAIVE, label=NO_FALSE_POSITIVE),
@@ -191,12 +190,15 @@ def _false_F_bars(tab, title, figsize, ax):
     ax.set_title(title or (f"False-positive heat redistribution ({tab.attrs['n_orbits']} orbits)" if by_planet else f"{tab.attrs['planet']}: false-positive heat redistribution ({tab.attrs['n_orbits']} orbits per instrument)"),
                  fontweight="bold", pad=52)
     fig.tight_layout()
-    fig.subplots_adjust(bottom=min(0.6, 0.12 + below * ax.get_position().height))   # room for the tick labels and the parameter rows (axes fraction -> figure fraction)
+    # room for the tick labels and the parameter rows (axes fraction -> figure fraction)
+    fig.subplots_adjust(bottom=min(0.6, 0.12 + below * ax.get_position().height))
     return fig, ax
 
 
 def _bar_values(ax, bars, fmt, values=None, fontsize=8):
-    values = [b.get_height() for b in bars] if values is None else list(values)   # `values` prints a different number than the bar height, e.g. the SIGNED bias on an |bias| bar
+    """Write each bar's value at its end (below the bar for negative heights), skipping NaN. values: numbers to print instead of the heights,
+    e.g. the signed bias on an |bias| bar."""
+    values = [b.get_height() for b in bars] if values is None else list(values)
     for b, v in zip(bars, values):
         h = b.get_height()
         if not (np.isfinite(h) and np.isfinite(v)): continue
@@ -204,8 +206,8 @@ def _bar_values(ax, bars, fmt, values=None, fontsize=8):
                     xytext=(0, 3 if h >= 0 else -11), ha="center", va="bottom" if h >= 0 else "top", fontsize=fontsize)
 
 
-# Axis break between two stacked axes showing the same data: hide the facing spines and draw the diagonal break marks on both.
 def _break_marks(top, bottom, d=.5):
+    """Axis break between two stacked axes showing the same data: hide the facing spines and draw the diagonal break marks on both."""
     top.spines["bottom"].set_visible(False); bottom.spines["top"].set_visible(False)
     top.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
     c = bottom.spines["left"].get_edgecolor()
@@ -214,22 +216,7 @@ def _break_marks(top, bottom, d=.5):
     bottom.plot([0, 1], [1, 1], transform=bottom.transAxes, **kw)
 
 
-# Per-planet decision figure for planet_bias_table, one bar group per planet. For each quantity in `quantities` (default: the table's own) the panel
-#   bias and its Fisher sigma
-# and, only with sigma_crit_plot=True, a second one below it:   delivered sigma_1min vs the required sigma_1min_crit
-# The x tick labels carry each planet's a/Rs and (with `esm` in the table) ESM in brackets. In a noise panel a planet needs hyperillumination exactly
-# when the DELIVERED bar is at or below the REQUIRED one - that is bias >= 1 sigma. The verdict (bias_verdict) is written above every bar group.
-# "unconstrained" planets - Fisher sigma at or above the flat-prior std (dashed line in the bias panel) - get hatched bars in both panels: their bias
-# / sigma and sigma_1min_crit are ratios to a meaningless sigma and must not be read as "naive OK". quantities=("F", "A_B") needs a redist=True table
-# (it carries both fits' columns); the decision columns and the verdict are recomputed per quantity, so the table's own `quantity` does not matter.
-# log_noise: sigma_1min spans the sample's brightness range, so the noise panels are logarithmic by default. log_bias does the same for the bias
-# panels, where an unconstrained sigma (~1) would otherwise flatten the measurable ones (~0.05). bias_label / sigma_label override the first
-# quantity's legend labels. bias_break=(y_lo, y_hi) is the linear alternative to log_bias: each bias panel is split into a lower axis [0, y_lo] and a
-# compact upper one [y_hi, top] (height ratio BIAS_BREAK_RATIO) with an axis break between them. Pick y_lo above the flat-prior line so it stays
-# visible; a bar top that falls into the gap (y_lo, y_hi) shows no value annotation. hide_unconstrained=True drops every planet that is unconstrained
-# in any of the plotted quantities, together with the flat-prior line and the axis break (bias_break is ignored), since only the unconstrained sigmas
-# (~1) need either. It raises a ValueError if no planet is left. planets (required, e.g. paper.PAPER_PLANETS): the bar groups, in that order
-# (select_planets); planets the table does not have are listed in a note.
+# Per quantity: (bias column, sigma column, bias label, sigma label, y label, name)
 _BAR_Q = {"A_B": ("bias_A_B", "sigma_A_B", r"bias $\Delta A_B$", r"$\sigma_{A_B}^{\rm Fisher}$", r"$|\Delta A_B|$ and $\sigma_{A_B}$", "$A_B$"),
           "F":   ("F_fit",    "sigma_F",   r"spurious $F$",      r"$\sigma_F^{\rm Fisher}$",     r"$F_{\rm fit}$ and $\sigma_F$",     "$F$")}
 _VERDICT_STYLE = {VERDICT_NEEDS_HI: dict(color=C_HI, weight="bold"), VERDICT_NAIVE_OK: dict(color=C_NAIVE), VERDICT_UNCONSTRAINED: dict(color=MUTED, style="italic")}
@@ -237,10 +224,9 @@ _HATCH = "///"   # bars of unconstrained planets
 BIAS_BREAK_RATIO = (1, 3)   # upper : lower axis height of a broken bias panel
 
 
-# Parameter rows under the bottom panel of plot_planet_bias_bars: one text cell per planet per row, aligned with the bar groups (x in data units, y in
-# axes units below the tick labels). rows: [(label, values, fmt)], top row first; a non-finite value prints "-". Returns the axes-fraction the rows
-# extend below the axes, so the caller can reserve the space.
 def _param_rows(ax, x, rows, y0=-0.10, dy=0.075, fontsize=8):
+    """Text rows under an axes, one cell per bar group (x in data units, y in axes units below the tick labels).
+    rows: [(label, values, fmt)], top row first; a non-finite value prints "-". Returns how far the rows reach below the axes (axes fraction)."""
     for k, (label, vals, fmt) in enumerate(rows):
         y = y0 - k * dy
         ax.text(x[0] - 0.55, y, label, transform=ax.get_xaxis_transform(), ha="right", va="top", fontsize=fontsize, color=MUTED)
@@ -252,9 +238,18 @@ def _param_rows(ax, x, rows, y0=-0.10, dy=0.075, fontsize=8):
 def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.2f}", fmt_sigma="{:.2f}", fmt_noise="{:.0f}",
                           figsize=None, log_noise=True, log_bias=False, colors=(None, None), title=None, quantities=None, grid=True, param_rows=True, sigma_crit_plot=False,
                           bias_break=None, hide_unconstrained=True, *, planets, verbose=True):
+    """Bars of a planet_bias_table: |bias| next to its Fisher sigma for each quantity in `quantities` (default: the table's own; ("F", "A_B")
+    needs a redist=True table), and with sigma_crit_plot=True a panel of the delivered sigma_1min against sigma_1min_crit below each.
+    The verdict (bias_verdict, recomputed per quantity) is written above every bar group.
+    hide_unconstrained: drop the planets unconstrained in any plotted quantity; False draws them hatched, with the flat-prior std as a line.
+    param_rows: a/Rs, ESM, Rp, P, t_obs, T_eff and t_crit per quantity under the bars. log_noise / log_bias: logarithmic noise / bias axes.
+    bias_break=(y_lo, y_hi), with hide_unconstrained=False only: a linear bias axis split into [0, y_lo] and [y_hi, top] (BIAS_BREAK_RATIO);
+    a bar top in the gap shows no value.
+    bias_label / sigma_label: legend labels of the first quantity.
+    planets: the bar groups, in that order (select_planets). Rows without a noise level are left out. Returns fig, axes (top to bottom)."""
     tab = select_planets(tab, planets, verbose)
     _one_noise_level(tab)
-    no_noise = ~np.isfinite(tab["sigma_1min"])   # VERDICT_NO_NOISE rows: a bias but no Fisher sigma to set it against
+    no_noise = ~np.isfinite(tab["sigma_1min"])   # VERDICT_NO_NOISE rows
     if no_noise.any():
         if verbose: print(f"no noise level, so not in the bar plot (no Fisher sigma): {', '.join(tab.loc[no_noise, 'name'])}")
         if no_noise.all(): raise ValueError("none of the planets has a noise level on this instrument, so there is no Fisher sigma to plot (plot_planet_retrievals shows the fitted values)")
@@ -280,8 +275,7 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
     x, w = np.arange(len(tab)), 0.38
     per_q = 2 if sigma_crit_plot else 1   # panels per quantity
     n = per_q * len(quantities)
-    # param_rows: a/Rs, ESM, Rp, P, t_obs, Teff and one t_crit per quantity under the bottom panel (0.26 in each), and the tick label is then the bare
-    # name
+    # rows under the bottom panel (0.26 in of figure height each); the tick label is then the bare name
     rows = [(r"$a/R_\star$", tab["a_rs"], "{:.2f}"), ("ESM", tab["esm"], "{:.1f}"), (r"$R_p$ [$R_\oplus$]", tab["rp_rearth"], "{:.2f}"),
             ("$P$ [h]", tab["period"] * 24., "{:.2f}"), (r"$t_{\rm obs}$ [h]", tab["t_obs"], "{:.1f}"), (r"$T_{\rm eff}$ [K]", tab["T_eff"], "{:.0f}")] if param_rows else []
     fig = plt.figure(figsize=figsize or (13, 3.7 * n + 0.8 + 0.26 * (len(rows) + len(quantities) * param_rows)))
@@ -299,14 +293,16 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
         bias_sigma, crit = measurability(bias, sigma, tab["sigma_1min"])   # at each planet's own sigma_1min
         sigma_prior = tab.attrs["sigma_prior"][q]
         verdict = bias_verdict(bias_sigma, sigma, sigma_prior)
-        if param_rows: rows.append((rf"$t_{{\rm crit}}$({name}) [h]", critical_time(tab["t_obs"], bias_sigma, verdict), "{:.1f}"))   # "-" where the quantity is unconstrained
+        # "-" where the quantity is unconstrained
+        if param_rows: rows.append((rf"$t_{{\rm crit}}$({name}) [h]", critical_time(tab["t_obs"], bias_sigma, verdict), "{:.1f}"))
         hatch = [_HATCH if v == VERDICT_UNCONSTRAINED else None for v in verdict]
         bp = panels[per_q * k]   # the bias panel's axes: [a0] or [upper, lower]
         a0 = bp[-1]
         pre = f"{name}: " if len(quantities) > 1 else ""   # the panel pairs need telling apart only when there are several
 
-        for a_ in bp:   # every bar on both halves of a broken panel; each value annotation is clipped to the half its bar top lies in
-            b1 = a_.bar(x - w / 2, np.abs(bias), w, color=c_bias, hatch=hatch, label=blab)   # |bias|, so the two bars are directly comparable in height; the annotation keeps the sign
+        # every bar on both halves of a broken panel; each value annotation is clipped to the half its bar top lies in
+        for a_ in bp:
+            b1 = a_.bar(x - w / 2, np.abs(bias), w, color=c_bias, hatch=hatch, label=blab)   # |bias| bar, signed annotation
             b2 = a_.bar(x + w / 2, sigma, w, color=c_sig, hatch=hatch, label=slab)
             if not hide_unconstrained:
                 a_.axhline(sigma_prior, color=MUTED, ls="--", lw=1., label=f"flat-prior std {sigma_prior:.3f}  (Fisher $\\sigma$ above it: {name} unconstrained)")
@@ -314,9 +310,11 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
         if bias_break is not None:
             y_lo, y_hi = bias_break
             top = max(np.nanmax(np.abs(bias)), np.nanmax(sigma), sigma_prior)
-            bp[0].set_ylim(y_hi, y_hi + max(top - y_hi, .1 * y_hi) * 1.35); a0.set_ylim(0, y_lo)   # headroom relative to the short upper range, else its value annotations hit the top
+            # headroom relative to the short upper range, for its value annotations
+            bp[0].set_ylim(y_hi, y_hi + max(top - y_hi, .1 * y_hi) * 1.35); a0.set_ylim(0, y_lo)
             _break_marks(*bp)
-        for xi, v in zip(x, verdict): bp[0].text(xi, 1.01, v, transform=bp[0].get_xaxis_transform(), ha="center", va="bottom", fontsize=8, **_VERDICT_STYLE[v])   # the verdict row sits between the axes and the title (axes-height units, so independent of the y scale and clear of the legend)
+        # the verdict row, between the axes and the title (axes-height units, so independent of the y scale)
+        for xi, v in zip(x, verdict): bp[0].text(xi, 1.01, v, transform=bp[0].get_xaxis_transform(), ha="center", va="bottom", fontsize=8, **_VERDICT_STYLE[v])
         if log_bias: a0.set_yscale("log")
         a0.set_ylabel(ylab)
         hidden = "unconstrained planets hidden" if hide_unconstrained else f"hatched: {name} not measured at all"
@@ -338,7 +336,7 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
         a_.margins(y=.18)   # headroom for the value annotations
         if not grid: a_.grid(False)
     ax[-1].set_xticks(x)
-    if len(tab) < 3:   # room for 3 bar groups, centred: a table restricted to one or two planets (e.g. noise levels for only some of them) would otherwise stretch the bars over the whole width
+    if len(tab) < 3:   # room for 3 bar groups, centred, so one or two planets do not stretch over the whole width
         ax[-1].set_xlim((len(tab) - 1) / 2 - 1.5, (len(tab) - 1) / 2 + 1.5)
     if param_rows:
         ax[-1].set_xticklabels(tab["name"], fontsize=9)
@@ -347,24 +345,20 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
         esm = tab["esm"] if "esm" in tab else np.full(len(tab), np.nan)
         ax[-1].set_xticklabels([f"{nm} \n(ars {a:.2f}, ESM {_fmt_esm(e)})" for nm, a, e in zip(tab["name"], tab["a_rs"], esm)], rotation=30, ha="right")
     if title: fig.suptitle(title)
-    fig.tight_layout()   # includes the row texts (they are axes artists), so the bottom margin grows with the row count
+    fig.tight_layout()   # the row texts are axes artists, so the bottom margin grows with them
     return fig, ax
 
 
-# Plotted quantity of plot_instrument_retrievals: (value column, sigma column, truth column, y label, legend label of the dashed truth line, default
-# ylim, truth value, legend title, name). Truth column None: one line across the plot at the truth value - attrs["A_B_true"] for A_B, 0 for F (the
-# truth has no redistribution, so the plotted F_fit is the spurious F itself). "depth" (tables from instrument_depths): the true depth differs per
-# band, so each instrument gets its own dashed segment. "F" needs the joint fit's tables (redist=True); its hollow marker is F's own verdict (sigma_F
-# >= the flat-prior std of F_BOUNDS), not A_B's.
+# Per quantity of the retrieval plots: (value column, sigma column, truth column, y label, truth legend label, default ylim, truth value, legend
+# title, name). Truth column None: one dashed line at the truth value (attrs["A_B_true"] for A_B, 0 for F); "depth" has a true depth per band.
 _RETRIEVAL_Q = {"A_B": ("A_B_fit", "sigma_A_B", None, "Bond albedo $A_B$", "injected $A_B$ = {A_B_true:.2f}", (0., 0.4), "A_B_true", "fitted $A_B$", "$A_B$"),
                 "F": ("F_fit", "sigma_F", None, "heat redistribution $F$", "truth: $F$ = 0 (no redistribution)", (0., None), 0., "fitted $F$ (spurious: the truth has none)", "$F$"),
                 "depth": ("depth_fit", "sigma_depth", "depth_true", r"Occultation depth $\delta$ [ppm]", "true (hyperillumination) occultation depth", None, None, "occultation depth of the fit", "$A_B$")}
 
 
-# Marker groups of the plot: each table is one group, except that the rows of a depth table whose parameters come from a joint fit of several
-# detectors (fit != instrument, see instrument_depths) form their own group per joint key - the same parameters evaluated in each detector's band, so
-# they sit at the detector positions with another marker.
 def _retrieval_groups(tabs):
+    """Marker groups: one per table, except that the rows of a depth table from a joint fit (fit != instrument, instrument_depths) form a group
+    per joint key, at the detectors' positions."""
     groups = []
     for label, t in tabs.items():
         joint = (t["fit"] != t["instrument"]) if "fit" in t else np.zeros(len(t), bool)
@@ -375,34 +369,30 @@ def _retrieval_groups(tabs):
     return groups
 
 
-# Retrieved A_B per instrument for one planet, after Ramirez et al. 2026 (arXiv:2610.22338), Fig. 4: one colour per instrument, the marker at the
-# fitted A_B, dark / light error bars at sigma_levels x the Fisher sigma (default 1 and 2 sigma), the dashed line at the injected A_B_true. tabs: one
-# instrument_retrievals table, or {label: table} to set several fits side by side per instrument, one marker shape each (e.g. {"A_B only": ..., "joint
-# A_B + F": ...}, like the paper's phase curve / transit pairs). An unconstrained fit (A_B's Fisher sigma >= the flat-prior std of the physical range
-# A_B_BOUNDS) gets a hollow marker: its error bar is not a measurement. A joint fit of several detectors is its own x position in the A_B plot (its
-# "+"-joined key); in the depth plot (instrument_depths(joint=True)) its rows sit at the detectors' positions as an extra marker group
-# (_retrieval_groups), since the depth is a per-band quantity. quantity="depth" plots the fitted occultation depth with its propagated Fisher sigma
-# instead (tables from instrument_depths), with a dashed segment at each instrument's true depth. ylim defaults to [lower, 0.4] for A_B (the fits sit
-# below the injected A_B, since hyperillumination biases them low; error bars beyond the range are clipped by the axes), with lower = 0 unless a
-# fitted A_B is below 0.1: then it reaches 0.1 below the lowest fit, rounded down to a tenth. Below 0 a light band and the A_B = 0 line (FIT_ZERO)
-# mark the values outside the physical range. The depth autoscales. plot_planet_retrievals is the same plot for planet_bias_table tables: one position
-# per PLANET of `planets` (required, e.g. paper.PAPER_PLANETS), in that order, on one instrument (the tick label then carries the planet's
-# a/Rs); every planet of the list is shown, unconstrained ones as hollow markers. The fits side by side per position work the same way.
 def plot_instrument_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), markers=("o", "s", "D", "^"), ylim="default", title=None, figsize=None, ax=None):
+    """Fitted values per instrument for one planet (after Ramirez et al. 2026, arXiv:2610.22338, Fig. 4): one colour per instrument, error bars
+    at sigma_levels x the Fisher sigma, dashed line at the truth.
+    tabs: an instrument_retrievals table, or {label: table} for several fits side by side (one marker shape each). A joint fit of several
+    detectors is its own position ("+"-joined key); in the depth plot its rows sit at its detectors' positions.
+    quantity: "A_B", "F" (redist=True tables) or "depth" (instrument_depths tables, a dashed segment at each instrument's true depth).
+    Hollow: unconstrained (for F by its own flat-prior std); half-filled: no noise level; "railed": the fit on a bound.
+    ylim: "default" is retrieval_ylim for A_B, with values below A_B = 0 shaded; the depth autoscales. Returns fig, ax."""
     tabs = tabs if isinstance(tabs, dict) else {None: tabs}
     if any("instrument" not in t for t in tabs.values()): raise TypeError("a per-planet table: use plot_planet_retrievals(tabs, planets=...)")
     return _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize, ax, "instrument")
 
 
 def plot_planet_retrievals(tabs, quantity="A_B", sigma_levels=(1, 2), markers=("o", "s", "D", "^"), ylim="default", title=None, figsize=None, ax=None, *, planets, verbose=True):
+    """plot_instrument_retrievals for planet_bias_table tables on one instrument: one position per planet of `planets`, in that order, labelled
+    with its a/Rs."""
     tabs = tabs if isinstance(tabs, dict) else {None: tabs}
     return _plot_retrievals({k: select_planets(t, planets, verbose) for k, t in tabs.items()}, quantity, sigma_levels, markers, ylim, title, figsize, ax, "name")
 
 
-# The default y range of an A_B retrieval plot over several tables: (lower, top), lower = 0 unless a fitted A_B is below 0.1, then 0.1 below the
-# lowest fit rounded down to a tenth. Pass it as ylim= to every panel of a figure whose retrieval panels share the y axis (sharey=True), so each panel
-# draws the A_B < 0 band of the common range.
 def retrieval_ylim(tabs, top=None):
+    """Default y range of an A_B retrieval plot over several tables: (lower, top). lower = 0 unless a fitted A_B is below 0.1, then 0.1 below
+    the lowest fit rounded down to a tenth; top defaults to 0.4. Pass it as ylim= to panels that share the y axis, so each draws the A_B < 0
+    band of the common range."""
     lo = np.nanmin([np.nanmin(t["A_B_fit"]) for t in tabs])
     return (min(0., np.floor(10. * lo) / 10. - 0.1), _RETRIEVAL_Q["A_B"][5][1] if top is None else top)
 
@@ -412,12 +402,13 @@ def _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize
     A_B_true = first.attrs["A_B_true"]
     col, sig, truth_col, ylabel, ref_label, ylim_q, ref, legend_title, qname = _RETRIEVAL_Q[quantity]
     ref = first.attrs[ref] if isinstance(ref, str) else ref   # the dashed truth line (truth_col None)
-    sp = first.attrs.get("sigma_prior")   # F's flat-prior std: planet_bias_table stores {quantity: std}, instrument_retrievals a single A_B value (then F_bounds gives it)
+    # F's flat-prior std: planet_bias_table stores {quantity: std}, instrument_retrievals only A_B's (then from F_BOUNDS)
+    sp = first.attrs.get("sigma_prior")
     sigma_prior_F = sp["F"] if isinstance(sp, dict) else flat_prior_sigma(F_BOUNDS)
     groups = _retrieval_groups(tabs)
     if ylim == "default":
         ylim = ylim_q
-        if quantity == "A_B":   # down to the lowest fitted A_B: the fits are not railed at the physical floor (A_B_FIT_BOUNDS), so it can lie below 0
+        if quantity == "A_B":   # down to the lowest fit, which can lie below 0 (A_B_FIT_BOUNDS)
             ylim = retrieval_ylim([g for _, g in groups], ylim_q[1])
     instruments = list(dict.fromkeys(ins for _, g in groups for ins in g[xcol]))   # x positions, in order of first appearance
     color = {ins: INSTRUMENT_COLORS[k % len(INSTRUMENT_COLORS)] for k, ins in enumerate(instruments)}
@@ -432,21 +423,23 @@ def _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize
         for j, k in enumerate(present):
             x, c = instruments.index(ins) + (j - (len(present) - 1) / 2) * step, color[ins]
             r = groups[k][1][groups[k][1][xcol] == ins].iloc[0]
-            if r.get("verdict") == VERDICT_NO_NOISE:   # no noise level: the fitted value alone, half-filled, no error bar
+            if r.get("verdict") == VERDICT_NO_NOISE:   # the fitted value alone: half-filled, no error bar
                 ax.plot(x, r[col], markers[k % len(markers)], ms=8, color=c, fillstyle="left", markerfacecoloralt="#fcfcfb", mew=1.6, zorder=4)
                 continue
-            if quantity == "A_B" and bool(is_railed(r[col], first.attrs.get("bounds", A_B_FIT_BOUNDS))):   # A_B on a bound: no albedo reproduces the truth, a Fisher sigma there means nothing
+            # A_B on a bound: no albedo reproduces the truth, and a Fisher sigma there means nothing
+            if quantity == "A_B" and bool(is_railed(r[col], first.attrs.get("bounds", A_B_FIT_BOUNDS))):
                 ax.plot(x, r[col], markers[k % len(markers)], ms=8, color=c, mfc="#fcfcfb", mew=1.6, zorder=4)
                 ax.annotate("railed", (x, r[col]), textcoords="offset points", xytext=(0, 8), ha="center", va="bottom", fontsize=7, color=MUTED, rotation=90)
                 continue
-            for lev, alpha in zip(sorted(sigma_levels, reverse=True), np.linspace(.3, 1., len(sigma_levels))):   # widest bar first (lightest), the 1 sigma bar on top
+            # widest bar first (lightest), the 1 sigma bar on top
+            for lev, alpha in zip(sorted(sigma_levels, reverse=True), np.linspace(.3, 1., len(sigma_levels))):
                 ax.errorbar(x, r[col], yerr=lev * r[sig], fmt="none", ecolor=c, alpha=alpha, elinewidth=1.8, capsize=3.5, capthick=1.5, zorder=3)
             hollow = (r["verdict"] == VERDICT_UNCONSTRAINED) if quantity != "F" else (not np.isfinite(r[sig]) or r[sig] >= sigma_prior_F)
             ax.plot(x, r[col], markers[k % len(markers)], ms=8, color=c, mfc="#fcfcfb" if hollow else c, mew=1.6, zorder=4)
 
     if truth_col is None:
         ax.axhline(ref, color="#333333", ls="--", lw=1.8, zorder=2)
-    else:   # the truth of an instrument does not depend on the fit, so take it from the first group that has the instrument
+    else:   # an instrument's true depth, from the first group that has it
         for ins in instruments:
             y_true = next(g.loc[g[xcol] == ins, truth_col].iloc[0] for _, g in groups if (g[xcol] == ins).any())
             ax.hlines(y_true, instruments.index(ins) - 0.4, instruments.index(ins) + 0.4, color="#333333", ls="--", lw=1.8, zorder=2)
@@ -463,7 +456,7 @@ def _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize
         ax.axhspan(ax.get_ylim()[0], 0., color="#ecebe6", lw=0, zorder=0)
         ax.axhline(0., zorder=2.5, **FIT_ZERO)
     ax.set_ylabel(ylabel)
-    ax.grid(False)   # the paper's look: full frame, inward ticks on all sides, minor ticks on y
+    ax.grid(False)   # full frame, inward ticks on all sides, minor ticks on y
     for s in ("top", "right"): ax.spines[s].set_visible(True)
     for s in ax.spines.values(): s.set_color(INK); s.set_linewidth(1.)
     ax.minorticks_on(); ax.tick_params(axis="x", which="minor", bottom=False, top=False)
@@ -489,7 +482,7 @@ def _plot_retrievals(tabs, quantity, sigma_levels, markers, ylim, title, figsize
 
 
 ############################################################################################################################################
-#####   Nightside temperature (06_nightside_temperature.ipynb)
+#####   Nightside temperature
 ############################################################################################################################################
 def planet_label(pl, newline=True):
     sep = "\n" if newline else ", "
@@ -497,8 +490,9 @@ def planet_label(pl, newline=True):
 
 
 def plot_nightside_survey(survey, pls, z_detect=2., noise_label=r"$\sigma_{\rm amp}$"):
-    '''All planets in one band (x: planet, ordered as pls). Top: thermal nightside signal at mid-transit, edge-on, against the amplitude noise sigma_amp (FittingConfig.sigma_amp). Bottom: true edge-on T_b,night against the
-    uniform nightside T_night^KL of the point-source fit with redistribution, annotated with the offset and z_F (filled: spurious F detected, z_F >= z_detect; railed fits are left out).'''
+    """All planets in one band (x: planet, in the order of pls). Top: the thermal nightside signal at mid-transit, edge-on, against the amplitude
+    noise sigma_amp (FittingConfig.sigma_amp). Bottom: the true edge-on T_b,night against the uniform nightside T_night^KL of the point-source fit
+    with redistribution, annotated with the offset and z_F (filled: z_F >= z_detect; railed fits are left out). Returns fig."""
     d = survey.set_index("name").loc[list(pls)]
     x, det = np.arange(len(d)), (d["z_F"] >= z_detect).to_numpy()
     fig, (ax, ax2) = plt.subplots(2, 1, figsize=(11, 8), sharex=True, gridspec_kw=dict(height_ratios=(1, 1.4)))
@@ -522,9 +516,10 @@ def plot_nightside_survey(survey, pls, z_detect=2., noise_label=r"$\sigma_{\rm a
 
 
 def plot_nightside_spectra(night, fits, pls, names, z_detect=2., noise_label=r"$\sigma_{\rm amp}$"):
-    '''One column per planet, against wavelength (horizontal bars: band ranges). Top: thermal nightside signal at mid-transit, edge-on and at the planet's inclination, the point-source value
-    at the planet's inclination (the dayside seen past the pole; 0 for an edge-on planet) and the amplitude noise sigma_amp. Bottom: T_b,night (edge-on, planet's inclination) and T_night^KL of the point-source fit with
-    redistribution per band (filled: z_F >= z_detect); a joint fit of several detectors is a line across their bands, a railed fit a grey "railed" mark.'''
+    """One column per planet, against wavelength (horizontal bars: band ranges). Top: the thermal nightside signal at mid-transit, edge-on and at
+    the planet's inclination, the point-source value at the planet's inclination (the dayside seen past the pole; 0 edge-on) and sigma_amp.
+    Bottom: T_b,night (edge-on, planet's inclination) and T_night^KL of the point-source fit with redistribution per band (filled: z_F >=
+    z_detect); a joint fit of several detectors is a line across their bands, a railed fit a grey "railed" mark. Returns fig."""
     fig, axs = plt.subplots(2, len(names), figsize=(6.2 * len(names), 8.5), sharex=True, sharey="row", squeeze=False)
     for j, nm in enumerate(names):
         ax, ax2 = axs[:, j]
@@ -562,7 +557,8 @@ def plot_nightside_spectra(night, fits, pls, names, z_detect=2., noise_label=r"$
 
 
 def plot_sg_comparison(sg, band_label="MIRI/LRS"):
-    '''Sadh & Gavassino (2026) Table 2 comparison, one row per planet: dayside and nightside temperature under each hemisphere definition (columns <key>_day / <key>_night of sg: pub, uniform, area, disk, band and teske, see hemisphere_temperatures), and A_T.'''
+    """Comparison with Sadh & Gavassino (2026) Table 2, one row per planet: dayside and nightside temperature under each hemisphere definition
+    (columns <key>_day / <key>_night of sg for pub, uniform, area, disk and band, and teske; see hemisphere_temperatures), and A_T. Returns fig."""
     names, y = list(sg["name"]), np.arange(len(sg))[::-1]
     fig, axs = plt.subplots(1, 3, figsize=(17, 5.), sharey=True, gridspec_kw=dict(width_ratios=(1.25, 1.25, 1.)))
     series = [("pub", "*", INK, True, 12, "S&G 2026 Table 2 / eq. 18"),
@@ -587,15 +583,14 @@ def plot_sg_comparison(sg, band_label="MIRI/LRS"):
 
 
 ############################################################################################################################################
-#####   Expected evidence: where the Bayes factor comes from (04_evidence_prediction.ipynb)
+#####   Expected evidence: where the Bayes factor comes from
 ############################################################################################################################################
 
-# Per-bin evidence figure: one column per detector of every entry of `cases`, in wavelength order ({label: FittingConfig or detector set}, e.g.
-# MIRI/LRS next to the joint NIRSpec fit). Top: the residual truth - fitted point-source model (baseline removed) unbinned and per bin, against +-
-# sigma_bin. Bottom: r_perp^2 per bin, which sums to chi2_min = 2 <ln B> over all bins of a fit, with the transit and occultation windows shaded and
-# the quadrature windows hatched (phase_windows). Returns fig, axes (2 x n_columns) and {label: evidence_residual} for the budgets. kw: the
-# model_pcurve keywords of truth and fit.
 def plot_evidence_bins(cases, A_B_true, quad_half=0.1, title=None, figsize=None, **kw):
+    """Where the expected evidence arises: one column per detector of every entry of `cases` ({label: FittingConfig or detector set}), in
+    wavelength order. Top: the residual truth - fitted point-source model (baseline removed), unbinned and per bin, against +- sigma_bin.
+    Bottom: r_perp^2 per bin (bias.evidence), with the transit and occultation windows shaded and the quadratures hatched (phase_windows).
+    kw: the model_pcurve keywords of truth and fit. Returns fig, axes (2 x n_columns) and {label: evidence_residual}."""
     evs, cols = {}, []
     for label, cfg in cases.items():
         cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
@@ -604,8 +599,9 @@ def plot_evidence_bins(cases, A_B_true, quad_half=0.1, title=None, figsize=None,
         evs[label] = ev
         for c, (t_, y), blk in zip(cfgs, truths, ev["blocks"]):
             fit = model_pcurve(c, "naive", ev["A_B_fit"], **kw)[1]
-            cols.append((label, c, ev, blk, t_ / c.planet.period, y - fit - (y - fit).mean()))   # the mean of the unbinned residual is the baseline free_offset removes (bins of equal size)
-    cols.sort(key=lambda col: 0.5 * (col[1].l1 + col[1].l2))   # columns in wavelength order (NRS1, NRS2, LRS) whatever the order of `cases`; stable, so a joint fit's detectors stay together
+            # the mean of the unbinned residual is the baseline free_offset removes (bins of equal size)
+            cols.append((label, c, ev, blk, t_ / c.planet.period, y - fit - (y - fit).mean()))
+    cols.sort(key=lambda col: 0.5 * (col[1].l1 + col[1].l2))   # wavelength order; stable, so a joint fit's detectors stay together
     fig, axes = plt.subplots(2, len(cols), figsize=figsize or (5.6 * len(cols), 6.6), sharex=True, sharey="row", squeeze=False, gridspec_kw=dict(height_ratios=[1.25, 1.]))
     for k, (label, c, ev, blk, ph_hi, r_hi) in enumerate(cols):
         ax, axb = axes[:, k]
@@ -613,7 +609,8 @@ def plot_evidence_bins(cases, A_B_true, quad_half=0.1, title=None, figsize=None,
         win = phase_windows(c.planet, ph, c.n_bins, quad_half)
         h_ecl = eclipse_half_phase(c.planet)
         for a_ in (ax, axb):
-            for p0, col in ((0., "#e3e2dc"), (1., "#e3e2dc"), (0.5, "#f3d9cc")):   # transit (grey, at both ends of the orbit) and occultation (light orange)
+            # transit (grey, at both ends of the orbit) and occultation (light orange)
+            for p0, col in ((0., "#e3e2dc"), (1., "#e3e2dc"), (0.5, "#f3d9cc")):
                 a_.axvspan(p0 - h_ecl, p0 + h_ecl, color=col, lw=0, zorder=0)
             for p0 in (0.25, 0.75): a_.axvspan(p0 - quad_half, p0 + quad_half, facecolor="none", edgecolor="#d9d8d1", hatch="///", lw=0, zorder=0)
             a_.grid(False); a_.set_xlim(0., 1.)
@@ -637,14 +634,15 @@ def plot_evidence_bins(cases, A_B_true, quad_half=0.1, title=None, figsize=None,
 
 
 ############################################################################################################################################
-#####   One-parameter sweeps of the bias (01_albedo_bias.ipynb, 02_redistribution_bias.ipynb: inclination, u_bol)
+#####   One-parameter sweeps of the bias (inclination, u_bol)
 ############################################################################################################################################
 
-# A bias_sweep per mode on shared axes: sweeps = {mode label: DataFrame}. joint=False (A_B-only fit): the bias (right axis: in % of the true A_B),
-# |bias| / sigma, and <ln B> = chi2_min / 2. joint=True (the sweep was run with both models): the bias of the fit with redistribution (solid) next to
-# the A_B-only fit (dashed), the spurious F, and z_F = sqrt(dchi2_F) (solid) next to |bias| / sigma of the fit with redistribution (dashed). mark: the
-# x value of the planet's own setting, drawn as the green star on every curve.
 def plot_bias_sweep(sweeps, A_B_true, xlabel, joint=False, mark=None, mark_label=None, title=None, figsize=(18., 5.)):
+    """bias_sweep results per mode on shared axes, sweeps = {mode label: DataFrame}.
+    joint=False (A_B-only fit): the bias (right axis: % of the true A_B), |bias| / sigma, and <ln B> = chi2_min / 2.
+    joint=True (sweep run with both models): the bias with redistribution (solid) next to the A_B-only fit (dashed), the spurious F, and
+    z_F = sqrt(dchi2_F) (solid) next to |bias| / sigma of the fit with redistribution (dashed).
+    mark: the x value of the planet's own setting, drawn as the green star on every curve. Returns fig, axs."""
     fig, axs = plt.subplots(1, 3, figsize=figsize)
     colors = (C_HI, C_REDIST, INK_2, F_COLORS[0])
     star = lambda ax, t, col, **k: ax.plot(mark, np.interp(mark, t["value"].to_numpy()[np.argsort(t["value"].to_numpy())], t[col].to_numpy()[np.argsort(t["value"].to_numpy())]), **{**TARGET, "ms": 14, **k}) if mark is not None else None

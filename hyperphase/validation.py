@@ -13,9 +13,8 @@ from hyperphase.irradiance import alpha_, sigma
 #####   Other penumbra implementations
 ############################################################################################################################################
 
-# Penumbra, Eqs. (A7), (A9) and (A10): baseline/ground-truth implementation via scipy.integrate.quad, per-point adaptive quadrature
 def insolation_penumbra_hyperillum_simpleint(gamma1, planet, u_bol=DEFAULT_U_BOL, runtime=False, **quad_kw):
-
+    """Penumbra, Eqs. (A7), (A9) and (A10), by per-point adaptive quadrature (scipy.integrate.quad): the reference implementation."""
     t0 = time.perf_counter()
     result = np.array([_insolation_penumbra_hyperillum_simpleint_scalar(g, planet, u_bol, **quad_kw) for g in gamma1])
     if runtime: print(f"insolation_penumbra_hyperillum_simpleint runtime: {time.perf_counter() - t0:.4f} s")
@@ -68,9 +67,9 @@ def _theta_kernels_simpleint(theta, alpha, rho, r2):
     return cos_beta / rp2, sin_beta / rp2, cos_tp, Delta
 
 
-# Penumbra: Quick solution through masking for integral validation (long runtimes, only accurate for relatively high nth, nom)
 def insolation_penumbra_mask(gamma1, planet, u_bol=DEFAULT_U_BOL, nth=400, nom=800, runtime=False):
-
+    """Penumbra by masking the visible part of the star on a (theta, omega) grid, a simple check of the integrals. Slow, and accurate only for
+    large nth, nom."""
     t0 = time.perf_counter()
     result = np.array([_insolation_penumbra_mask_scalar(g, planet, u_bol, nth, nom) for g in gamma1])
     if runtime: print(f"insolation_penumbra_mask runtime: {time.perf_counter() - t0:.4f} s")
@@ -100,10 +99,9 @@ def _insolation_penumbra_mask_scalar(gamma1, planet, u_bol, nth, nom):
     return np.trapezoid(np.trapezoid(integ, om, axis=1), th)
 
 
-# Penumbra: Kopal's analytic penumbral approximation, lambda sign-corrected (valid only for r2 << R, inaccurate for close-in exoplanets)
 def insolation_penumbra_hyperillum_approx(gamma1, planet, u_bol=DEFAULT_U_BOL, runtime=False):
-    """Small-disk closed forms of the penumbral integrals (lowest order in r2/rho), using the self-consistent sign
-    x = sin(lambda) = -(rho/r2)cos(alpha)  (opposite to the printed one)."""
+    """Penumbra in Kopal's small-disk approximation (lowest order in r2/rho; valid only for r2 << R, inaccurate for close-in planets), with the
+    self-consistent sign x = sin(lambda) = -(rho/r2) cos(alpha) (opposite to the printed one)."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     t0 = time.perf_counter()
@@ -122,13 +120,11 @@ def insolation_penumbra_hyperillum_approx(gamma1, planet, u_bol=DEFAULT_U_BOL, r
     return result
 
 
-# Full surface (all gamma1): brute-force integration over the stellar sphere in vector form, for validation.
-# Independent of the geometry above (no alpha_, no theta kernels, no Delta): stellar surface points Q are sampled
-# on a midpoint grid about the star -> planet-centre axis, and the visibility of each Q is decided by the signs of the
-# emission cosine (Q faces P) and the incidence cosine (Q is above the horizon of P). Includes linear limb darkening.
-# Slow (~1 s per point at the default grid, accurate to ~1e-6 of the substellar insolation): use for spot checks, parallelise across points.
 def insolation_hyperillum_bruteforce(gamma1, planet, u_bol=DEFAULT_U_BOL, n_theta=3000, n_phi=6000, runtime=False):
-
+    """Irradiance [W m^-2] at any gamma1 by brute-force integration over the stellar sphere, independent of the geometry of irradiance (no alpha_,
+    theta kernels or Delta). Stellar surface points Q lie on a midpoint grid about the star -> planet-centre axis; Q counts where both its
+    emission cosine (Q faces the surface point P) and the incidence cosine at P (Q above P's horizon) are positive. Linear limb darkening. Slow
+    (~1 s per point at the default grid, accurate to ~1e-6 of the substellar insolation): for spot checks, parallelised across points."""
     t0 = time.perf_counter()
     gamma1 = np.atleast_1d(np.asarray(gamma1, dtype=float))
     result = np.array([_insolation_hyperillum_bruteforce_scalar(g, planet, u_bol, n_theta, n_phi) for g in gamma1])
@@ -168,10 +164,11 @@ def _insolation_hyperillum_bruteforce_scalar(gamma1, planet, u_bol, n_theta, n_p
     return B0 * total * dt * dp
 
 
-# Full surface (all gamma1): closed form of Kang, Nimmo & Ding 2023 (ApJL 949, L20), Appendix eqs. (A1)-(A2) and (A5)-(A12), as printed.
-# Uniformly bright stellar disk only ("isotropic approximation", no limb darkening): exact reference for u_bol = 0.
-# Kang -> our notation: d (star-planet separation) = R, a (planet radius) = r1, R_star = r2, theta_TL = gamma1, theta_d = terminator.
 def insolation_kang(gamma1, planet, runtime=False):
+    """Irradiance [W m^-2] at any gamma1 from the closed form of Kang, Nimmo & Ding 2023 (ApJL 949, L20), Appendix eqs. (A1)-(A2) and
+    (A5)-(A12), as printed. Uniformly bright stellar disk only (their "isotropic approximation", no limb darkening): the exact reference for
+    u_bol = 0. Their notation -> ours: d (star-planet separation) = R, a (planet radius) = r1, R_star = r2, theta_TL = gamma1, theta_d =
+    terminator."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     t0 = time.perf_counter()

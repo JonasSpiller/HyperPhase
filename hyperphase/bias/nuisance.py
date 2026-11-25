@@ -1,5 +1,29 @@
-"""Robustness to nuisance parameters: the free geometry, the stellar effective temperature and the ellipsoidal terms, as one linear
-least-squares problem around the noiseless fit."""
+"""Robustness to nuisance parameters: the free geometry, the stellar effective temperature and the ellipsoidal terms, as one linear least-squares
+problem around the noiseless fit.
+
+The fixed-geometry fit assumes the geometry and no other phase-curve terms; a real analysis marginalises over them, and each nuisance is one more
+column of the same problem. Linearised around the noiseless point-source fit, whitened and with each column's mean removed per detector block (the
+free baseline): y = r_perp (evidence_residual), X = [j_A, (j_F,) j_nu1, ...] with j = d(model) / d(theta) / sigma_bin. A Gaussian prior sigma_p on
+a nuisance shift adds the penalty (delta_nu / sigma_p)^2, a flat prior none:
+    delta = argmin |y - X delta|^2 + sum (delta_nu / sigma_p)^2,   Cov = (X'X + Lambda)^-1,   sigma_A_B = sqrt(Cov_AA),   chi2_min' = the minimum.
+If the extended-source model carries the same nuisances with the same priors, <ln B> = chi2_min' / 2 to first order (the determinant terms
+cancel).
+
+The columns (nuisance_problem):
+- "a_rs", "rp_rs", "incl": central differences of the point-source model, whose transit and occultation constrain the geometry too.
+- "b", "a_rs|b": the impact parameter and a/R* at fixed b (i = arccos(b / (a/R*))), for a source that fitted b and derived i; from the a_rs and
+  incl columns by the chain rule. A prior on "a_rs" also applies to "a_rs|b".
+- "stellar:<k>": the star's ellipsoidal variation, -cos(4 pi phi) [ppm] in every bin (the star stays visible in occultation), one free amplitude
+  per detector. Free per band, it can follow whatever it absorbs: the worst case.
+- "stellar_shared": the same term with one amplitude for all detectors, scaled by band ratios (stellar_shared_column). A_ell depends on the band
+  only through alpha_ell(u, g) (ellipsoidal_amplitude), by ~10 % across the infrared, so this is its physical form, and with the prior of
+  ellipsoidal_prior, centred on the truth (no ellipsoidal term in truth or model), the realistic one.
+- "planetary": the planet's tidal deformation (planetary_area_factor), linearised: F_p(phi) sin^2 i sin^2(2 pi phi), with F_p the point-source
+  planet flux at the fitted A_B. One amplitude for all detectors (it is geometric); zero in occultation, like the residual itself.
+- "T_s": the stellar T_eff [K] at fixed log g and [Fe/H] (step TEFF_STEP). The planet's temperature scales with it, so it acts like
+  (1 - A_B)^(1/4), up to the part that cancels against the stellar band flux in F_p / F_star.
+redist=True linearises the fit with redistribution around its own solution (A_B_fit, F_fit > 0; extra column j_F): the A_B-only fit sits at the
+F = 0 edge, where the response to F switches on too flat to linearise."""
 from dataclasses import replace
 
 import numpy as np
@@ -20,62 +44,28 @@ from hyperphase.model import model_pcurve, model_times
 ############################################################################################################################################
 M_EARTH_SUN = 3.0035e-6   # M_Earth / M_Sun (IAU 2015 nominal values)
 
-# The bracket of the linear limb-darkening and of the gravity-darkening coefficient of the star in the infrared that alpha_ell of the stellar
-# ellipsoidal term is evaluated over (ellipsoidal_prior; K dwarfs, not from a table).
+# Brackets of the star's infrared linear limb-darkening (u) and gravity-darkening (g) coefficients over which alpha_ell is evaluated
+# (ellipsoidal_prior; K dwarfs, not from a table).
 ELLIPSOIDAL_U_RANGE, ELLIPSOIDAL_G_RANGE = (0.1, 0.3), (0.1, 0.4)
 
-# Fluid Love number h2 of a rocky planet's tidal deformation: the range a fit may use (deformation_prior, deformation_limits), from all mass at the
-# centre (1) to a homogeneous body (2.5). Rocky planets have h2 ~ 2 (Correia 2014, A&A 570, L5, after Yoder 1995).
+# Range of the fluid Love number h2 of a rocky planet's tidal deformation, from all mass at the centre (1) to a homogeneous body (2.5); rocky planets
+# have h2 ~ 2 (Correia 2014, A&A 570, L5, after Yoder 1995).
 DEFORMATION_H2_RANGE = (1., 2.5)
 
 
 ############################################################################################################################################
-#####   Robustness to nuisance parameters: one linear least-squares problem (05_nuisance_robustness.ipynb)
+#####   Robustness to nuisance parameters: one linear least-squares problem
 ############################################################################################################################################
 
-# sigma_A_B and chi2_min of the A_B-only fit assume a fixed geometry and no other phase-curve terms. A real analysis marginalises over the geometry
-# and fits ellipsoidal terms, and every such nuisance is one more column of the same linear least-squares problem. Linearised around the noiseless
-# A_B-only fit, in whitened units and with each column's mean removed per detector block (the free baseline): y = r_perp (evidence_residual), X =
-# [j_A, j_nu1, ...] with j = d(model) / d(theta) / sigma_bin, a Gaussian prior N(nu_0, sigma_p) on a nuisance as the penalty (delta_nu / sigma_p)^2
-# and a flat prior as no penalty:
-#   delta = argmin |y - X delta|^2 + sum (delta_nu / sigma_p)^2,   Cov = (X'X + Lambda)^-1,   sigma_A_B = sqrt(Cov_AA),   A_B_fit' = A_B_fit +
-#     delta_A,   chi2_min' = the minimum.
-# If the extended-source model carries the same nuisances with the same priors, <ln B> = chi2_min' / 2 to first order (the determinant terms cancel).
-# The columns:
-# - geometry "a_rs", "rp_rs", "incl": central differences of the point-source model (the transit and the occultation are part of it, so their shape
-#   constrains the geometry too);
-# - geometry "b" (impact parameter) and "a_rs|b" (a/R* at fixed b, i = arccos(b / (a/R*)) following it), for a planet whose source fitted b and
-#   derived i (TOI-2431 b, Tas et al. 2026): both follow from the a_rs and incl columns by the chain rule, so they cost no model evaluation. A
-#   Gaussian prior on "a_rs" also applies to "a_rs|b";
-# - "stellar": the ellipsoidal variation of the STAR, -cos(4 pi phi) [ppm] in every bin including the occultation (the star stays visible), one free
-#   amplitude per detector ("stellar:1", "stellar:2", ...: limb and gravity darkening depend on the band). Free per band, it can follow the wavelength
-#   dependence of whatever it absorbs: the worst case;
-# - "stellar_shared": the same term with ONE amplitude for all detectors [ppm, in a band of ratio 1], each detector's column scaled by
-#   `stellar_ratios` (stellar_shared_column). The relative amplitude A_ell = alpha_ell (M_p / M_star) (R_star / a)^3 sin^2 i depends on the band only
-#   through alpha_ell(u, g), by ~10 % across the infrared, so this is its physical form, and with the Gaussian prior that the measured mass ratio
-#   implies (ellipsoidal_prior) the realistic one. Its prior is centred on the truth (no ellipsoidal term in truth or model);
-# - "planetary": the tidal deformation of the PLANET, as in Akinsanmi et al. (2024, A&A 682, A15, eq. 11): its flux F_p(phi) times its projected area
-#   relative to mid-transit, A(phi) / A(0), with A(phi) the projected area of a triaxial ellipsoid (their eq. 2, from Leconte et al. 2011) of the
-#   Correia (2014) shape r1 = r2 (1 + 3q), r3 = r2 (1 - q) (r1 towards the star, r2 along the orbit, r3 polar). Amplitude delta = (r1 - r2) / r2 = 3q;
-#   the column is the derivative at delta = 0, F_p(phi) sin^2 i sin^2(2 pi phi), and planetary_area_factor the exact factor (the nonlinear check). F_p
-#   is the point-source planet flux at the fitted A_B. One amplitude shared by all detectors (it is geometric), zero during the occultation, like the
-#   hyperillumination residual itself.
-# - "T_s": the effective temperature of the star [K] at fixed log g and [Fe/H] (central difference, step TEFF_STEP). The planet's temperature scales
-#   with it, so it acts like (1 - A_B)^(1/4), up to the part that cancels against the stellar band flux in F_p / F_star.
-# The fit with redistribution (redist=True) is the same problem around ITS OWN noiseless solution (A_B_fit, F_fit) from fit_redist: y the residual of
-# that fit, the extra column j_F, and every column the derivative of the point-source model with redistribution there. It cannot be linearised around
-# the A_B-only fit, which sits at the F = 0 edge where the response to F switches on very flat; at F_fit > 0 the response is regular (checked against
-# nuisance_fit_nonlinear(redist=True) and the free-geometry dynesty runs). nuisance_both_fits pairs the two problems and gives z_F with the nuisances
-# in both fits. A shifted solution with F < 0 has left the range of the model: nuisance_both_fits then returns the A_B-only fit.
-NUISANCE_STEPS = dict(a_rs=0.005, rp_rs=1e-4, incl=0.2)   # finite-difference steps of the geometry columns [a/R*, Rp/R*, deg]; nuisance_problem(steps=...) to test them
+# finite-difference steps of the geometry columns [a/R*, Rp/R*, deg] (nuisance_problem(steps=...))
+NUISANCE_STEPS = dict(a_rs=0.005, rp_rs=1e-4, incl=0.2)
 TEFF_STEP = 10.   # finite-difference step of the "T_s" column [K]
 NUISANCE_LABELS = {"a_rs": r"$a/R_\star$", "rp_rs": r"$R_p/R_\star$", "incl": r"$i$", "b": r"$b$", "a_rs|b": r"$a/R_\star$ (fixed $b$)", "stellar": "stellar ellipsoidal (free per band)", "stellar_shared": "stellar ellipsoidal (shared)", "planetary": "planetary deformation", "T_s": r"$T_{\rm eff}$"}
 
 
-# The whitened, mean-removed binned point-source model (with redistribution F for "naive_redist") at a perturbed geometry or stellar temperature: the
-# building block of a column. a_rs / rp_rs / T_s go to model_pcurve, incl into the planet. The geometry-only caches a caller may pass (insol,
-# refl_unit) belong to the unperturbed system and are dropped here.
 def _geometry_model(cfg, A_B_, param, value, kw, insolation_model="naive", F=None):
+    """The whitened, mean-removed binned point-source model (F for "naive_redist") at a perturbed geometry or stellar temperature: the building block
+    of a column. The caches insol and refl_unit belong to the unperturbed system and are dropped."""
     kw = {k: v for k, v in kw.items() if k not in ("insol", "refl_unit")}
     if param == "incl":
         cfg = [replace(c, planet=replace(c.planet, incl=value)) for c in cfg] if is_detector_set(cfg) else replace(cfg, planet=replace(cfg.planet, incl=value))
@@ -85,13 +75,12 @@ def _geometry_model(cfg, A_B_, param, value, kw, insolation_model="naive", F=Non
     return -resid(A_B_, F) / sigma
 
 
-# Everything the nuisance fits of one configuration share: y = r_perp of the noiseless fit, the column of A_B (and of F) and every nuisance column
-# (see above), whitened and mean-removed per detector block. cfg: FittingConfig or detector set; truth: its noiseless truth curve(s). redist=False:
-# the A_B-only fit (A_B_fit=None fits it); redist=True: the fit with redistribution around its own solution (A_B_fit, F_fit; fitted by fit_redist
-# unless both are given). priors: {name: Gaussian sigma} for any column (a missing name = flat). stellar_ratios: the band ratios of "stellar_shared"
-# (see stellar_shared_column). Returns dict(A_B_fit, chi2, y, j_A, columns {name: column}, priors, values {geometry name or "T_s": the system's
-# value}, sigma, blocks, phase, stellar_ratios [one per detector]), with redist also F_fit and j_F.
 def nuisance_problem(cfg, truth, A_B_fit=None, priors=None, steps=NUISANCE_STEPS, bounds=A_B_FIT_BOUNDS, stellar_ratios=None, redist=False, F_fit=None, F_bounds=F_BOUNDS, **kw):
+    """Everything the nuisance fits of one configuration share: y = r_perp of the noiseless fit, the columns of A_B (and F) and every nuisance column
+    (see the module docstring), whitened and mean-removed per detector block. redist=False: around the A_B-only fit (A_B_fit=None fits it);
+    redist=True: around the fit with redistribution (fit_redist unless A_B_fit and F_fit are given). priors: {name: Gaussian sigma} (a missing
+    name is flat). stellar_ratios: see _stellar_ratios. Returns dict(A_B_fit, chi2, y, j_A, columns, priors, values [the system's geometry and
+    T_s], sigma, blocks, phase, stellar_ratios), with redist also F_fit and j_F."""
     model = "naive_redist" if redist else "naive"
     if redist and (A_B_fit is None or F_fit is None): A_B_fit, F_fit = fit_redist(cfg, truth, bounds=bounds, F_bounds=F_bounds, **kw)[:2]
     F = float(F_fit) if redist else None
@@ -105,8 +94,8 @@ def nuisance_problem(cfg, truth, A_B_fit=None, priors=None, steps=NUISANCE_STEPS
     for name, v in values.items():
         h = steps[name]
         cols[name] = (_geometry_model(cfg, A, name, v + h, kw, model, F) - _geometry_model(cfg, A, name, v - h, kw, model, F)) / (2. * h)
-    # b and a/R* at fixed b, from the incl column [per deg] by the chain rule: i = arccos(b / a) gives di/db = -(180/pi) / (a sin i) and di/da|_b =
-    # (180/pi) b / (a^2 sin i) [deg]
+    # b and a/R* at fixed b from the incl column [per deg], by the chain rule on i = arccos(b / a) [deg]:
+    #     di/db = -(180/pi) / (a sin i),   di/da|_b = (180/pi) b / (a^2 sin i)
     a0, i0 = values["a_rs"], np.radians(values["incl"])
     values.update({"b": a0 * np.cos(i0), "a_rs|b": a0})
     cols["b"] = -np.degrees(1.) / (a0 * np.sin(i0)) * cols["incl"]
@@ -121,8 +110,9 @@ def nuisance_problem(cfg, truth, A_B_fit=None, priors=None, steps=NUISANCE_STEPS
         col = np.zeros(ev["r_perp"].size)
         col[blk] = (ell - ell.mean()) / c.sigma_bin
         cols[f"stellar:{k + 1}"] = col
-        fp = model_pcurve(replace(c, transit=False), model, A, F=F, **kw)[1]   # the planet's own flux of the fitted model [ppm]: thermal + reflected, zero in occultation
-        d = binned(c, fp * np.sin(np.radians(c.planet.incl)) ** 2 * np.sin(ph) ** 2)   # d[F_p A(phi) / A(0)] / d delta at delta = 0 (planetary_area_factor)
+        fp = model_pcurve(replace(c, transit=False), model, A, F=F, **kw)[1]   # the fitted model's planet flux [ppm], zero in occultation
+        # d[F_p A(phi) / A(0)] / d delta at delta = 0 (planetary_area_factor)
+        d = binned(c, fp * np.sin(np.radians(c.planet.incl)) ** 2 * np.sin(ph) ** 2)
         planetary.append((d - d.mean()) / c.sigma_bin)
     cols["planetary"] = np.concatenate(planetary)
     ratios = _stellar_ratios(cfgs, stellar_ratios)
@@ -133,31 +123,29 @@ def nuisance_problem(cfg, truth, A_B_fit=None, priors=None, steps=NUISANCE_STEPS
     return out
 
 
-# The band ratios of the shared stellar term, one per detector of cfgs: None -> 1 for every detector (achromatic); a dict {band key of
-# bands.FILTER_LAMBDA_UM: ratio} -> the ratio of each detector's band (1 where the band is missing, which makes the amplitude that of a band of ratio 1); a
-# sequence -> as given, in detector order.
 def _stellar_ratios(cfgs, stellar_ratios):
+    """Band ratios of the shared stellar term, one per detector: None -> 1 for all (achromatic); {band key: ratio} -> each detector's band (1 where
+    missing); a sequence -> as given, in detector order."""
     if stellar_ratios is None: return np.ones(len(cfgs))
     r = np.array([float(stellar_ratios.get(band_of(c), 1.)) for c in cfgs]) if isinstance(stellar_ratios, dict) else np.asarray(stellar_ratios, float).ravel()
     if r.size != len(cfgs) or not np.all(np.isfinite(r) & (r > 0.)): raise ValueError(f"stellar_ratios: {len(cfgs)} positive values needed, got {r}")
     return r
 
 
-# The stellar ellipsoidal column with ONE amplitude for all detectors: the per-detector columns "stellar:<k>" of a nuisance problem's `columns`,
-# weighted by `ratios` (one per detector, the band's alpha_ell relative to the reference) and added. The per-detector columns are zero outside their
-# own block, so the sum is their concatenation.
 def stellar_shared_column(columns, ratios):
+    """The stellar ellipsoidal column with one amplitude for all detectors: the columns "stellar:<k>" weighted by `ratios` (each band's alpha_ell
+    relative to the reference) and summed; each is zero outside its own block."""
     names = sorted((c for c in columns if c.startswith("stellar:")), key=lambda c: int(c.split(":")[1]))
     r = np.asarray(ratios, float).ravel()
     if r.size != len(names): raise ValueError(f"{len(names)} detectors but {r.size} ratios")
     return np.sum([rk * columns[n] for rk, n in zip(r, names)], axis=0)
 
 
-# Projected area of the tidally deformed planet relative to mid-transit, A(phi) / A(0) (Akinsanmi et al. 2024, A&A 682, A15, eqs. 2 and 11; Leconte et
-# al. 2011): the triaxial ellipsoid of Correia (2014), r1 = r2 (1 + 3q), r3 = r2 (1 - q), with the amplitude delta = (r1 - r2) / r2 = 3q, at the
-# orbital angle phi [rad, 0 = mid-transit] and the inclination incl [deg]. To first order in delta it is 1 + delta sin^2 i sin^2 phi, the "planetary"
-# column of nuisance_problem.
 def planetary_area_factor(delta, incl, phi):
+    """Projected area of the tidally deformed planet relative to mid-transit, A(phi) / A(0) (Akinsanmi et al. 2024, A&A 682, A15, eqs. 2 and 11;
+    Leconte et al. 2011): the triaxial ellipsoid of Correia (2014), r1 = r2 (1 + 3q), r3 = r2 (1 - q) (r1 towards the star, r2 along the orbit, r3
+    polar), with amplitude delta = (r1 - r2) / r2 = 3q, at the orbital angle phi [rad, 0 = mid-transit] and inclination incl [deg]. To first order
+    1 + delta sin^2 i sin^2 phi, the "planetary" column of nuisance_problem."""
     q = delta / 3.
     r1, r2, r3 = 1. + 3. * q, 1., 1. - q
     ci2, si2 = np.cos(np.radians(incl)) ** 2, np.sin(np.radians(incl)) ** 2
@@ -165,24 +153,22 @@ def planetary_area_factor(delta, incl, phi):
     return area(np.asarray(phi, float)) / area(0.)
 
 
-# The names of the columns a nuisance selection stands for: "stellar" expands to one amplitude per detector, every other name is its own column.
 def nuisance_names(problem, nuisances):
+    """The columns a nuisance selection stands for: "stellar" expands to one amplitude per detector."""
     out = []
     for n in nuisances:
         out += [c for c in problem["columns"] if c.startswith("stellar:")] if n == "stellar" else [n]
     return out
 
 
-# One nuisance fit: the fit of `problem` (nuisance_problem; the A_B-only fit, or the fit with redistribution if it has the column j_F) with the
-# columns of `nuisances` added (names as in nuisance_names; () = the fixed-geometry fit itself). priors: {name: sigma} replacing the problem's for
-# this fit (None = flat). time_factor: the observing time relative to the problem's; the data rows scale with its square root and the prior rows do
-# not, so a fit with priors does not follow a simple sqrt(time) scaling. limits: {name: (lo, hi)} hard limits on the shift of a nuisance from its true
-# value (deformation_limits), solved as a bounded least-squares problem. A nuisance that ends on a limit is held there: its sigma_post is 0, it is
-# listed in on_limit, and sigma_A_B and cov are those of the remaining parameters. Returns dict(sigma_A_B, delta_A_B [shift of the fitted A_B],
-# A_B_fit, chi2, lnB_mean = chi2 / 2 [an expected ln B only for the A_B-only fit], names, delta {name: fitted shift}, sigma_post {name}, shrinkage
-# {name: sigma_post / sigma_prior; NaN for a flat prior; 1 = the data add nothing to the prior}, r_perp [the augmented whitened residual y - X delta,
-# without the prior rows], cov, on_limit [names]), for a problem with j_F also F_fit and sigma_F.
 def nuisance_solve(problem, nuisances=(), priors=None, time_factor=1., limits=None):
+    """One nuisance fit of `problem` (the A_B-only fit, or the fit with redistribution if it has j_F) with the columns of `nuisances` added (() = the
+    fixed-geometry fit). priors: {name: sigma} replacing the problem's (None = flat). time_factor: the observing time relative to the problem's;
+    the data rows scale with its square root but the prior rows do not, so a fit with priors does not scale as sqrt(time). limits:
+    {name: (lo, hi)} hard limits on a nuisance's shift from its true value (bounded least squares); a nuisance that ends on a limit is held there
+    (sigma_post 0, listed in on_limit) and the covariance is that of the others. Returns the shifted A_B_fit (and F_fit), sigma_A_B (and sigma_F),
+    chi2, lnB_mean = chi2 / 2 (an expected ln B only for the A_B-only fit), per nuisance its shift (delta), sigma_post and
+    shrinkage = sigma_post / sigma_prior (NaN for a flat prior), the augmented residual r_perp (without the prior rows) and cov."""
     names = nuisance_names(problem, nuisances)
     pri = {**problem["priors"], **(priors or {})}
     J = [problem["j_A"]] + ([problem["j_F"]] if "j_F" in problem else [])
@@ -191,7 +177,7 @@ def nuisance_solve(problem, nuisances=(), priors=None, time_factor=1., limits=No
     prior = np.array([np.nan] * k + [np.nan if pri.get(n) is None else pri[n] for n in names], float)
     lam = np.where(np.isfinite(prior), 1. / prior ** 2, 0.)
     free = np.ones(X.shape[1], bool)
-    if limits:   # bounded least squares with the priors as penalty rows; the parameters on a limit are then held fixed
+    if limits:   # bounded least squares, the priors as penalty rows
         lo = np.array([-np.inf] * k + [limits.get(n, (-np.inf, np.inf))[0] for n in names])
         hi = np.array([np.inf] * k + [limits.get(n, (-np.inf, np.inf))[1] for n in names])
         delta = lsq_linear(np.vstack([X, np.diag(np.sqrt(lam))]), np.concatenate([y, np.zeros(len(lam))]), bounds=(lo, hi), method="bvls").x
@@ -209,15 +195,12 @@ def nuisance_solve(problem, nuisances=(), priors=None, time_factor=1., limits=No
     return out
 
 
-# Both point-source fits of one configuration with the same nuisances: `problem` (the A_B-only fit) and `problem_redist` (nuisance_problem(...,
-# redist=True)), solved by nuisance_solve. Returns the statistics of the bias analysis under these nuisances, named as in the per-planet tables: bias,
-# sigma, bias_sigma and lnB_mean = chi2' / 2 of the A_B-only fit; bias_J, sigma_J, bias_sigma_J and F_fit of the fit with redistribution; z_F =
-# sqrt(chi2'(A_B) - chi2'(A_B, F)), the significance of the spurious redistribution when both fits carry the nuisances; and the two solutions (fit,
-# fit_J). Where the shifted solution has F <= 0, the fit with redistribution is the A_B-only fit (F_fit = 0, z_F = 0). limits: the hard limits of
-# nuisance_solve, the same in both fits (the best fits: an observer's maximum-likelihood fits within the limits). uniform: {name: (lo, hi)}, one
-# nuisance with a FLAT prior on its shift within (lo, hi), the Bayesian counterpart of `limits` (nuisance_both_fits_uniform); its result replaces
-# bias, sigma, lnB_mean and the fits by posterior quantities.
 def nuisance_both_fits(problem, problem_redist, A_B_true, nuisances=(), priors=None, time_factor=1., limits=None, uniform=None):
+    """Both point-source fits under the same nuisances: `problem` (A_B-only) and `problem_redist` (nuisance_problem(..., redist=True)), solved by
+    nuisance_solve. Returns bias, sigma, bias_sigma and lnB_mean = chi2' / 2 of the A_B-only fit; bias_J, sigma_J, bias_sigma_J and F_fit of the
+    fit with redistribution; z_F = sqrt(chi2'(A_B) - chi2'(A_B, F)), the significance of the spurious F with the nuisances in both fits; and the
+    solutions fit, fit_J. Where the shifted solution has F <= 0, the fit with redistribution is the A_B-only fit (F_fit = 0, z_F = 0). limits: the
+    hard limits of nuisance_solve, in both fits (the best fits); uniform: a flat prior instead (nuisance_both_fits_uniform)."""
     if uniform:
         if limits: raise ValueError("nuisance_both_fits: give a nuisance either `limits` (best fit) or `uniform` (posterior), not both")
         return nuisance_both_fits_uniform(problem, problem_redist, A_B_true, nuisances, priors, time_factor, uniform)
@@ -228,16 +211,14 @@ def nuisance_both_fits(problem, problem_redist, A_B_true, nuisances=(), priors=N
                 F_fit=f["F_fit"], z_F=float(np.sqrt(max(a["chi2"] - f["chi2"], 0.))), fit=a, fit_J=f)
 
 
-# The posterior of a linear nuisance problem when ONE nuisance has a flat prior on its shift within (lo, hi): exact for the linear-Gaussian problem of
-# nuisance_solve. `sol` is the nuisance_solve result with that nuisance free (no prior, no limits). The likelihood (with the Gaussian priors of the
-# other nuisances) is Gaussian in all parameters, so integrating out the others leaves a Gaussian in the shift x of `name`, N(x_hat, C_xx), which the
-# prior cuts to (lo, hi); given x, every other parameter p is Gaussian, N(p_hat + beta_p (x - x_hat), C_pp - beta_p C_px) with beta_p = C_px / C_xx.
-# peak: where the likelihood peaks, (A_B[, F], the shift of every nuisance of sol["names"]), by default the solution of `sol`. The extended-source
-# model reproduces the noiseless truth, so its likelihood has the same covariance (to first order) and peaks at the truth: peak = (A_B_true, 0, ...,
-# 0) with the A_B-only `sol`. mass: the share of N(x_hat, C_xx) within (lo, hi), the factor by which the prior range cuts the evidence relative to an
-# unbounded prior of the same density. Returns dict(mass, x_mean, x_sd [posterior of the shift], median, sd [A_B, and F for a problem with j_F: the
-# medians by root finding on the mixture, the sd exact], delta, sigma_post [posterior mean and sd of the shift of every nuisance of sol["names"]]).
 def bounded_posterior(sol, name, lo, hi, peak=None, n_nodes=96):
+    """Posterior of the linear nuisance problem when the nuisance `name` has a flat prior on its shift within (lo, hi), exact for the linear-Gaussian
+    problem. `sol`: the nuisance_solve result with that nuisance free (no prior, no limits). The likelihood (with the Gaussian priors of the other
+    nuisances) is Gaussian in all parameters, so the shift x of `name` has the marginal N(x_hat, C_xx), which the prior cuts to (lo, hi), and
+    given x every other parameter p is N(p_hat + beta_p (x - x_hat), C_pp - beta_p C_px), beta_p = C_px / C_xx. peak: where the likelihood peaks,
+    (A_B[, F], every nuisance shift); default: the solution of `sol`. Returns mass (the share of N(x_hat, C_xx) within (lo, hi): the factor by
+    which the range cuts the evidence against an unbounded prior of the same density), x_mean and x_sd of the shift, median and sd of A_B (and F;
+    medians by root finding on the mixture), and delta, sigma_post (posterior mean and sd of every nuisance shift)."""
     from scipy.stats import norm, truncnorm
     from scipy.optimize import brentq
     k = 2 if "F_fit" in sol else 1
@@ -253,7 +234,7 @@ def bounded_posterior(sol, name, lo, hi, peak=None, n_nodes=96):
     beta = C[:, ix] / C[ix, ix]
     mean = full + beta * (xm - x0)
     sd = np.sqrt(np.maximum(np.diag(C) - beta * C[:, ix], 0.) + beta ** 2 * xsd ** 2)
-    u, w = np.polynomial.legendre.leggauss(n_nodes)   # equal-probability nodes of the truncated x (Gauss-Legendre in its cumulative probability)
+    u, w = np.polynomial.legendre.leggauss(n_nodes)   # Gauss-Legendre nodes in the cumulative probability of the truncated x
     xs, w = tn.ppf(0.5 * (u + 1.)), 0.5 * w
     median = []
     for j in range(k):
@@ -264,22 +245,19 @@ def bounded_posterior(sol, name, lo, hi, peak=None, n_nodes=96):
                 delta=dict(zip(sol["names"], mean[k:])), sigma_post=dict(zip(sol["names"], sd[k:])))
 
 
-# nuisance_both_fits with a flat prior on the shift of one nuisance within (lo, hi) (`uniform` = {name: (lo, hi)}, e.g. deformation_limits): what a
-# retrieval with that prior gives, exact for the linear problem (bounded_posterior). Where the best fit ends on a limit (nuisance_solve(...,
-# limits=)), the posterior does not: it spreads over the part of the range where the likelihood is not yet small. The evidence of the point-source
-# model then loses the likelihood that the prior cuts off, while that of the extended-source model, which peaks at the true value inside the range,
-# keeps most of it, so the Occam factors no longer cancel and chi2'_min / 2 of the bounded best fit is not the expected ln B:
-#   <ln B> = chi2'_free / 2 + ln(mass_ext / mass_ps),   chi2'_free: the fit with the nuisance unbounded and flat; mass: the share of each model's
-#     likelihood within the range.
-# bias: the difference between the posterior medians of A_B of the point-source fit and of the extended-source model (the latter moves off the truth
-# where the range is asymmetric about the true value); for a row without a bounded nuisance this is A_B_fit - A_B_true. sigma: the posterior standard
-# deviation of A_B of the point-source fit. The same for the fit with redistribution (bias_J, sigma_J; F_fit its posterior median of F), against the
-# same extended-source posterior. z_F stays the likelihood-ratio statistic of the best fits, which respect the limits (as zF_obs of
-# retrieval.prediction.run_prediction). Where the bounded best fit with redistribution has F <= 0, that fit is the A_B-only fit (F_fit = 0, z_F = 0). Returns
-# the keys of nuisance_both_fits (fit, fit_J: the unbounded solutions with A_B_fit, sigma_A_B [, F_fit], delta and sigma_post replaced by posterior
-# medians, sds and means), and best (nuisance_both_fits with the range as hard limits), posterior (dict(ps, ps_J, ext): bounded_posterior of each
-# model).
 def nuisance_both_fits_uniform(problem, problem_redist, A_B_true, nuisances, priors, time_factor, uniform):
+    """nuisance_both_fits with a flat prior on the shift of one nuisance, uniform = {name: (lo, hi)}: what a retrieval with that prior gives, exact
+    for the linear problem (bounded_posterior). The best fit with the range as hard limits ends on a limit wherever the unbounded fit lies beyond
+    it; the posterior does not, it spreads over the part of the range where the likelihood is not yet small. The range then cuts off likelihood of
+    the point-source model, while the extended-source model, which peaks at the truth inside the range, keeps most of its own, so the Occam
+    factors do not cancel and chi2'/2 of the bounded best fit is not the expected ln B:
+        <ln B> = chi2'_free / 2 + ln(mass_ext / mass_ps),
+    with chi2'_free the fit with the nuisance flat and unbounded, and mass each model's likelihood share within the range. bias: the posterior
+    median of A_B of the point-source fit minus that of the extended-source model (which moves off the truth where the range is asymmetric about
+    it); sigma: the posterior sd of A_B. The same for the fit with redistribution (bias_J, sigma_J; F_fit its posterior median). z_F stays the
+    likelihood-ratio statistic of the best fits within the limits; where the best fit with redistribution has F <= 0 it is the A_B-only fit.
+    Returns the keys of nuisance_both_fits (fit, fit_J with posterior medians, sds and means), plus best (nuisance_both_fits with the range as
+    hard limits) and posterior (bounded_posterior of ps, ps_J and ext)."""
     if len(uniform) != 1: raise ValueError(f"nuisance_both_fits_uniform: one nuisance with a flat bounded prior, got {list(uniform)}")
     (name, (lo, hi)), = uniform.items()
     pri = {**(priors or {}), name: None}   # flat: the range is the prior
@@ -298,36 +276,33 @@ def nuisance_both_fits_uniform(problem, problem_redist, A_B_true, nuisances, pri
                 best=best, posterior=dict(ps=ps, ps_J=ps_J, ext=ext))
 
 
-# The nuisance table of one configuration: one row per entry of `rows` ({row label: tuple of nuisances}) with sigma_A_B, the bias dA_B = A_B_fit' -
-# A_B_true and |dA_B| / sigma_A_B, chi2_min' and <ln B> = chi2_min' / 2, and per nuisance of the row its sigma_post / sigma_prior ("shrink <name>";
-# "-" columns stay NaN) or, for a flat-prior amplitude, its fitted value and sigma ("<name>", "sig <name>": stellar amplitudes in ppm, the planetary
-# one as delta = (r1 - r2) / r2).
 def nuisance_table(problem, A_B_true, rows):
+    """Nuisance table of one configuration, one row per entry of `rows` ({label: tuple of nuisances}): sigma_A_B, bias_A_B, bias_sigma, chi2 and
+    lnB_mean, and per nuisance: for the geometry its shrinkage sigma_post / sigma_prior ("shrink <name>") or, with a flat prior, its fitted shift
+    and sigma ("<name>", "sig <name>"); for an amplitude its fitted value and sigma (stellar in ppm, planetary as delta = (r1 - r2) / r2), plus
+    the shrinkage with a prior."""
     out = []
     for label, nuis in rows.items():
         s = nuisance_solve(problem, nuis)
         row = {"row": label, "sigma_A_B": s["sigma_A_B"], "bias_A_B": s["A_B_fit"] - A_B_true, "bias_sigma": abs(s["A_B_fit"] - A_B_true) / s["sigma_A_B"], "chi2": s["chi2"], "lnB_mean": s["lnB_mean"]}
         for n in s["names"]:
             shrink = s["shrinkage"][n]
-            if n in problem["values"]:   # geometry: how far the data shrink its prior (the fitted shift and its sigma where it has none)
+            if n in problem["values"]:   # geometry: shrinkage, or shift and sigma under a flat prior
                 if np.isfinite(shrink): row[f"shrink {n}"] = shrink
                 else: row[n], row[f"sig {n}"] = s["delta"][n], s["sigma_post"][n]
-            else:                        # an amplitude, zero in the truth: what the fit gives it and its sigma, with a prior also the shrinkage
+            else:   # amplitude (zero in the truth): value and sigma, plus shrinkage with a prior
                 row[n], row[f"sig {n}"] = s["delta"][n], s["sigma_post"][n]
                 if np.isfinite(shrink): row[f"shrink {n}"] = shrink
         out.append(row)
     return pd.DataFrame(out)
 
 
-# Nonlinear counterpart of nuisance_solve, as a check of the linearisation: scipy least_squares over (A_B, the nuisances), or (A_B, F, the nuisances)
-# with redist=True, the point-source model re-evaluated at every step (geometry and T_s through model_pcurve / the planet's inclination, the planetary
-# deformation as amplitude x F_p(theta) x shape, the stellar term per detector), each detector's baseline removed by its mean and the Gaussian priors
-# as residual rows (theta - theta_0) / sigma_p. With redist the fit starts at the noiseless joint fit (fit_redist), where F > 0: a start at F = 0
-# would stay there (see fit_redist). sigma from the Jacobian at the solution. limits: {name: (lo, hi)} hard limits on the shift of a nuisance from its
-# true value, as in nuisance_solve (bounds of the solver). A nuisance that ends on a limit is listed in on_limit, its sigma_post is 0, and the other
-# sigmas are those of the remaining parameters. Returns dict(A_B_fit, sigma_A_B, chi2, values {name: fitted value}, sigma_post {name}, nfev,
-# on_limit), with redist also F_fit and sigma_F.
 def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, bounds=A_B_FIT_BOUNDS, stellar_ratios=None, redist=False, F_bounds=F_BOUNDS, limits=None, **kw):
+    """Nonlinear check of nuisance_solve: scipy least_squares over (A_B, [F,] the nuisances), the point-source model re-evaluated at every step (the
+    planetary term with the exact planetary_area_factor), each detector's baseline removed by its mean and the Gaussian priors as residual rows
+    (theta - theta_0) / sigma_p. With redist the fit starts at the noiseless solution of fit_redist, where F > 0: a start at F = 0 would stay
+    there (see fit_redist). Sigmas from the Jacobian at the solution. limits: as in nuisance_solve, as solver bounds. Returns dict(A_B_fit,
+    sigma_A_B, chi2, values, sigma_post, nfev, on_limit), with redist also F_fit and sigma_F."""
     from scipy.optimize import least_squares
     model = "naive_redist" if redist else "naive"
     cfgs = list(cfg) if is_detector_set(cfg) else [cfg]
@@ -341,7 +316,8 @@ def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, b
     if "a_rs" in priors: priors.setdefault("a_rs|b", priors["a_rs"])
     ratios = _stellar_ratios(cfgs, stellar_ratios)
     yb = [binned(c, t) for c, t in zip(cfgs, truths)]
-    typical = {"a_rs": 0.04, "a_rs|b": 0.04, "rp_rs": 3e-4, "incl": 1., "b": 0.03, "T_s": 50., "planetary": 0.02}   # typical size of a step per parameter (stellar amplitudes: 1 ppm), for the solver's scaling only
+    # for the solver's scaling only: a typical step per parameter (stellar amplitudes: 1 ppm)
+    typical = {"a_rs": 0.04, "a_rs|b": 0.04, "rp_rs": 3e-4, "incl": 1., "b": 0.03, "T_s": 50., "planetary": 0.02}
     k0 = 2 if redist else 1   # the first nuisance in theta = (A_B, [F,] nuisances)
     scale = np.array([0.05] + [0.005] * redist + [priors.get(n, typical.get(n, 1.)) for n in names])
 
@@ -358,7 +334,8 @@ def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, b
             ph = 2. * np.pi * t_ / c.planet.period
             if "planetary" in p:
                 fp = model_pcurve(replace(c, transit=False), model, theta[0], F=F, **geom, **kw)[1]
-                m = m + fp * (planetary_area_factor(p["planetary"], c.planet.incl, ph) - 1.)   # the exact projected-area factor, not its linearisation
+                # the exact projected-area factor, not its linearisation
+                m = m + fp * (planetary_area_factor(p["planetary"], c.planet.incl, ph) - 1.)
             if f"stellar:{k + 1}" in p: m = m - p[f"stellar:{k + 1}"] * np.cos(2. * ph)
             if "stellar_shared" in p: m = m - p["stellar_shared"] * ratios[k] * np.cos(2. * ph)
             r = y - binned(c, m)
@@ -374,10 +351,11 @@ def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, b
         lo = np.array([-np.inf] * k0 + [start.get(n, 0.) + limits.get(n, (-np.inf, np.inf))[0] for n in names])
         hi = np.array([np.inf] * k0 + [start.get(n, 0.) + limits.get(n, (-np.inf, np.inf))[1] for n in names])
         solver_bounds = dict(bounds=(lo, hi))
-        theta0 = np.clip(theta0, lo, hi)   # limits that exclude the true value (e.g. a nuisance held at a point away from it) start on the nearest limit
+        theta0 = np.clip(theta0, lo, hi)   # a start outside the limits moves onto the nearest one
     res = least_squares(residuals, theta0, x_scale=scale, diff_step=1e-3, xtol=1e-10, ftol=1e-12, gtol=1e-12, **solver_bounds)
     free = np.ones(len(theta0), bool)
-    if limits:   # a parameter on a limit is held there and the covariance is that of the others; the solver stops just inside, so within 0.1 % of its range of a limit counts as on it
+    # a parameter on a limit is held there (covariance of the others); the solver stops just inside, so within 0.1 % of the range counts as on it
+    if limits:
         width = np.where(np.isfinite(hi - lo), hi - lo, 0.)
         free = (res.x - lo > 1e-3 * width) & (hi - res.x > 1e-3 * width)
     sd = np.zeros(len(theta0))
@@ -388,20 +366,20 @@ def nuisance_fit_nonlinear(cfg, truth, nuisances, priors=None, A_B_start=None, b
     return out
 
 
-# Expected semi-amplitude [ppm] of the star's ellipsoidal variation, A_ell = alpha_ell (M_p / M_star) (R_star / a)^3 sin^2 i with alpha_ell = 0.15 (15
-# + u) (1 + g) / (3 - u) (Morris & Naftilan 1993; Shporer 2017, PASP 129, 072001, eqs. 7-8): u the linear limb-darkening and g the gravity-darkening
-# coefficient of the band, mass_ratio = M_p / M_star.
 def ellipsoidal_amplitude(planet, mass_ratio, u, g):
+    """Expected semi-amplitude [ppm] of the star's ellipsoidal variation, A_ell = alpha_ell (M_p / M_star) (R_star / a)^3 sin^2 i with
+    alpha_ell = 0.15 (15 + u) (1 + g) / (3 - u) (Morris & Naftilan 1993; Shporer 2017, PASP 129, 072001, eqs. 7-8). u, g: the band's linear limb-
+    and gravity-darkening coefficients; mass_ratio = M_p / M_star."""
     alpha = 0.15 * (15. + u) * (1. + g) / (3. - u)
     return 1e6 * alpha * mass_ratio * (planet.r2 / planet.R) ** 3 * np.sin(np.radians(planet.incl)) ** 2
 
 
-# The prior of the shared stellar term: the expected semi-amplitude A [ppm] (ellipsoidal_amplitude at the middle of the (u, g) bracket) and its
-# fractional 1-sigma uncertainty, the quadrature sum of the fractional errors of M_p / M_star (frac_q), of (R_star / a)^3 (3 sig_a_rs / (a/R*)), of
-# sin^2 i (2 sig_incl [deg] / tan i) and of alpha_ell (half the bracket range over its middle, taken as 1 sigma: generous for a bracket). Errors
-# independent (the M_star - a/R* correlation through the stellar density is ignored). Returns dict(A, frac, sigma = frac * A [ppm], parts {source:
-# fractional error}).
 def ellipsoidal_prior(planet, mass_ratio, frac_q, u_range, g_range, sig_a_rs=0., sig_incl=0.):
+    """Prior of the shared stellar term: the expected semi-amplitude A [ppm] (ellipsoidal_amplitude at the middle of the (u, g) bracket) and its
+    fractional 1-sigma error, the quadrature sum of those of M_p / M_star (frac_q), (R_star / a)^3 (3 sig_a_rs / (a/R*)), sin^2 i
+    (2 sig_incl / tan i, sig_incl in deg) and alpha_ell (half the bracket over its middle, taken as 1 sigma: generous for a bracket). Errors
+    independent (the M_star - a/R* correlation through the stellar density is ignored). Returns dict(A, frac, sigma = frac * A [ppm], parts
+    {source: fractional error})."""
     lo, hi = ellipsoidal_amplitude(planet, mass_ratio, u_range[0], g_range[0]), ellipsoidal_amplitude(planet, mass_ratio, u_range[1], g_range[1])
     parts = {"M_p / M_star": float(frac_q), "(R_star / a)^3": 3. * sig_a_rs / (planet.R / planet.r2), "sin^2 i": 2. * np.radians(sig_incl) / np.tan(np.radians(planet.incl)),
              "alpha_ell (u, g)": (hi - lo) / (hi + lo)}
@@ -409,28 +387,24 @@ def ellipsoidal_prior(planet, mass_ratio, frac_q, u_range, g_range, sig_a_rs=0.,
     return dict(A=A, frac=frac, sigma=frac * A, parts=parts)
 
 
-# Expected amplitude delta = (r1 - r2) / r2 of the planet's tidal deformation (the "planetary" column) for the fluid Love number h2: the tidal and the
-# centrifugal potential displace the surface of a synchronously rotating body in equilibrium by 7/6, -1/3 and -5/6 (in units of h2 zeta R_p, zeta =
-# (M_star / M_p) (R_p / a)^3) along r1, r2, r3, so to first order delta = 1.5 h2 zeta. mass_ratio = M_p / M_star.
 def deformation_amplitude(planet, mass_ratio, h2=1.):
+    """Expected amplitude delta = (r1 - r2) / r2 of the planet's tidal deformation (the "planetary" column) for the fluid Love number h2: the tidal
+    and the centrifugal potential displace the surface of a synchronously rotating body in equilibrium by 7/6, -1/3 and -5/6 (in units of h2 zeta
+    R_p, zeta = (M_star / M_p) (R_p / a)^3) along r1, r2, r3, so to first order delta = 1.5 h2 zeta. mass_ratio = M_p / M_star."""
     return 1.5 * h2 / mass_ratio * (planet.r1 / planet.R) ** 3
 
 
-# The prior of the planetary term. A body in hydrostatic equilibrium has 1 <= h2 <= 2.5 (all mass at the centre ... homogeneous), so the amplitude is
-# bounded: it cannot be fitted freely. Returns dict(lo, hi [the amplitudes at the ends of h2_range], sigma [the standard deviation of a uniform
-# distribution between them, the width of the Gaussian prior that stands for this range in the linear fits]). The error of the mass ratio and of the
-# geometry (10-30 % of the amplitude) is small against the range and is left out.
 def deformation_prior(planet, mass_ratio, h2_range=DEFORMATION_H2_RANGE):
+    """Prior of the planetary term: h2 within h2_range (DEFORMATION_H2_RANGE) bounds the amplitude, so it cannot be fitted freely. Returns dict(lo,
+    hi [the amplitudes at the ends of h2_range], sigma [the std of a uniform distribution between them, the Gaussian width that stands for the
+    range in the linear fits]). The errors of the mass ratio and the geometry (10-30 % of the amplitude) are small against the range and left out."""
     lo, hi = (deformation_amplitude(planet, mass_ratio, h2) for h2 in h2_range)
     return dict(lo=lo, hi=hi, sigma=(hi - lo) / np.sqrt(12.))
 
 
-# The hard limits of the planetary term (nuisance_solve(..., limits={"planetary": ...})) for a planet whose true Love number is h2_true while the fit
-# may take any h2 of h2_range: the shift of the amplitude from its true value lies between amplitude(h2_range[0]) - amplitude(h2_true) and
-# amplitude(h2_range[1]) - amplitude(h2_true). The column is linear in the amplitude, so only this shift enters and the simulated truth can stay a
-# sphere. Unlike the Gaussian of deformation_prior, this does not assume where in the range the fit ends. As a flat prior (nuisance_both_fits(...,
-# uniform=)) it gives what a retrieval would; as hard limits (limits=) the best fit, which ends on the upper limit wherever a free amplitude would
-# exceed it, while the posterior spreads over the range.
 def deformation_limits(planet, mass_ratio, h2_true, h2_range=DEFORMATION_H2_RANGE):
+    """(lo, hi) limits on the shift of the planetary amplitude from its true value, for a planet with Love number h2_true fitted with any h2 of
+    h2_range: amplitude(h2_range) - amplitude(h2_true). The column is linear in the amplitude, so only this shift enters and the simulated truth
+    can stay a sphere. For nuisance_solve(limits=) (best fit) or nuisance_both_fits(uniform=) (posterior; see nuisance_both_fits_uniform)."""
     lo, hi = (deformation_amplitude(planet, mass_ratio, h2) - deformation_amplitude(planet, mass_ratio, h2_true) for h2 in h2_range)
     return lo, hi

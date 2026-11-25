@@ -24,15 +24,15 @@ def _read_filter_file(filter_path):
 
 
 def load_filter(lambda_range, filter_path=None, n=300):
-    """The throughput T(lambda) of a band within lambda_range [m]: (wavelengths [m], throughput); a top-hat on n points without filter_path."""
+    """The throughput T(lambda) of a band within lambda_range [m]: (wavelengths [m], throughput); a top-hat on n points without filter_path.
+    The files hold plain throughputs T(lambda) in electrons per incident photon (the SVO / Pandeia convention), wavelengths in m; the photon
+    weighting lambda/(hc) is applied by the consumer (stellar.band_avg_planck, get_filter in fspiderman)."""
     l1, l2 = float(lambda_range[0]), float(lambda_range[1])
     if filter_path is None:
         lam = np.linspace(l1, l2, n)
         return lam, np.ones_like(lam)
     lam, w = _read_filter_file(str(filter_path))
     mask = (lam >= l1) & (lam <= l2)
-    # the files are plain throughputs T(lambda) [electrons per incident photon], the SVO / Pandeia convention; the photon weighting lambda/(hc) is
-    # applied by the consumer (stellar.band_avg_planck, get_filter in fspiderman)
     return lam[mask], w[mask]
 
 
@@ -40,20 +40,18 @@ def load_filter(lambda_range, filter_path=None, n=300):
 #####   The band table
 ############################################################################################################################################
 
-# One row per band of inputs/filters/bands.csv, keyed by its name ("MIRI/LRS", "JWST_NIRSpec.G395H_NRS1", ...):
-# FILTER_LAMBDA_UM: the wavelength range [um] used for observations, i.e. integrated over; FULL_LAMBDA_UM: the extent of the throughput file;
-# FILTER_FILES: the throughput file (a name in paths.FILTER_DIR, or an absolute path); PANDEXO_MODES: the PandExo mode (jdi.load_mode_dict), None where
-# PandExo has none (noise.rms_1min then takes the noise level from inputs/noise/custom_sigma_1min.csv). register_band adds rows for the session.
+# One entry per band of inputs/filters/bands.csv, keyed by its name ("MIRI/LRS", "JWST_NIRSpec.G395H_NRS1", ...); register_band adds more.
+# FILTER_LAMBDA_UM: the range [um] integrated over; FULL_LAMBDA_UM: the extent of the throughput file; FILTER_FILES: the throughput file (a name
+# in paths.FILTER_DIR, or an absolute path); PANDEXO_MODES: the PandExo mode (jdi.load_mode_dict), None where PandExo has none.
 FILTER_LAMBDA_UM, FULL_LAMBDA_UM, FILTER_FILES, PANDEXO_MODES = {}, {}, {}, {}
 FILTER_LAMBDA_M, FULL_LAMBDA_M = {}, {}   # the same ranges in m, as arrays
 _INSTRUMENT_OF_FILE = {}                  # real path of a throughput file -> band name
 
 
 def register_band(name, l1, l2, filter_path, full_range=None, pandexo_mode=None, overwrite=False):
-    """Add a band for this session. l1, l2: the range [m] integrated over; filter_path: the throughput file, T(lambda) in electrons per incident photon
-    with wavelengths in m (an absolute path, or a file name in paths.FILTER_DIR); full_range [m]: the extent of the file (default (l1, l2));
-    pandexo_mode: the PandExo mode name, None if PandExo has none. The band is then known to filter_lambda, filter_loc, resolve_instrument and
-    noise.rms_1min like the bands of inputs/filters/bands.csv."""
+    """Add a band for this session, known everywhere like the bands of inputs/filters/bands.csv.
+    l1, l2: the range [m] integrated over; filter_path: the throughput file (format as in load_filter), an absolute path or a file name in
+    paths.FILTER_DIR; full_range [m]: the extent of the file (default (l1, l2)); pandexo_mode: the PandExo mode, None if PandExo has none."""
     if name in FILTER_LAMBDA_UM and not overwrite: raise KeyError(f"band {name!r} exists; pass overwrite=True to replace it")
     if not l1 < l2: raise ValueError(f"band {name!r}: l1 = {l1} must be below l2 = {l2} [m]")
     full = (l1, l2) if full_range is None else full_range
@@ -77,7 +75,7 @@ with open(BANDS_TABLE, newline="") as _f:
 
 def filter_lambda(instrument, planet=None):
     """The wavelength range [m] used for observations as a 2-element array: the band's FILTER_LAMBDA_UM range or, for a planet (PlanetParams or
-    name) with a PARTIAL_BANDS entry on this instrument, the part of it that planet can be observed in (its host saturates the rest)."""
+    name) with a PARTIAL_BANDS entry on this instrument, the part of it that planet can be observed in."""
     if planet is not None:
         part = PARTIAL_BANDS_N.get(_normalise(getattr(planet, "name", planet)), {}).get(instrument)
         if part is not None: return part.copy()
@@ -122,13 +120,14 @@ JWST_BANDS = ["JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2", "MIRI/LRS", 
 _bad = set(JWST_BANDS) - set(FILTER_LAMBDA_UM)
 if _bad: raise KeyError(f"JWST_BANDS uses unknown instrument(s) {sorted(_bad)}; valid keys are {list(FILTER_LAMBDA_UM)}")
 
-# Joint detector fits by name, for the `instruments` of retrievals/run_dynesty.py: the alias stands for the detector tuple; both spellings are accepted
-# by resolve_instrument, and joint_name turns the tuple back into the alias for file names.
+# Joint detector fits by name: the alias stands for the detector tuple; resolve_instrument accepts both spellings, and joint_name turns the tuple
+# back into the alias for file names.
 JOINT_INSTRUMENTS = {"JWST_NIRSpec.G395H_joint": tuple(JWST_BANDS[:2])}
 
 
 def resolve_instrument(instrument):
-    """An instrument entry -> a band name (str: a single-detector fit) or the tuple of band names of a joint fit (given as a tuple, or as one of the JOINT_INSTRUMENTS aliases)."""
+    """An instrument entry -> a band name (str: a single-detector fit) or the tuple of band names of a joint fit (given as a tuple, or as one of
+    the JOINT_INSTRUMENTS aliases)."""
     if isinstance(instrument, str) and instrument in JOINT_INSTRUMENTS: return JOINT_INSTRUMENTS[instrument]
     dets = tuple(instrument) if isinstance(instrument, (list, tuple)) else (instrument,)
     bad = [d for d in dets if d not in FILTER_LAMBDA_UM]
@@ -138,7 +137,8 @@ def resolve_instrument(instrument):
 
 
 def detector_label(instrument):
-    """Short label of a band for parameter names and panel titles: the part after the last '_' or '/' ("JWST_NIRSpec.G395H_NRS1" -> "NRS1", "MIRI/LRS" -> "LRS", "MIRI/F1280W" -> "F1280W")."""
+    """Short label of a band for parameter names and panel titles: the part after the last '_' or '/' ("JWST_NIRSpec.G395H_NRS1" -> "NRS1",
+    "MIRI/LRS" -> "LRS")."""
     return re.split(r"[_/]", instrument)[-1]
 
 
@@ -153,13 +153,12 @@ def joint_name(detectors):
 #####   Partial bands
 ############################################################################################################################################
 
-# Bands a planet can be observed in only in part (inputs/noise/partial_bands.csv): {planet name: {band: [lo, hi] um}}. The host saturates the rest of
-# the band in the first group (PandExo's full_saturation_mask: unrecoverable), so the white-light curve is the sum of the clean pixels, and the
-# forward model must integrate the same range as the noise is computed over. filter_lambda(instrument, planet) returns this range, and the
-# name-based constructors use it: bias.detectors.instrument_cfg and model.with_planet (so the per-planet tables and retrievals/run_dynesty.py);
-# noise.rms_1min bins the PandExo spectrum over it. A FittingConfig built by hand keeps the band it is given. Planet names are matched loosely; a
-# planet renamed around the same host (bias.maps.moved_planet, the Roche cases) does not inherit the entry, although the saturation belongs to the
-# host. A partial band changes the forward model: a stored retrieval made over another band is flagged by retrieval.storage.check_fit_current.
+# Bands a planet can be observed in only in part (inputs/noise/partial_bands.csv): {planet name: {band: [lo, hi] um}}. The host saturates the
+# rest of the band in the first group (PandExo's full_saturation_mask: unrecoverable), so the white-light curve is the sum of the clean pixels,
+# and the forward model must integrate the same range the noise is computed over. filter_lambda(instrument, planet) returns this range:
+# noise.rms_1min bins over it, and the name-based constructors (bias.detectors.instrument_cfg, model.with_planet) apply it. A FittingConfig
+# built by hand keeps the band it is given. Planet names are matched loosely; a planet renamed around the same host does not inherit the entry,
+# although the saturation belongs to the host.
 PARTIAL_BANDS = {}
 with open(PARTIAL_BANDS_TABLE, newline="") as _f:
     for _r in csv.DictReader(_f):
@@ -173,9 +172,9 @@ PARTIAL_BANDS_N = {_normalise(k): {ins: 1e-6 * np.array(r, float) for ins, r in 
 
 
 def observed_band(filter_path, l1, l2, planet):
-    """The band [m] that `planet` (PlanetParams or name) is observed in, for a configuration with this throughput file and band edges: where (l1, l2)
-    is a STANDARD band of the instrument of filter_path (its FILTER_LAMBDA_UM range, or any planet's PARTIAL_BANDS range of it), the planet's own
-    filter_lambda(instrument, planet); any other (l1, l2) - a top-hat, a band-edge sweep - as given. Returns (l1, l2)."""
+    """The band (l1, l2) [m] that `planet` (PlanetParams or name) is observed in, for a configuration with this throughput file and band edges:
+    where (l1, l2) is a standard band of the instrument of filter_path (its FILTER_LAMBDA_UM range, or any planet's PARTIAL_BANDS range of it),
+    the planet's own filter_lambda(instrument, planet); any other (l1, l2), such as a top-hat or a band-edge sweep, as given."""
     if filter_path is None or not (np.isfinite(l1) and np.isfinite(l2)): return l1, l2
     ins = _INSTRUMENT_OF_FILE.get(os.path.realpath(str(filter_path)))
     if ins is None: return l1, l2

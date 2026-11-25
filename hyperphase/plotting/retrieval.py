@@ -22,9 +22,9 @@ from hyperphase.retrieval.simulate import detector_data, truth_model_kw
 #####   Simulated data
 ############################################################################################################################################
 def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", labels=None, verbose=True, **model_kw):
-    """The simulated observation against the truth it was drawn from (re-evaluated here, one forward model per detector at the truth's own resolution, truth_model_kw), with the residuals
-    in units of sigma. Prints the chi2 check of the noise realisation (verbose=False: silent). One column per detector for a detector set (joint dataset); `labels` names the columns.
-    Returns fig, (ax, axr) for a single detector and fig, axes (2 x n_detectors) for a set; does not show (the caller does)."""
+    """The simulated observation against the truth it was drawn from (re-evaluated per detector at the truth's resolution, truth_model_kw;
+    model_kw overrides it), with the residuals in units of sigma, and a printed chi2 check of the noise (verbose). One column per detector for a
+    detector set; `labels` names the columns. Returns fig, (ax, axr), or fig, axes (2 x n_detectors) for a set."""
     cfgs, datas = detector_cfgs(cfg), detector_data(data)
     labels = list(labels) if labels is not None else [None] * len(cfgs)
     fig, axes = plt.subplots(2, len(cfgs), figsize=(8 * len(cfgs), 5.5), sharex=True, squeeze=False, gridspec_kw=dict(height_ratios=[3, 1], hspace=0.06))
@@ -32,7 +32,7 @@ def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", labe
         ax, axr = axes[0, k], axes[1, k]
         ph = d["t"] / c.planet.period  # orbital phase
 
-        # Full Phase Curve (the exact curve simulate_data drew the data from; model_kw overrides the recorded settings)
+        # Full phase curve
         t_hi, y_hi = model_pcurve(c, insolation_model, A_B_true, **{**truth_model_kw(d, c), **model_kw})
         y_true = binned(c, y_hi) + float((d.get("truth") or {}).get("offset", 0.))   # with the injected baseline, if any
         ph_hi = t_hi / c.planet.period
@@ -71,26 +71,25 @@ _COLOR = {"naive": "C0", "hyperillum": "C3", "naive_redist": "C2"}
 
 
 def _density_levels(x, y, rng=None, bins=60, smooth=1.0, levels=(0.68, 0.95)):
-    """2-D density of equal-weight draws plus the contour VALUES that enclose the requested posterior mass.
-    Levels are found by sorting the histogram cells by height and walking down until the cumulative mass is reached - the usual credible-region construction, not a Gaussian sigma."""
+    """2-D density of equal-weight draws and the contour values that enclose the requested posterior masses: highest-density regions (cells
+    sorted by height, summed until the mass is reached), not Gaussian sigmas."""
     H, xe, ye = np.histogram2d(x, y, bins=bins, range=rng)
     if smooth: H = gaussian_filter(H, smooth)
     H /= H.sum()
     flat = np.sort(H.ravel())[::-1]
     cum = np.cumsum(flat)
     v = sorted(float(flat[min(int(np.searchsorted(cum, l)), len(flat) - 1)]) for l in levels)
-    v = sorted(set(v))   # coarse bins can make two mass levels land in the same cell; contour() needs strictly increasing levels
+    # coarse bins can put two mass levels in the same cell; contour() needs strictly increasing levels
+    v = sorted(set(v))
     return 0.5 * (xe[1:] + xe[:-1]), 0.5 * (ye[1:] + ye[:-1]), H.T, v
 
 
 def plot_posterior_overlay(fits, x, y, truth=None, profile=None, n=None, bins=60, smooth=1.0, colors=None, figsize=(6.4, 6.4), seed=0):
-    """Both insolation models' 2-D posterior on ONE pair of axes, with the 1-D marginals on the sides. This is the figure that shows the bias instead of tabulating it.
-
-    fits    : {name: NestedFit}, same parameters and same data
-    x, y    : parameter names (must be sampled in every fit)
-    truth   : {name: value} - the injected values
-    profile : optional {name: (x_vals, y_vals, lnL)} from logl_grid, drawn as DASHED contours at the 2-parameter 1/2/3 sigma levels. Where these differ from the filled posterior contours you are seeing the prior volume (Occam) at work, since the likelihood map carries no prior weighting.
-    n       : equal-weight draws per model (None -> all)"""
+    """The models' 2-D posteriors of (x, y) on one pair of axes, with the 1-D marginals on the sides. Returns fig, ax.
+    fits: {name: NestedFit}, same parameters and same data; x, y: parameter names sampled in every fit.
+    truth: {name: injected value}.
+    profile: {name: (x_vals, y_vals, lnL)} from logl_grid, drawn as dotted contours at the 2-parameter 1/2/3 sigma levels (no prior weighting).
+    n: equal-weight draws per model (None: all)."""
     colors = colors or _COLOR
     fig = plt.figure(figsize=figsize)
     gs = fig.add_gridspec(2, 2, width_ratios=(4, 1), height_ratios=(1, 4), wspace=0.05, hspace=0.05)
@@ -129,11 +128,11 @@ def plot_posterior_overlay(fits, x, y, truth=None, profile=None, n=None, bins=60
 
 
 def plot_bias(fits, truth, colors=None, figsize=None):
-    """Median +/- 68% per model against the injected value, one panel per parameter, annotated with the bias in sigma. The compact version of posterior_summary().
-    The fits need not share a ParameterSet: the panels are the UNION of their parameters (first-seen order), and a model that does not sample one simply has no marker in that panel."""
+    """Median +/- 68 % per model against the injected value, one panel per parameter, annotated with the bias in sigma (posterior_summary).
+    The panels are the union of the fits' parameters (first-seen order); a model that does not sample one has no marker there. Returns fig, axes."""
     colors = colors or _COLOR
     names, labels = [], {}
-    for f in fits.values():   # union, not the first fit's names: e.g. only "naive_redist" samples F
+    for f in fits.values():   # e.g. only "naive_redist" samples F
         for nm, lb in zip(f.pset.names, f.pset.labels):
             if nm not in labels: names.append(nm); labels[nm] = lb
     fig, axes = plt.subplots(1, len(names), figsize=figsize or (4.2 * len(names), 2.4))
@@ -153,7 +152,8 @@ def plot_bias(fits, truth, colors=None, figsize=None):
 
 
 def plot_evidence_jitter(bf, figsize=(5.2, 3.0), bins=40):
-    """Distribution of ln B over dynesty's jittered realisations (output of bayes_factor). The width is the sampling uncertainty on the Bayes factor without assuming either lnZ is Gaussian."""
+    """Distribution of ln B over dynesty's jittered realisations (output of bayes_factor): the sampling uncertainty of the Bayes factor,
+    without assuming either lnZ is Gaussian. Returns fig, ax."""
     fig, ax = plt.subplots(figsize=figsize)
     ax.hist(bf["samples"], bins=bins, density=True, histtype="stepfilled", color="0.75", edgecolor="0.35")
     ax.axvline(bf["lnB"], color="k", lw=1.4, label=f"$\\ln B$ = {bf['lnB']:+.2f}")
@@ -165,15 +165,13 @@ def plot_evidence_jitter(bf, figsize=(5.2, 3.0), bins=40):
 
 
 def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200, colors=None, seed=0, n_jobs=-1, figsize=None, levels=(68., 95.)):
-    """Posterior predictive check + where in orbital phase the two models actually differ. One column per detector for a joint fit.
-
-    Panel 1: data with each model's median curve and its 68/95% posterior band.
+    """Posterior predictive check, and where in orbital phase the two models differ. One column per detector for a joint fit.
+    Panel 1: the data with each model's median curve and its posterior bands at `levels` %.
     Panel 2: (data - median model) / sigma per model.
-    Panel 3: the difference of the two median curves [ppm] against +/- sigma_bin, and the per-bin delta chi2 between the two BEST-FIT (max-lnL) models as bars. Those bars sum to 2 * delta lnL_max (over all detectors for a joint fit), so they attribute the evidence to specific orbital phases.
-
-    num / den : which model is which in panel 3 - both the curve and the bars are num - den, same convention as bayes_factor().
-    n         : posterior draws per model (n forward models per model and detector).
-    Returns fig, (ax, axr, axd) for a single detector and fig, axes (3 x n_detectors) for a joint fit."""
+    Panel 3: the difference of the two median curves against +/- sigma_bin, and as bars the per-bin delta chi2 between the two best-fit
+    (max-lnL) models. The bars sum to 2 delta lnL_max over all detectors: where in phase the likelihood ratio arises.
+    num / den: the models of panel 3 (num - den, as in bayes_factor()). n: posterior draws per model.
+    Returns fig, (ax, axr, axd), or fig, axes (3 x n_detectors) for a joint fit."""
     colors = colors or _COLOR
     names = list(fits)
     f0, L0 = fits[names[0]], logls[names[0]]
@@ -190,7 +188,7 @@ def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200,
         best[name] = L.model(f.results.samples[int(np.argmax(f.results.logl))])
 
     fig, axes = plt.subplots(3, n_det, figsize=figsize or (8.5 * n_det, 8.0), sharex=True, squeeze=False, gridspec_kw=dict(height_ratios=[3, 1.3, 1.6], hspace=0.07))
-    mk = ("o", "s", "^", "v")   # the residual sets sit on top of each other when the models fit almost equally well
+    mk = ("o", "s", "^", "v")   # the residuals coincide when the models fit almost equally well
     for kd in range(n_det):
         ax, axr, axd = axes[:, kd]
         blk, d = blocks[kd], datas[kd]
@@ -220,20 +218,18 @@ def plot_posterior_predictive(logls, fits, num="hyperillum", den="naive", n=200,
         for dd in (-1., 1.): axr.axhline(dd, color="0.85", lw=0.6, ls=":")
         axr.axhline(0., color="0.7", lw=0.8); axr.set_ylabel("resid / $\\sigma$"); axr.set_ylim(-3.5, 3.5)
 
-        # Panel 3: the num/den pair only - with more than two models every other one is still in panels 1-2, but a single difference curve can only be
-        # a pair
+        # Panel 3: the num - den pair only (any further model is in panels 1-2)
         if num in fits and den in fits:
             a, b = den, num
             axd.axhspan(-s.mean(), s.mean(), fc="0.9", ec="0.6", lw=0.8, label=r"$\pm\sigma_{bin}$")
             axd.axhline(0., color="0.7", lw=0.8)
             dmed = med[b] - med[a]
             axd.plot(ph, dmed, color="0.2", lw=1.5, label=f"median {b} - {a} [ppm]")
-            dchi2 = ((y - best[a][blk]) ** 2 - (y - best[b][blk]) ** 2) / s ** 2   # > 0 where b fits better; sums to 2*dlnL_max over all detectors
+            dchi2 = ((y - best[a][blk]) ** 2 - (y - best[b][blk]) ** 2) / s ** 2   # > 0 where b fits better
             ax2 = axd.twinx()
             ax2.bar(ph, dchi2, width=0.7 / len(ph), color="C2", alpha=0.45, zorder=0)
-            # Both axes forced symmetric about zero. twinx() autoscales independently, so a one-signed dchi2 makes matplotlib clamp ax2 to [0, max]
-            # and the bars then grow from the panel floor while axd's zero line sits mid-panel - the reader reads the bars against a baseline that is
-            # not theirs.
+            # Both axes symmetric about zero: twinx() autoscales on its own, so one-signed bars would grow from the panel floor, not from axd's
+            # zero line.
             w = 1.05 * max(float(np.abs(dmed).max()), float(s.mean())); axd.set_ylim(-w, w)
             v = 1.05 * float(np.abs(dchi2).max()) or 1.; ax2.set_ylim(-v, v)
             ax2.set_ylabel(f"$\\Delta\\chi^2$ per bin (sum {dchi2.sum():+.2f})", fontsize=8, color="C2")
@@ -254,7 +250,8 @@ def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=
     for ax, k in zip(axes, keys):
         for j, (name, d) in enumerate(derived.items()):
             v = np.asarray(d[k], float)
-            if np.ptp(v) == 0.:   # a constant, e.g. the 0 K nightside (T_anti) of "naive" and "hyperillum": a histogram of one value has an arbitrary width, so draw a line (dash lengths distinguish coincident models)
+            # a constant (e.g. the 0 K nightside T_anti of "naive" and "hyperillum"): a line, whose dash length tells coincident models apart
+            if np.ptp(v) == 0.:
                 ax.axvline(v[0], color=colors.get(name, "k"), lw=1.4, ls=(0, (4 + 2 * j, 2)), label=f"{name} (= {v[0]:g})")
             else:
                 ax.hist(v, bins=bins, density=True, histtype="step", lw=1.4, color=colors.get(name, "k"), label=name)
@@ -267,31 +264,20 @@ def plot_derived(derived, keys=("T_sub", "T_term", "depth"), truth=None, colors=
 
 def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth="hyperillum",
                         A_B_bounds=A_B_FIT_BOUNDS, xatol=None, truth_kw=None, fisher=True, colors=None, figsize=None, verbose=False):
-    """The one-seed fits against the noiseless truth: what you would report vs. what the bias actually is. One column per detector for a joint fit.
-
-    Top panel   : the high-resolution truth and its binned version (= the noiseless data), the simulated data, each model's posterior MEDIAN curve, and the misspecified model(s) fitted
-                  to the NOISELESS truth with the least-squares fits of the bias analysis (bias.fits.fit_naive for "naive"; fit_redist, jointly in (A_B, F), when a
-                  "naive_redist" fit is loaded; for a detector set the joint fit with one baseline per detector), offset free - those are deterministic (no seed, no noise) and ARE the
-                  bias. For "naive_redist" the fitted F is the false-positive redistribution the point-source model needs to mimic hyperillumination, and the nightside temperature it implies is printed.
-    Lower panel : everything minus the binned truth against +/- sigma_bin. The black points are the noise realisation the medians are chasing; the dotted grey line is the numerical
-                  floor, i.e. the truth model re-evaluated at the injected theta on the likelihood's own coarser grid, so anything at that level is grid resolution and not model bias.
-
-    cfg / data       : the FittingConfig (or detector set) and the simulate_data() output the fits were run on.
-    logls / fits     : {model_name: GaussianLogL or JointGaussianLogL} and {model_name: NestedFit}, same keys. "naive" and "naive_redist" get a noiseless fit each when present; the truth's own model only its median.
-    base             : {param: injected value} (the dict handed to theta_of / posterior_summary; every baseline included).
-    insolation_truth : which insolation model the data were drawn from; must be a key of logls for the numerical floor to be drawn.
-    A_B_bounds       : range of the noiseless fits, i.e. of the bias; A_B_FIT_BOUNDS by default, as in the bias analysis (A_B_fit < 0 allowed), not the sampler's prior.
-    xatol            : tolerance of the noiseless fits; None -> the fitters' own defaults, so the numbers are exactly those of the bias analysis.
-    truth_kw         : forward-model resolution of the truth; defaults to what simulate_data recorded in data["truth"] (truth_model_kw).
-    fisher           : also evaluate the Fisher sigma of each noiseless fit (bias.fisher.fisher_sigma, the error bar of the bias analysis) and quote the bias in its units next to
-                       the posterior width of this one seed: the two agree where the posterior is Gaussian and not truncated by the prior.
-    verbose          : False prints the noiseless fits, the bias in sigma with the critical sigma_1min and the bias/floor gate; True adds the per-model median and max-lnL rows, the absorbed offsets and the floor detail.
-
-    Returns fig, (ax, axr), out for a single detector (fig, axes, out with axes 2 x n_detectors for a joint fit). out["noiseless"][model] carries every number of a noiseless fit
-    (A_B, F, offset [per detector], chi2, rms, bias_A_B, dT_over_T [substellar], T_night [naive_redist], sigma_A_B / sigma_F [posterior, this seed], bias_sigma0, sigma_1min_crit
-    [None for a joint fit: its detectors would all be scaled alike], bias_over_floor, and with fisher=True sigma_A_B_fisher / sigma_F_fisher, bias_sigma_fisher, sigma_1min_crit_fisher);
-    the rest are the curves (t_hi, y_hi, y_true, y_med, y_map, y_floor; per detector where applicable), the posterior summaries and the per-model chi2 against the truth.
-    """
+    """The one-seed fits against the noiseless truth. One column per detector for a joint fit.
+    Top: the truth (unbinned, and binned = the noiseless data), the simulated data, each model's posterior median, and, dashed, the noiseless
+    fits of "naive" and "naive_redist" (where loaded) to the truth (noiseless_reference: fit_AB_only, fit_redist), which are the bias.
+    Bottom: everything minus the binned truth, against +/- sigma_bin; dotted: the numerical floor, the truth model at the injected theta on the
+    likelihood's grid (as in evidence_reference).
+    logls / fits: {model: GaussianLogL or JointGaussianLogL} and {model: NestedFit}, same keys.
+    base: {param: injected value}, every baseline included (as for theta_of).
+    insolation_truth: the model the data were drawn from; the floor needs it in logls.
+    A_B_bounds, xatol, truth_kw: passed to noiseless_reference.
+    fisher: also quote the bias in units of the Fisher sigma (fisher_sigma), next to this seed's posterior width.
+    verbose: also print the per-model median and max-lnL rows, the absorbed offsets and the floor detail.
+    Returns fig, (ax, axr), out, or fig, axes, out for a joint fit. out["noiseless"][model]: the noiseless fit (A_B, F, offset, chi2), its bias,
+    the bias in posterior and Fisher sigmas with the matching sigma_1min_crit (None for a joint fit), and bias_over_floor; the rest of out:
+    the plotted curves, the posterior summaries and each median's chi2 against the truth."""
     colors = colors or _COLOR
     cfgs, datas = detector_cfgs(cfg), detector_data(data)
     n_det, cfg0, joint = len(cfgs), detector_cfgs(cfg)[0], len(detector_cfgs(cfg)) > 1
@@ -299,8 +285,7 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     labels = list(getattr(L0, "labels", None) or [None] * n_det)
     blocks = _blocks([c.n_bins for c in cfgs])
 
-    # --- the noiseless reference (the truth curves at their own resolution) and the misspecified models fitted to it: the deterministic bias, no seed
-    # involved ---
+    # --- the noiseless reference and the misspecified models fitted to it ---
     ref = noiseless_reference(cfg, data, [m for m in ("naive", "naive_redist") if m in fits], A_B_true=A_B_true, insolation_truth=insolation_truth, A_B_bounds=A_B_bounds, xatol=xatol, truth_kw=truth_kw)
     t_hi, y_hi, y_true, s_bin, fit_cfg, fit_truth = (ref[k] for k in ("t_hi", "y_hi", "y_true", "s_bin", "fit_cfg", "fit_truth"))
     truth_kw, F_truth, off_inj, insols, noiseless = (ref[k] for k in ("truth_kw", "F_truth", "off_inj", "insols", "noiseless"))
@@ -313,7 +298,8 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
         d["y"], d["offset"] = (ys if joint else ys[0]), (offs if joint else offs[0])
         d["bias_A_B"] = d["A_B"] - A_B_true
         d["dT_over_T"] = float(temperature_bias(A_B_true, d["bias_A_B"], d["F"] or 0.))   # substellar temperature
-        if d["F"] is not None: d["T_night"] = float(surface_temperature(np.pi, cfg0.planet, "naive_redist", A_B=d["A_B"], emissivity_bol=cfg0.emissivity_bol, F=d["F"]))   # the nightside the false-positive F implies (0 K in the truth)
+        # the nightside the false-positive F implies (0 K in the truth)
+        if d["F"] is not None: d["T_night"] = float(surface_temperature(np.pi, cfg0.planet, "naive_redist", A_B=d["A_B"], emissivity_bol=cfg0.emissivity_bol, F=d["F"]))
 
     # --- the noisy fits: posterior median (what you would report) and max-lnL (= MAP, uniform priors) -------------
     summ   = {m: posterior_summary(f, base, verbose=False)["params"] for m, f in fits.items()}
@@ -321,7 +307,8 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     th_map = {m: f.results.samples[int(np.argmax(f.results.logl))] for m, f in fits.items()}
     y_med  = {m: logls[m].model(th_med[m]) for m in fits}                  # concatenated over the detectors (blocks)
     y_map  = {m: logls[m].model(th_map[m]) for m in fits}
-    y_floor = logls[insolation_truth].model(theta_of(logls[insolation_truth], base)) if insolation_truth in logls else None   # same model, same parameters, coarser grid: the numerical floor of this figure
+    # the numerical floor: same model, same parameters, the likelihood's coarser grid
+    y_floor = logls[insolation_truth].model(theta_of(logls[insolation_truth], base)) if insolation_truth in logls else None
 
     fig, axes = plt.subplots(2, n_det, figsize=figsize or (8.5 * n_det, 6.2), sharex=True, squeeze=False, gridspec_kw=dict(height_ratios=[3, 1.7], hspace=0.06))
     for kd in range(n_det):
@@ -359,18 +346,19 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
     for m, d in noiseless.items():
         sig = 0.5 * (summ[m]["A_B"]["hi"] - summ[m]["A_B"]["lo"])        # posterior width of A_B under this model, this seed
         d["sigma_A_B"] = float(sig)
-        d["bias_sigma0"] = abs(d["bias_A_B"]) / sig                       # the NOISELESS bias in units of the posterior width - the seed-free counterpart of summ[m]["A_B"]["bias_sigma"], whose numerator is one realisation's median
-        d["sigma_1min_crit"] = None if joint else cfg0.sigma_1min * d["bias_sigma0"]   # sigma_A_B scales linearly with sigma_1min (at fixed n_orbits/n_bins) while the bias does not, so |dA_B| = sigma_A_B exactly at this per-minute precision; sigma_A_B is read off THIS seed's posterior, so it carries one realisation's scatter, and the linear scaling assumes the posterior is not truncated by the prior box. A joint fit has one sigma_1min per detector: only the common factor is quoted.
+        d["bias_sigma0"] = abs(d["bias_A_B"]) / sig                       # the noiseless bias in units of this seed's posterior width
+        # |bias| = sigma_A_B at this sigma_1min (measurability), from one seed's posterior width; None for a joint fit (one sigma_1min per detector)
+        d["sigma_1min_crit"] = None if joint else cfg0.sigma_1min * d["bias_sigma0"]
         if d["F"] is not None:
             d["sigma_F"] = float(0.5 * (summ[m]["F"]["hi"] - summ[m]["F"]["lo"]))
-            d["F_sigma0"] = d["F"] / d["sigma_F"]                            # the false-positive F in units of its (one-sided, prior-truncated) posterior width
-        if fisher:   # the error bar of the bias analysis: Fisher sigma at the noiseless fit, marginalised over the baseline(s) (and over F for naive_redist)
+            d["F_sigma0"] = d["F"] / d["sigma_F"]                            # F in units of its (one-sided) posterior width
+        if fisher:   # Fisher sigma at the noiseless fit, marginalised over the baselines (and F)
             sf = fisher_sigma(fit_cfg, m, d["A_B"], F=d["F"], bounds=A_B_bounds, F_bounds=F_BOUNDS, insol=insols[m], **truth_kw)
             d["sigma_A_B_fisher"] = float(sf[0])
             d["bias_sigma_fisher"], crit = (float(x) for x in measurability(d["bias_A_B"], sf[0], cfg0.sigma_1min))
             d["sigma_1min_crit_fisher"] = None if joint else crit
             if d["F"] is not None: d["sigma_F_fisher"] = float(sf[1])
-        d["bias_over_floor"] = (d["chi2"] / chi2_floor) if chi2_floor else None   # the gate on this whole figure: how far the model-vs-truth distance stands above the forward model's own discretisation error
+        d["bias_over_floor"] = (d["chi2"] / chi2_floor) if chi2_floor else None   # model-to-truth distance over the numerical floor
 
     out = dict(t_hi=t_hi, y_hi=y_hi if joint else y_hi[0], y_true=y_true if joint else y_true[0], y_med=y_med, y_map=y_map, y_floor=y_floor, summary=summ, noiseless=noiseless,
                chi2_truth={m: chi2_tr(y_med[m]) for m in fits}, chi2_floor=chi2_floor, blocks=blocks)
@@ -390,7 +378,7 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
 
     if noiseless: print("NOISELESS fit(s) to the NOISELESS truth  (offset free, no noise, no seed - this is THE bias; the least-squares fits of the bias analysis" + (", jointly over the detectors):" if joint else "):"))
     for m, d in noiseless.items():
-        fac = (1. / d["bias_sigma0"]) if d["bias_sigma0"] > 0 else np.inf      # how much finer sigma_1min must get before the bias is a 1-sigma effect
+        fac = (1. / d["bias_sigma0"]) if d["bias_sigma0"] > 0 else np.inf      # how much finer sigma_1min must get for a 1-sigma bias
         fisher_txt = f" = {np.sign(d['bias_A_B']) * d['bias_sigma_fisher']:+.2f} sigma_Fisher" if fisher else ""
         print(f"   {m:12s} A_B {d['A_B']:.4f}   bias {d['bias_A_B']:+.4f} = {d['bias_A_B'] / d['sigma_A_B']:+.2f} sigma_A_B (posterior, this seed){fisher_txt}   ->   dT_sub/T = {100 * d['dT_over_T']:+.2f} %")
         if d["F"] is not None:
@@ -418,15 +406,15 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
 
 
 ############################################################################################################################################
-#####   Retrievals against the linear prediction of the Bayes factor (03_retrieval_series.ipynb)
+#####   Retrievals against the linear prediction of the Bayes factor
 ############################################################################################################################################
 def plot_ns_check(tab, groups=None, figsize=None):
-    """The retrievals against the noiseless predictions, three panels over the rows of a series_table: (a) the paired posterior-median difference (misspecified model minus the
-    truth's model, same data) against the noiseless bias; (b) the posterior width of A_B under the misspecified model against the Fisher sigma; (c) the measured ln B (extended
-    source vs point source) against the per-run prediction chi2_min / 2 + zeta sqrt(chi2_min), with the sampler's error (jitter where available, else analytic) as error bars.
-    A table with the noiseless fit with redistribution (series_table(..., redist=True)) gets a fourth panel: (d) the significance of the spurious F in each realisation, from the
-    likelihood ratio of the two best fits, against its prediction max(z_F + zeta_F, 0).
-    Dashed: the one-to-one lines. groups: {legend label: boolean mask over tab} for the marker groups (default: one per series). Returns fig, axes."""
+    """The retrievals of a series_table against their noiseless predictions (run_prediction), one-to-one lines dashed:
+    (a) the paired posterior-median difference (misspecified minus the truth's model) against the noiseless bias;
+    (b) the posterior width of A_B under the misspecified model against the Fisher sigma;
+    (c) the measured ln B (extended vs point source, with the sampler's error) against the per-run prediction (bias.evidence);
+    (d) with series_table(..., redist=True): the significance of the spurious F in each realisation against its prediction max(z_F + zeta_F, 0).
+    groups: {legend label: boolean mask over tab}, the marker groups (default: one per series). Returns fig, axes."""
     groups = groups or {name: (tab["series"] == name).to_numpy() for name in dict.fromkeys(tab["series"])}
     mk = ("o", "s", "D", "^", "v", "P", "X", "<", ">", "*", "h", "p")
     panels = [("dA_noiseless", "dA_median", r"noiseless bias $\Delta A_B$", r"paired median difference $\tilde A_B^{\rm alt} - \tilde A_B^{\rm true}$", "(a) bias"),
@@ -440,7 +428,8 @@ def plot_ns_check(tab, groups=None, figsize=None):
             if not len(t): continue
             yerr = np.where(np.isfinite(t["lnB_err_jitter"]), t["lnB_err_jitter"], t["lnB_err"]) if yc == "lnB_ext_vs_ps" else None
             ax.errorbar(t[xc], t[yc], yerr=yerr, fmt=mk[k % len(mk)], ms=6, color=f"C{k % 10}", mec="k", mew=.5, elinewidth=1., capsize=2, label=f"{label} ({int(m.sum())})", zorder=3)
-        shown = tab[np.any(list(groups.values()), axis=0)]   # the axis range follows the plotted rows, not rows that no group shows (e.g. null tests, whose bias has the other sign)
+        # the axis range follows the plotted rows only (e.g. not null tests, whose bias has the other sign)
+        shown = tab[np.any(list(groups.values()), axis=0)]
         lo, hi = np.nanmin([shown[xc].min(), shown[yc].min()]), np.nanmax([shown[xc].max(), shown[yc].max()])
         pad = 0.06 * (hi - lo) or 1e-3
         ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="0.4", lw=1., ls="--", zorder=1)
@@ -453,15 +442,15 @@ def plot_ns_check(tab, groups=None, figsize=None):
 
 
 def plot_ns_realizations(tab, panels, A_B_ylim=None, figsize=None, order="seed"):
-    """The noise realisations of one configuration side by side: what each simulated observation returns. One column per entry of `panels` ({title: boolean mask over tab}), the
-    runs of a column ordered by `order` (default: the seed, so the same number is the same standardised noise in every column; e.g. "lnB_pred" sorts each column by its predicted
-    ln B). With more than 15 realisations the markers shrink, the z_F numbers of (b) are left out and every fifth realisation is ticked.
-    (a) the posterior of A_B under the extended-source model, the point-source model and the point-source model with redistribution: median, 68 % (thick) and 95 % (thin) intervals;
-        dashed: the injected value; thin lines in the model colours: the noiseless fits of the two point-source models.
-    (b) the posterior of F with the same intervals, the noiseless fitted F (line) and, above each realisation, the significance of F in it (zF_obs).
-    (c) ln B of the extended-source over the point-source model: measured (filled, with the sampler's error) and predicted for that realisation's noise (open), on the expectation
-        chi2_min / 2 (line) with its +/- sqrt(chi2_min) band; squares: ln B of the point-source model with over without redistribution. Dotted: ln B = 2.5 and 5 (Trotta 2008).
-    Needs a series_table(..., redist=True) and runs with all three models. The legend has a row of its own above the panels. Returns fig, axes (3 x number of panels)."""
+    """The noise realisations of one configuration side by side, one column per entry of `panels` ({title: boolean mask over tab}), sorted by
+    `order` (default: the seed, so the same number is the same standardised noise in every column). Above 15 realisations the markers shrink,
+    the z_F numbers of (b) are left out and every fifth realisation is ticked.
+    (a) the posterior of A_B under the extended-source, point-source and point-source-with-redistribution models: median, 68 % (thick) and 95 %
+        (thin) intervals; dashed: the injected value; thin lines: the noiseless fits of the two point-source models.
+    (b) the posterior of F, the noiseless F (line) and above each realisation its zF_obs.
+    (c) ln B, extended vs point source: measured (filled) and predicted from that realisation's noise (open), on the expectation chi2_min / 2
+        with its +/- sqrt(chi2_min) band; squares: ln B with vs without redistribution. Dotted: ln B = 2.5 and 5 (Trotta 2008).
+    Needs a series_table(..., redist=True) of runs with all three models. Returns fig, axes (3 x number of panels)."""
     n = len(panels)
     fig = plt.figure(figsize=figsize or (3.4 * n + 0.8, 9.))
     gs = fig.add_gridspec(4, n, height_ratios=[0.75, 3., 1.7, 2.6], hspace=0.09, wspace=0.05)   # row 0 holds the legend
@@ -511,7 +500,8 @@ def plot_ns_realizations(tab, panels, A_B_ylim=None, figsize=None, order="seed")
     many = max(int(m.sum()) for m in panels.values()) > 15
     for ax, tag in zip(axes[:, 0], ("(a)", "(b)" if many else "(b) numbers: $z_F$", "(c)")): ax.text(0.03, 0.96, tag, transform=ax.transAxes, fontsize=9, va="top")
     entries = {l: h for ax in (axes[0, 0], axes[2, 0]) for h, l in zip(*ax.get_legend_handles_labels())}
-    order = [models[0][3], models[1][3], models[2][3], L_INJ, L_NOISELESS, L_EXP, L_LNB, L_PRED, L_LNB_F]   # filled column by column: the models and references of (a) and (b), then the Bayes factors of (c)
+    # filled column by column: the models and references of (a) and (b), then the Bayes factors of (c)
+    order = [models[0][3], models[1][3], models[2][3], L_INJ, L_NOISELESS, L_EXP, L_LNB, L_PRED, L_LNB_F]
     ax_leg = fig.add_subplot(gs[0, :])
     ax_leg.axis("off")
     ax_leg.legend([entries[l] for l in order], order, loc="center", ncol=5, frameon=False, fontsize=8)
@@ -519,15 +509,15 @@ def plot_ns_realizations(tab, panels, A_B_ylim=None, figsize=None, order="seed")
 
 
 def plot_ns_distribution(tab, rows, others=None, figsize=None):
-    """The noise realisations of one configuration as distributions: what a single observation can return, and how often. One row of three panels per entry of `rows`
-    ({title: boolean mask over tab}); needs a series_table(..., redist=True) and runs with all three models.
-    (a) the posterior median of A_B under the point-source model (circles) and the point-source model with redistribution (squares) against the median under the extended-source
-        model in the same realisation. Dashed: equal medians; lines in the model colours: the extended-source median shifted by the noiseless bias of each fit; cross: the injected
-        value; dash-dotted: the prior edge A_B = 0; the bar in the corner: the median 68 % half-widths of the extended-source and the point-source posterior.
-    (b) the fraction of realisations whose ln B (extended vs point source) exceeds the value on the x axis (steps), against the Gaussian prediction N(chi2_min / 2, chi2_min) of
-        the noiseless fit (dashed). others: one {label: mask} per row for further configurations in grey (e.g. another planet in the same mode). Dotted: ln B = 2.5 and 5.
-    (c) the significance z_F of the spurious F in each realisation against ln B of that realisation; the fill tells what the Bayes factor of the point-source model with over
-        without redistribution (ln B_F) concludes. Horizontal line: the noiseless z_F (its predicted median); vertical line: chi2_min / 2.
+    """The noise realisations of one configuration as distributions, one row of three panels per entry of `rows` ({title: boolean mask over
+    tab}). Needs a series_table(..., redist=True) of runs with all three models.
+    (a) the posterior median of A_B under the point-source model (circles) and with redistribution (squares) against the extended-source median
+        of the same realisation. Dashed: equal medians; lines: shifted by each fit's noiseless bias; cross: the injected value; dash-dotted:
+        A_B = 0; corner bar: the median 68 % half-widths of the extended- and point-source posteriors.
+    (b) the fraction of realisations with ln B (extended vs point source) above x (steps), against the Gaussian prediction N(chi2_min / 2,
+        chi2_min) (dashed); others: one {label: mask} per row, further configurations in grey. Dotted: ln B = 2.5 and 5.
+    (c) z_F of the spurious F against ln B per realisation, filled by ln B_F (point source with vs without redistribution). Horizontal line:
+        the noiseless z_F; vertical line: chi2_min / 2.
     Returns fig, axes (number of rows x 3)."""
     fig, axes = plt.subplots(len(rows), 3, figsize=figsize or (13., 4.1 * len(rows)), squeeze=False)
     x_B = np.linspace(-4., 20., 500)
@@ -535,7 +525,8 @@ def plot_ns_distribution(tab, rows, others=None, figsize=None):
         t = tab[mask].sort_values("seed")
         A0, dA, dAF, c2 = t["A_B_true"].iloc[0], t["dA_noiseless"].iloc[0], t["dA_noiseless_redist"].iloc[0], t["chi2_min"].iloc[0]
 
-        lo, hi = min(t["A_B_med_truth"].min(), A0) - 0.03, max(t["A_B_med_truth"].max(), A0) + 0.03   # (a) the point-source medians against the extended-source median
+        # (a) the point-source medians against the extended-source median
+        lo, hi = min(t["A_B_med_truth"].min(), A0) - 0.03, max(t["A_B_med_truth"].max(), A0) + 0.03
         y_lo = min(-0.03, t["A_B_med_redist"].min() - 0.03)
         x = np.array([lo, hi])
         ax_A.plot(x, x, color="k", lw=1., ls="--", zorder=1, label="equal medians")
@@ -550,7 +541,8 @@ def plot_ns_distribution(tab, rows, others=None, figsize=None):
         ax_A.set_xlim(lo, hi); ax_A.set_ylim(y_lo, hi)
         ax_A.set_xlabel(r"$A_B$, extended-source model"); ax_A.set_ylabel(r"$A_B$, point-source models")
 
-        groups = [(title.split(",")[0], t, "k")] + [(lab, tab[m], "0.6") for lab, m in (others[k].items() if others else ())]   # (b) fraction of realisations above ln B
+        # (b) fraction of realisations above ln B
+        groups = [(title.split(",")[0], t, "k")] + [(lab, tab[m], "0.6") for lab, m in (others[k].items() if others else ())]
         for lab, g, color in groups:
             v, c = np.sort(g["lnB"].to_numpy()), g["chi2_min"].iloc[0]
             ax_B.step(np.concatenate([[x_B[0]], v, [x_B[-1]]]), np.concatenate([[1.], 1. - np.arange(1, len(v) + 1) / len(v), [0.]]), where="post", color=color, lw=1.6, label=f"{lab} ({len(v)})")
@@ -558,7 +550,7 @@ def plot_ns_distribution(tab, rows, others=None, figsize=None):
         ax_B.axvline(0., color="k", lw=0.7, zorder=1)
         ax_B.set_ylim(0., 1.02); ax_B.set_ylabel(r"fraction of realizations above $\ln B$")
 
-        b = t["lnB_redist_vs_ps"].to_numpy()   # (c) the significance of F against ln B; the fill: the verdict of the Bayes factor with vs without redistribution
+        b = t["lnB_redist_vs_ps"].to_numpy()   # (c) z_F against ln B, filled by ln B_F
         for sel, fc, lab in ((b <= 0., "w", r"$\ln B_F \leq 0$"), ((b > 0.) & (b <= 2.5), "#a9cdf0", r"$0 < \ln B_F \leq 2.5$"), (b > 2.5, C_REDIST, r"$\ln B_F > 2.5$")):
             ax_F.plot(t["lnB"][sel], t["zF_obs"][sel], "s", ms=6, mfc=fc, mec=C_REDIST, mew=1., ls="none", zorder=3, label=f"{lab} ({int(sel.sum())})")
         ax_F.axhline(t["zF_noiseless"].iloc[0], color=C_REDIST, lw=1., zorder=1)

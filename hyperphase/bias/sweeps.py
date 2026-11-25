@@ -18,28 +18,26 @@ def _fit_truth_at(cfg, A_B_true, models, bounds, kw):
     return fit_truth(cfg, A_B_true, models=models, free_offset=True, bounds=bounds, fisher=True, **kw)
 
 
-# Refit the models at every TRUE Bond albedo in A_B_grid (single target geometry, free baseline), in parallel.
-# Returns {model: {name: array}} with the keys of fit_truth (fisher=True): "naive" always, "naive_redist" with redist=True.
 def bias_vs_true_AB(cfg, A_B_grid, redist=True, bounds=A_B_FIT_BOUNDS, n_jobs=-1, **kw):
+    """fit_truth (Fisher sigmas included) at every true A_B of A_B_grid, single geometry, in parallel: {model: {key: array}} with "naive", and
+    "naive_redist" if redist."""
     models = ("naive", "naive_redist") if redist else ("naive",)
     rows = pmap(_fit_truth_at, [(cfg, a, models, bounds, kw) for a in A_B_grid], n_jobs)
     return {m: {k: np.array([r[m][k] for r in rows]) for k in rows[0][m]} for m in models}
 
 
 ############################################################################################################################################
-#####   One-parameter sweeps of the bias (01_albedo_bias.ipynb, 02_redistribution_bias.ipynb: inclination, u_bol)
+#####   One-parameter sweeps of the bias: inclination, u_bol
 ############################################################################################################################################
 
-# A sweep changes ONE setting of the configuration and repeats the whole bias pipeline (fit_truth: truth, fits, Fisher sigmas) at every value. The
-# setting is a transform (cfg, value) -> cfg, applied to every detector of a set, so anything a FittingConfig or its planet holds can be swept without
-# a function of its own. cfg_with_incl: the orbital inclination [deg] (truth and fits; the noise level stays the planet's own). cfg_with_u_bol: the
-# bolometric limb darkening of the irradiance, which only the hyperillumination truth uses (the point-source models have no u_bol), so it is a sweep
-# of the truth alone.
 def cfg_with_incl(cfg, incl):
+    """Sweep transform: the orbital inclination [deg], in truth and fits (the noise level stays the planet's own)."""
     return replace(cfg, planet=replace(cfg.planet, incl=float(incl)))
 
 
 def cfg_with_u_bol(cfg, u_bol):
+    """Sweep transform: the bolometric limb darkening of the irradiance. Only the extended-source truth uses it (the point-source models have no
+    u_bol), so this sweeps the truth alone."""
     return replace(cfg, u_bol=float(u_bol))
 
 
@@ -57,23 +55,14 @@ def _bias_sweep_point(cfg, A_B_true, transform, value, models, bounds, F_bounds,
     return row
 
 
-# fit_truth (Fisher sigmas included) at every value of a one-parameter sweep, points in parallel, as a DataFrame. cfg: FittingConfig or detector set;
-# transform: (cfg, value) -> cfg (cfg_with_incl, cfg_with_u_bol, or any function of that form). Columns: value; A_B_fit, bias, sigma, bias_sigma,
-# chi2, lnB_mean = chi2 / 2, railed (A_B-only fit); A_B_fit_J, bias_J, sigma_J, bias_sigma_J, F_fit, chi2_J, railed_J and z_F = sqrt(chi2 - chi2_J)
-# (fit with redistribution; z_F needs both models), as in bias_vs_a_rs.
 def bias_sweep(cfg, A_B_true, values, transform, models=("naive", "naive_redist"), bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
+    """One-parameter sweep: transform(cfg, value) -> cfg changes one setting (applied to every detector of a set; cfg_with_incl, cfg_with_u_bol or
+    any such function) and the whole fit_truth pipeline, Fisher sigmas included, is repeated at every value, points in parallel. Columns: value;
+    A_B_fit, bias, sigma, bias_sigma, chi2, lnB_mean = chi2 / 2, railed (A_B-only fit); A_B_fit_J, bias_J, sigma_J, bias_sigma_J, F_fit, chi2_J,
+    railed_J (fit with redistribution); z_F = sqrt(chi2 - chi2_J) when both run."""
     return pd.DataFrame(pmap(_bias_sweep_point, [(cfg, A_B_true, transform, v, models, bounds, F_bounds, kw) for v in values], n_jobs))
 
 
-# A hyper-illuminated planet that DOES redistribute heat, fitted with the point-source model with redistribution: the sweep over the true F (paper
-# App. G.2, "True redistribution"). Truth: "hyperillum_redist" at (A_B_true, F_true), i.e. Kreidberg & Loeb (2016) eq. 1 with the extended-source
-# irradiance; fit: fit_redist ("naive_redist"), with its Fisher sigmas at the fit. The A_B-only point-source fit is left out: against a planet with a
-# warm nightside it fails for a reason that has nothing to do with the irradiation model. Columns: value (= F_true), A_B_fit_J, bias_J, sigma_J,
-# bias_sigma_J, F_fit, bias_F (= F_fit - F_true), sigma_F, bias_F_sigma, chi2_J and lnB_mean_J = chi2_J / 2. The last is the expected ln B of the
-# extended-source model with redistribution against the point-source model with redistribution: both have the parameters (A_B, F), so their Occam
-# factors cancel as for the two bare-rock models, as long as F_true lies well above the prior edge F = 0 (at F_true = 0 the edge cuts the posterior of
-# the extended-source model only, so there chi2_J / 2 is not the expected ln B). At F_true = 0 the row is the fit with redistribution of every other
-# table (bias_F = F_fit, the spurious redistribution).
 def _true_F_point(cfg, A_B_true, F_true, bounds, F_bounds, kw):
     truth = truth_curves(cfg, A_B_true, F_true=F_true, **kw)
     A_fit, F_fit, chi2, _ = fit_redist(cfg, truth, free_offset=True, bounds=bounds, F_bounds=F_bounds, **kw)
@@ -83,4 +72,10 @@ def _true_F_point(cfg, A_B_true, F_true, bounds, F_bounds, kw):
 
 
 def true_F_sweep(cfg, A_B_true, F_values, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, **kw):
+    """Bias of the point-source fit with redistribution (fit_redist, Fisher sigmas at the fit) against an extended-source truth that redistributes
+    heat: "hyperillum_redist" at (A_B_true, F_true), Kreidberg & Loeb (2016) eq. 1 with the extended-source irradiance, for each F_true of
+    F_values. The A_B-only fit is left out: against a warm nightside it fails for a reason unrelated to the irradiation model. Columns: value
+    (F_true), A_B_fit_J, bias_J, sigma_J, bias_sigma_J, F_fit, bias_F = F_fit - F_true, sigma_F, bias_F_sigma, chi2_J, and
+    lnB_mean_J = chi2_J / 2, the expected ln B of the extended- against the point-source model, both with redistribution: they have the same
+    parameters, so their Occam factors cancel, but only for F_true well above the prior edge F = 0."""
     return pd.DataFrame(pmap(_true_F_point, [(cfg, A_B_true, F, bounds, F_bounds, kw) for F in F_values], n_jobs))
