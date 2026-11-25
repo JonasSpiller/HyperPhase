@@ -29,17 +29,17 @@ import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = os.path.join(HERE, os.pardir, "run_dynesty.py")
 
-JOINT, LRS = "JWST_NIRSpec.G395H_joint", "MIRI/LRS"   # the two primary modes (JOINT: NRS1 + NRS2 in one fit, HItargets_utils.JOINT_INSTRUMENTS)
+JOINT, LRS = "JWST_NIRSpec.G395H_joint", "MIRI/LRS"   # the two primary modes (JOINT: NRS1 + NRS2 in one fit, bands.JOINT_INSTRUMENTS)
 NRS1, NRS2 = "JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2"
-IMAGING = ("MIRI/F1280W", "MIRI/F1500W", "MIRI/F1800W")   # noise levels for TOI-2431 b only (HItargets_utils.CUSTOM_SIGMA_1MIN)
+IMAGING = ("MIRI/F1280W", "MIRI/F1500W", "MIRI/F1800W")   # noise levels for TOI-2431 b only (inputs/noise/custom_sigma_1min.csv)
 MODES = (JOINT, LRS)
 THREE_DETECTORS = ((NRS1, NRS2, LRS),)   # one entry: a joint fit of the three detectors, one A_B (and F) and one baseline per detector
 
-# The paper's sample (HItargets_utils.PAPER_PLANETS), {file stem: planet}
+# The paper's sample (paper.PAPER_PLANETS), {file stem: planet}
 PLANETS = {"toi2431b": "TOI-2431 b", "toi2260b": "TOI-2260 b", "k2141b": "K2-141 b", "k2131b": "K2-131 b", "toi561b": "TOI-561 b",
            "kepler78b": "Kepler-78 b", "toi1444b": "TOI-1444 b", "toi1798_02": "TOI-1798.02", "hd80653b": "HD 80653 b", "cnc55e": "55 Cnc e"}
 TARGET, OTHER = "TOI-2431 b", "K2-141 b"   # the two reference planets
-MODES_OF = {"55 Cnc e": (LRS,)}            # 55 Cnc e saturates NIRSpec/G395H (HItargets_utils.UNOBSERVABLE)
+MODES_OF = {"55 Cnc e": (LRS,)}            # 55 Cnc e saturates NIRSpec/G395H (inputs/noise/unobservable.csv)
 SEEDS_OF = {TARGET: range(40, 70), OTHER: range(40, 70)}
 SEEDS = range(40, 44)                      # the other planets
 
@@ -99,11 +99,11 @@ for seed in range(43, 47):
 
 # The free-geometry runs: inserted into run_dynesty.py before its sampler settings
 FREE_GEOMETRY = r'''# Free geometry (added by make_runs.py): the orbital geometry is sampled in every model, with Gaussian priors centred on the injected values with the published
-# uncertainties (HItargets_utils.GEOMETRY_SIGMA), truncated at 5 sigma and the inclination also at 90 deg. The parameters are those the planet's source fitted
-# (HItargets_utils.GEOMETRY_PARAMS): a/R*, Rp/R* and the impact parameter b for TOI-2431 b, with i = arccos(b / (a/R*)), and a/R*, Rp/R* and i for K2-141 b.
+# uncertainties (paper.GEOMETRY_SIGMA), truncated at 5 sigma and the inclination also at 90 deg. The parameters are those the planet's source fitted
+# (paper.GEOMETRY_PARAMS): a/R*, Rp/R* and the impact parameter b for TOI-2431 b, with i = arccos(b / (a/R*)), and a/R*, Rp/R* and i for K2-141 b.
 import numpy as np
-from HItargets_utils import GEOMETRY_PARAMS, GEOMETRY_SIGMA
-from dynesty_utils import TruncNormal
+from hyperphase.paper import GEOMETRY_PARAMS, GEOMETRY_SIGMA
+from hyperphase.retrieval.priors import TruncNormal
 _GEOMETRY_TRUE = {"a_rs": planet.R / planet.r2, "rp_rs": planet.r1 / planet.r2, "incl": planet.incl, "b": planet.R / planet.r2 * np.cos(np.radians(planet.incl))}
 _GEOMETRY_LABEL = {"a_rs": r"$a/R_\star$", "rp_rs": r"$R_p/R_\star$", "incl": r"$i$ [deg]", "b": r"$b$"}
 

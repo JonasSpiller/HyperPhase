@@ -34,7 +34,8 @@ The thermal phase curves use [fSPIDERMAN](https://github.com/JonasSpiller/fSPIDE
 fixes for numpy ≥ 2, a faster light curve, a corrected band integration, a temperature-map interpolation that keeps a 0 K nightside at
 0 K, and errors that raise Python exceptions where SPIDERMAN ends the process (a planet inside its star). It is a C extension, so building it
 needs a C compiler. To use an existing environment instead, install fSPIDERMAN from its repository and this repository with `pip install -e .`
-(editable: the modules find the filter curves, stellar spectra and noise cache relative to the repository).
+(editable: the package `hyperphase` reads its data from `inputs/` of the repository; the environment variable `HYPERPHASE_DATA` points it
+elsewhere, see `hyperphase/paths.py`).
 
 Data that are not in the repository:
 
@@ -42,16 +43,19 @@ Data that are not in the repository:
   (Hauschildt et al. 2025) at each host's $T_{\rm eff}$, $\log g$ and [Fe/H]. This needs a 113 MB spectral cube that is not in the
   repository: build it once with `inputs/stellar_model/NewEra/build_newera.ipynb` from the NewEra JWST product
   ([doi:10.25592/uhhfdm.18108](https://doi.org/10.25592/uhhfdm.18108), about 12 GB). Without it, pass `stellar_model="blackbody"`.
-- **Noise levels.** `inputs/noise/pandexo_cache.csv` holds the PandExo precision of the planets and bands of the paper for
-  PandExo and Pandeia 2026.7. Other planets, bands or versions run PandExo, which needs the Pandeia reference data (`pandeia_refdata`) and
-  the CDBS files (`PYSYN_CDBS`).
+- **Noise levels.** `inputs/noise/pandexo_cache.csv` holds the PandExo precision of the planets and bands of the paper, computed with
+  PandExo and Pandeia 2026.7. Without PandExo installed these values are used as they are; with another version installed they are recomputed.
+  Other planets and bands run PandExo, which needs the Pandeia reference data (`pandeia_refdata`) and the CDBS files (`PYSYN_CDBS`). Their
+  results go to `~/.cache/hyperphase/pandexo_cache.csv` (or the file `HYPERPHASE_PANDEXO_CACHE` names), which is read before the shipped
+  cache, so the shipped cache stays as it is.
 
 ## Quickstart
 
 ```python
 import matplotlib.pyplot as plt
-from HItargets_utils import hi_planets_by_name, filter_lambda, filter_loc
-from hyperillumination_phasecurve_utils import full_PhaseCurve
+from hyperphase.bands import filter_lambda, filter_loc
+from hyperphase.phasecurve import full_PhaseCurve
+from hyperphase.targets import hi_planets_by_name
 
 planet = hi_planets_by_name("TOI-2431 b")   # the paper's parameters of TOI-2431 b
 band = "MIRI/LRS"
@@ -66,6 +70,23 @@ plt.ylim(-50, 250); plt.xlabel("orbital phase"); plt.ylabel("relative flux [ppm]
 The insolation models are `"hyperillum"` (extended star), `"naive"` (point source) and `"naive_redist"` (point source with the heat
 redistribution $F$ of Kreidberg & Loeb 2016, passed as `F=`). The numbered notebooks in `forward_model/`, starting with
 `01_irradiance.ipynb`, show the irradiance, the temperature maps and the thermal and reflected curves step by step.
+
+**Your own planet or band.** Every function takes the planet and the band directly, so nothing has to be added to a table:
+
+```python
+from hyperphase.planet import PlanetParams
+from hyperphase.bands import register_band
+from hyperphase.targets import register_planet
+
+planet = PlanetParams(name="My b", period=0.3, incl=85., ecc=0., w=90., r1=0.015, r2=1., R=2.5, T2_eff=4500., a_AU=0.008, T14=1.0,
+                      logg=4.6, feh=0.)   # r1, r2, R in any consistent units (here stellar radii); T14 in hours
+t, flux, depth = full_PhaseCurve(planet, (5e-6, 12e-6), insolation_model="hyperillum", A_B=0.2, stellar_model="blackbody")   # a 5-12 um top-hat
+register_planet(planet)   # optional: hi_planets_by_name("My b") now finds it; a table in the format of inputs/planets/ loads with load_planets
+register_band("NIRCam/F444W", 3.9e-6, 5.0e-6, "/path/to/f444w_throughput.dat")   # optional: filter_lambda / filter_loc then know the band
+```
+
+Single values of a catalogued planet change with `dataclasses.replace(hi_planets_by_name("TOI-2431 b"), incl=75.)`, and the baseline settings
+per call (`A_B=`, `u_bol=`, ...) or per configuration (`dataclasses.replace(cfg, u_bol=0.6)`).
 
 ## Conventions
 
@@ -82,22 +103,27 @@ redistribution $F$ of Kreidberg & Loeb 2016, passed as `F=`). The numbered noteb
   minute of integration.
 - **"Joint"** means two things: the fit of $A_B$ and $F$ together (`fit_redist`, the `_J` columns of the tables), and the fit of several detectors
   with one $A_B$ (`JointGaussianLogL`, the mode `"JWST_NIRSpec.G395H_joint"` of NRS1 and NRS2).
-- **Baseline settings** (albedos, emissivities, limb darkening, orbits, bins), the fit ranges and the paper's planet sample are defined once, at
-  the top of `Utilities/HItargets_utils.py` (`DEFAULT_*`, `A_B_BOUNDS`, `PAPER_PLANETS`, ...).
+- **Baseline settings** (albedos, emissivities, limb darkening, orbits, bins, map resolution, stellar model) and the fit ranges are defined once,
+  in `hyperphase/defaults.py` (`DEFAULT_*`, `A_B_BOUNDS`, ...), and are the default of every function argument. The paper's planet sample, the
+  published uncertainties of its reference planets and its fit list are in `hyperphase/paper.py` (`PAPER_PLANETS`, `GEOMETRY_SIGMA`, ...).
+- **Data tables.** The curated planet parameters (`inputs/planets/curated_planets.csv`, one published source per planet, taking precedence over
+  the archive), the bands (`inputs/filters/bands.csv`) and the per-planet noise exceptions (`inputs/noise/`: bands without a PandExo mode, modes a
+  planet cannot be observed in, bands observable only in part) are CSV files, read when the package is imported.
 
 ## Repository layout
 
 | Folder | Contents |
 |---|---|
-| `Utilities/` | The code. `hyperillumination_utils.py`: extended-source and point-source irradiance, heat redistribution, temperature maps. `hyperillumination_phasecurve_utils.py`: thermal (fSPIDERMAN) and reflected phase curves, stellar band fluxes, the model of the fits. `astro_utils.py`: orbits, Planck functions, brightness temperatures, stellar spectra, Roche limits. `newera_utils.py`: the NewEra spectral cube. `batman_utils.py`: transits and occultations with batman. `HItargets_utils.py`: planet parameters (NASA Exoplanet Archive and a curated table with one published source per planet), instrument bands, noise levels, the baseline settings. `simple_bias_analysis.py`: noiseless fits, Fisher uncertainties, evidence predictions, nuisance parameters, bias maps. `dynesty_utils.py`: simulated observations, likelihoods, nested-sampling retrievals. |
+| `hyperphase/` | The package, in layers (a module imports only from the layers before it). Settings and data: `defaults` (baseline settings, fit ranges), `paths` (where the data live), `bands` (observing bands). Forward model: `planet` (`PlanetParams`), `irradiance` (extended- and point-source irradiance, heat redistribution, temperature maps), `stellar` (Planck functions, stellar spectra, SPIDERMAN's stellar grid, brightness temperatures, limb darkening), `newera` (the NewEra cube), `orbit`, `roche`, `transit` (batman), `phasecurve` (thermal and reflected phase curves). Catalogue and fit model: `targets` (archive and curated planets), `noise` (PandExo), `model` (`FittingConfig`, `model_pcurve`). Analyses: `bias` (noiseless fits, Fisher uncertainties, evidence, nuisance parameters, maps, per-planet tables, sweeps), `retrieval` (simulated data, priors, likelihoods, dynesty, stored runs and their predictions). Figures: `plotting`. Also `paper` (the paper's configuration) and `validation` (alternative irradiance integrators). |
 | `forward_model/` | The forward model, in notebooks numbered in reading order: irradiance and illumination zones, thermal, reflected and full phase curves, heat redistribution, the nightside signal. |
 | `bias_analysis/` | The noiseless analysis, in notebooks numbered in reading order: albedo bias and spurious redistribution for single planets, over $(a/R_\star, T_{\rm eff})$ and for the planet sample; predicted Bayes factors; nuisance parameters; planets at their Roche limit; unconfirmed TESS candidates. |
 | `retrievals/` | Nested-sampling retrievals: `run_dynesty.py` (one run), `paper_runs/` (every retrieval of the paper), `example_runs/` (three stored retrievals of TOI-2431 b), and numbered notebooks that inspect a stored run, validate the sampler and compare the retrievals with their predictions. |
 | `validation/` | Checks of the model: the irradiance against InstellCa (Sadh & Gavassino 2026), the speed and accuracy of the thermal light curves (fSPIDERMAN against SPIDERMAN), and the blackbody against the NewEra star. |
 | `inputs/` | What the model reads but does not compute, each with the notebooks that made it: |
-| `inputs/filters/` | Instrument throughputs (`inputs/filters/Spiderman/`). |
+| `inputs/filters/` | Instrument throughputs (`inputs/filters/Spiderman/`) and the band table `bands.csv`. |
+| `inputs/planets/` | The curated planet parameters, `curated_planets.csv`. |
 | `inputs/stellar_model/` | NewEra spectral cube and limb-darkening coefficients. |
-| `inputs/noise/` | PandExo noise levels and their cache. |
+| `inputs/noise/` | PandExo noise levels and their cache, and the per-planet exceptions. |
 | `inputs/exoplanet_archive/` | Download of the archive's PSCompPars table, derived columns, and the snapshot used. |
 | `docs/` | Which notebook computes each figure and table of the paper ([`docs/paper_figures.md`](docs/paper_figures.md)), and the image of this README. |
 | `tests/` | The test suite (see below). |
@@ -112,8 +138,8 @@ pytest -m "not slow"   # without the brute-force check of the fit with redistrib
 The tests check the irradiance against the closed form of the absorbed power, an adaptive quadrature and a brute-force
 integration over the stellar surface; that heat redistribution conserves energy; SPIDERMAN's occultation depth and nightside flux against a
 direct integral of the temperature map, the fast light curves against direct SPIDERMAN evaluation, and that a planet inside its star raises an
-error instead of ending the process; the noiseless fits against a brute-force χ² grid; and that the stored retrievals reproduce their
-likelihood. They use a blackbody star, so they run without the NewEra cube; the tests that need the cube (whether the stored retrievals were
+error instead of ending the process; the noiseless fits against a brute-force χ² grid; that the stored retrievals reproduce their
+likelihood; and the structure of the package (its layers, the band and planet registries). They use a blackbody star, so they run without the NewEra cube; the tests that need the cube (whether the stored retrievals were
 run with the current stellar grid) or PandExo 2026.7 are skipped otherwise.
 
 ## Reproducing the retrievals
@@ -127,7 +153,7 @@ python make_runs.py      # writes one run file per planet, seed and setting
 ```
 
 They take about 2,000 core-hours in total and save to `retrievals/dynesty_results/`, which is not part of the repository. The three
-stored retrievals in `retrievals/example_runs/` can be read with `dynesty_utils.load_fits`. The comparison with
+stored retrievals in `retrievals/example_runs/` can be read with `hyperphase.retrieval.storage.load_fits`. The comparison with
 [InstellCa](https://github.com/Mradumay137/InstellCa) needs a clone of InstellCa at commit 99225f4 (see the first cell of
 `validation/instellca_comparison.ipynb`).
 
@@ -147,7 +173,7 @@ stored retrievals in `retrievals/example_runs/` can be read with `dynesty_utils.
 - Planet and stellar parameters: NASA Exoplanet Archive, Planetary Systems Composite Parameters table (doi:10.26133/NEA13), downloaded on
   2026 August 4. This research has made use of the NASA Exoplanet Archive, which is operated by the California Institute of Technology,
   under contract with the National Aeronautics and Space Administration under the Exoplanet Exploration Program. The derived columns and the
-  curated parameters in `HItargets_utils.CUSTOM` are not archive values; each entry cites its source.
+  curated parameters in `inputs/planets/curated_planets.csv` are not archive values; each entry cites its source.
 - Filter throughputs: SVO Filter Profile Service (Rodrigo et al. 2012, 2020, 2024). This research has made use of the SVO Filter Profile
   Service "Carlos Rodrigo", funded by MCIN/AEI/10.13039/501100011033/ through grant PID2023-146210NB-I00. The MIRI/LRS throughput is taken
   from the Pandeia reference data (Pontoppidan et al. 2016).

@@ -13,13 +13,14 @@ import pytest
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "Utilities"))      # also without `pip install -e .`
+sys.path.insert(0, str(ROOT))      # also without `pip install -e .`
 with contextlib.redirect_stdout(io.StringIO()):  # mute fspiderman's "looking for fspidermanrc file"
     import fspiderman  # noqa: F401
 
-import newera_utils
-from HItargets_utils import filter_lambda, filter_loc, hi_planets_by_name
-from hyperillumination_phasecurve_utils import FittingConfig
+from hyperphase.newera import CUBE_FLUX
+from hyperphase.bands import filter_lambda, filter_loc
+from hyperphase.targets import hi_planets_by_name
+from hyperphase.model import FittingConfig
 
 
 @pytest.fixture(scope="session")
@@ -48,5 +49,5 @@ def cfg_lrs(toi2431b, lrs):
 
 @pytest.fixture
 def newera_cube():
-    if not newera_utils.CUBE_FLUX.exists():
+    if not CUBE_FLUX.exists():
         pytest.skip("needs the NewEra spectral cube (inputs/stellar_model/NewEra/build_newera.ipynb)")

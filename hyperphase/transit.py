@@ -1,8 +1,12 @@
+"""Transits and occultations with batman, and the light-travel-time correction."""
+
 import batman
 import numpy as np
-from astro_utils import occultation_time, true_anomaly
-from HItargets_utils import DEFAULT_U   # baseline transit limb darkening
 from astropy import constants as const
+
+from hyperphase.defaults import DEFAULT_U
+from hyperphase.orbit import occultation_time, true_anomaly
+
 
 c = const.c.value # m/s
 seconds_per_day = 86400.

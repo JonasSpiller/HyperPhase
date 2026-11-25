@@ -13,7 +13,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from astropy import constants as const
-from astro_utils import *
+from hyperphase.orbit import roche_radius_over_r1, transit_duration_t14
+from hyperphase.stellar import planck_ratio, planck_ratio_logderiv
 
 
 # ==========================================================================
@@ -127,7 +128,7 @@ SHORT_ROUNDING = {
 
 
 # --------------------------------------------------------------------------
-# Helpers  (the physics helpers planck_ratio, transit_duration_t14 and roche_radius_over_r1 come from Utilities/astro_utils.py)
+# Helpers  (the physics helpers planck_ratio, transit_duration_t14 and roche_radius_over_r1 come from hyperphase/stellar.py and orbit.py)
 # --------------------------------------------------------------------------
 
 def symmetric_sigma(df, base):

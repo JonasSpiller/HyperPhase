@@ -5,22 +5,30 @@ import traceback
 
 
 def _repo_root(start):
-    """The repository root: the first parent of `start` that holds Utilities/. Copies of this script (e.g. the run files in paper_runs/ and its done/ folder) then run from any depth."""
+    """The repository root: the first parent of `start` that holds hyperphase/. Copies of this script (e.g. the run files in paper_runs/ and its done/ folder) then run from any depth."""
     d = os.path.abspath(start)
-    while not os.path.isdir(os.path.join(d, "Utilities")):
+    while not os.path.isdir(os.path.join(d, "hyperphase")):
         parent = os.path.dirname(d)
-        if parent == d: raise FileNotFoundError(f"no Utilities/ folder above {start}")
+        if parent == d: raise FileNotFoundError(f"no hyperphase/ folder above {start}")
         d = parent
     return d
 
 REPO_ROOT = _repo_root(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "Utilities"))
+sys.path.insert(0, REPO_ROOT)
 import contextlib, io
 with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
     import fspiderman as sp
-from HItargets_utils import hi_planets_by_name, filter_loc, filter_lambda, rms_1min, NoNoiseLevelError, resolve_instrument, detector_label, joint_name, JOINT_INSTRUMENTS, DEFAULT_A_B, DEFAULT_A, DEFAULT_U_BOL, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS, A_B_BOUNDS, F_BOUNDS, OFFSET_BOUNDS
-from hyperillumination_phasecurve_utils import FittingConfig, ConstantBandAlbedo, ScaledBandAlbedo   # ScaledBandAlbedo(1.): A = A_B, the A_B-coupled alternative (only within the physical prior A_B_BOUNDS, where A >= 0)
-from dynesty_utils import Parameter, ParameterSet, Uniform, SamplerConfig, simulate_data, make_logl, run_nested_fit, posterior_summary, bayes_factor, dataset_tag
+from hyperphase.bands import detector_label, filter_lambda, filter_loc, JOINT_INSTRUMENTS, joint_name, resolve_instrument
+from hyperphase.defaults import (A_B_BOUNDS, DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS, DEFAULT_U, DEFAULT_U_BOL, F_BOUNDS,
+                                 OFFSET_BOUNDS)
+from hyperphase.noise import NoNoiseLevelError, rms_1min
+from hyperphase.targets import hi_planets_by_name
+from hyperphase.model import ConstantBandAlbedo, FittingConfig, ScaledBandAlbedo   # ScaledBandAlbedo(1.): A = A_B, the A_B-coupled alternative (only within the physical prior A_B_BOUNDS, where A >= 0)
+from hyperphase.retrieval.likelihood import make_logl
+from hyperphase.retrieval.priors import Parameter, ParameterSet, Uniform
+from hyperphase.retrieval.sampler import bayes_factor, posterior_summary, run_nested_fit, SamplerConfig
+from hyperphase.retrieval.simulate import simulate_data
+from hyperphase.retrieval.storage import dataset_tag
 
 
 ####################################################################################################
@@ -30,18 +38,18 @@ from dynesty_utils import Parameter, ParameterSet, Uniform, SamplerConfig, simul
 # Planet data
 planet = hi_planets_by_name("TOI-2431 b") # "TOI-2431 b", "K2-141 b", "TOI-2260 b", "K2-157 b", KOI-1843.03
 
-u, u_bol = DEFAULT_U, DEFAULT_U_BOL   # transit and irradiance limb darkening (baseline settings, HItargets_utils.py)
+u, u_bol = DEFAULT_U, DEFAULT_U_BOL   # transit and irradiance limb darkening (baseline settings, hyperphase/defaults.py)
 
-A_B_true = DEFAULT_A_B   # injected Bond albedo (baseline settings, HItargets_utils.py)
+A_B_true = DEFAULT_A_B   # injected Bond albedo (baseline settings, hyperphase/defaults.py)
 
 A_model = ConstantBandAlbedo(DEFAULT_A)   # band-integrated albedo A of the reflected light, independent of A_B
 
 # Filters to be used: one dataset and one set of fits PER ENTRY, exactly as if the script were run once per entry (every other input is shared). An
 # entry is a band name, or a JOINT fit of several detectors - one shared (A_B, F), one baseline per detector, as in the bias analysis
 # (JWST_RETRIEVALS) - spelled either as the tuple of band names, ("JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2"), or as its alias in
-# HItargets_utils.JOINT_INSTRUMENTS, "JWST_NIRSpec.G395H_joint". The joint dataset draws its detectors from ONE noise stream, so its first detector's
+# bands.JOINT_INSTRUMENTS, "JWST_NIRSpec.G395H_joint". The joint dataset draws its detectors from ONE noise stream, so its first detector's
 # data are exactly the single-detector dataset of the same seed. "MIRI/F1280W" etc. have no PandExo mode: rms_1min takes sigma_1min from
-# CUSTOM_SIGMA_1MIN in HItargets_utils.py. A band with no noise level for this planet (MIRI imaging for every planet but TOI-2431 b) is skipped with a
+# inputs/noise/custom_sigma_1min.csv. A band with no noise level for this planet (MIRI imaging for every planet but TOI-2431 b) is skipped with a
 # warning, and the other entries still run.
 instruments = ("JWST_NIRSpec.G395H_NRS1",)   # e.g. ("JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2", "JWST_NIRSpec.G395H_joint", "MIRI/LRS", "MIRI/F1280W")
 
@@ -56,8 +64,8 @@ n_orbits = DEFAULT_N_ORBITS # number of orbits observed
 
 sigma_1min_scaling = 1. # scale the noise level
 
-# Priors (uniform, the shared ranges of HItargets_utils); ParameterSet fixes the column order of theta and of res.samples. One baseline per detector:
-# "offset" for a single band, "offset_<label>" per detector of a joint fit (labels: HItargets_utils.detector_label, e.g. NRS1, NRS2).
+# Priors (uniform, the shared ranges of hyperphase/defaults.py); ParameterSet fixes the column order of theta and of res.samples. One baseline per detector:
+# "offset" for a single band, "offset_<label>" per detector of a joint fit (labels: bands.detector_label, e.g. NRS1, NRS2).
 _A_B = Parameter("A_B", Uniform(*A_B_BOUNDS), r"$A_B$")
 _F   = Parameter("F",   Uniform(*F_BOUNDS), r"$F$")
 
@@ -117,7 +125,7 @@ def run_instrument(instrument):
     if missing: raise ValueError(f"no pset for model(s) {missing}; PSETS has {tuple(PSETS)}")
     logls = {m: make_logl(cfg, data, m, PSETS[m], labels=labels) for m in MODELS}
 
-    # Dynesty. `tag` is everything the models share - it is the DATASET (dynesty_utils.DATASET_TAG), which 01_retrieval_example.ipynb finds again with
+    # Dynesty. `tag` is everything the models share - it is the DATASET (retrieval.storage.DATASET_TAG), which 01_retrieval_example.ipynb finds again with
     # find_dataset. The free parameters differ per model, so "priors-..." goes LAST, after {insolation_model} (which run_nested_fit fills in): one
     # glob on tag then picks up every model of this dataset whatever it was sampled with, while runs with different free parameters still cannot
     # overwrite each other.

@@ -1,0 +1,4 @@
+planet,band,snr_int,t_int_s,note
+TOI-2431 b,MIRI/F1280W,989.38,3.59,S/N of one integration and its duration
+TOI-2431 b,MIRI/F1500W,1135.44,5.39,S/N of one integration and its duration
+TOI-2431 b,MIRI/F1800W,1196.43,13.48,S/N of one integration and its duration

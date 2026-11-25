@@ -4,43 +4,86 @@ from pathlib import Path
 
 import pytest
 
-import HItargets_utils as hit
+from hyperphase.bands import FILTER_FILES, filter_lambda, filter_loc, full_lambda
+from hyperphase.noise import _package_version, _pandexo_cache_store, _pandexo_key, NoNoiseLevelError, pandexo_params, rms_1min
+from hyperphase.paper import PAPER_PLANETS
+from hyperphase.targets import CUSTOM, hi_planets_by_name
 
 
 def test_filter_files_and_bands():
-    for instrument in hit.FILTER_FILES:
-        assert Path(hit.filter_loc(instrument)).exists(), instrument
-        (l1, l2), (f1, f2) = hit.filter_lambda(instrument), hit.full_lambda(instrument)
+    for instrument in FILTER_FILES:
+        assert Path(filter_loc(instrument)).exists(), instrument
+        (l1, l2), (f1, f2) = filter_lambda(instrument), full_lambda(instrument)
         assert f1 <= l1 < l2 <= f2, instrument
 
 
-@pytest.mark.parametrize("name", hit.PAPER_PLANETS)
+@pytest.mark.parametrize("name", PAPER_PLANETS)
 def test_paper_planets_have_a_curated_geometry(name):
-    planet = hit.hi_planets_by_name(name)
-    assert planet is hit.CUSTOM[name]
+    planet = hi_planets_by_name(name)
+    assert planet is CUSTOM[name]
     assert planet.R / planet.r2 > 1. + planet.r1 / planet.r2   # the planet orbits outside its star
 
 
 def test_curated_parameters_take_precedence_over_the_archive():
     """HD 80653 b: the published T_eff of the curated table, not the value of the archive aggregate."""
-    assert hit.hi_planets_by_name("HD 80653 b").T2_eff == 5959.
+    assert hi_planets_by_name("HD 80653 b").T2_eff == 5959.
 
 
 def test_noise_level_from_the_cache(toi2431b, monkeypatch):
     """The PandExo cache serves sigma_1min without running PandExo (its key includes the PandExo version of the paper)."""
-    if hit._package_version("pandexo.engine") != "2026.7" or hit._package_version("pandeia.engine") != "2026.7":
+    if _package_version("pandexo.engine") != "2026.7" or _package_version("pandeia.engine") != "2026.7":
         pytest.skip("the cache holds PandExo/Pandeia 2026.7 values")
-    monkeypatch.setattr(hit, "run_pandexo", lambda *a, **k: pytest.fail("PandExo ran instead of the cache"))
-    assert hit.rms_1min(toi2431b, "MIRI/LRS", verbose=False) == pytest.approx(62.93, abs=0.01)
+    monkeypatch.setattr("hyperphase.noise.run_pandexo", lambda *a, **k: pytest.fail("PandExo ran instead of the cache"))
+    assert rms_1min(toi2431b, "MIRI/LRS", verbose=False) == pytest.approx(62.93, abs=0.01)
+
+
+@pytest.fixture
+def empty_user_cache(tmp_path, monkeypatch):
+    """A user cache of its own for the test, so the developer's ~/.cache does not enter."""
+    path = tmp_path / "pandexo_cache.csv"
+    monkeypatch.setattr("hyperphase.noise.PANDEXO_USER_CACHE", path)
+    return path
+
+
+def _cache_key(planet, instrument):
+    """The key rms_1min looks up for the planet at its own inputs and band."""
+    return _pandexo_key(pandexo_params(planet.name, t14_h=planet.T14), instrument, filter_lambda(instrument, planet))
+
+
+def test_user_cache_comes_first(toi2431b, empty_user_cache, monkeypatch):
+    """A row of the user cache shadows the same row of the shipped cache."""
+    monkeypatch.setattr("hyperphase.noise.run_pandexo", lambda *a, **k: pytest.fail("PandExo ran instead of the cache"))
+    _pandexo_cache_store([(_cache_key(toi2431b, "MIRI/LRS"), dict(sigma_1min=1.))])
+    assert rms_1min(toi2431b, "MIRI/LRS", verbose=False) == 1.
+
+
+def test_shipped_cache_without_pandexo(toi2431b, empty_user_cache, monkeypatch):
+    """Without PandExo installed the shipped values are served whatever PandExo version made them, and a miss says what to install."""
+    monkeypatch.setattr("hyperphase.noise._package_version", lambda dist: "n/a")
+    monkeypatch.setattr("hyperphase.noise.run_pandexo", lambda *a, **k: pytest.fail("PandExo ran instead of the cache"))
+    assert rms_1min(toi2431b, "MIRI/LRS", verbose=False) == pytest.approx(62.93, abs=0.01)
+    with pytest.raises(ImportError, match="PandExo is not installed"):
+        rms_1min(toi2431b, "MIRI/LRS", lrs_range=(6e-6, 9e-6), verbose=False)   # a band the cache does not hold
+
+
+def test_missing_shipped_cache_runs_pandexo(toi2431b, empty_user_cache, tmp_path, monkeypatch):
+    """Without the shipped cache (and an empty user cache) every noise level is a new PandExo run."""
+    class Ran(Exception): pass
+    def run_pandexo(*a, **k): raise Ran
+    monkeypatch.setattr("hyperphase.noise.PANDEXO_CACHE", tmp_path / "deleted.csv")
+    monkeypatch.setattr("hyperphase.noise._package_version", lambda dist: "2026.7")
+    monkeypatch.setattr("hyperphase.noise.run_pandexo", run_pandexo)
+    with pytest.raises(Ran):
+        rms_1min(toi2431b, "MIRI/LRS", verbose=False)
 
 
 def test_noise_levels_without_pandexo(toi2431b):
     """MIRI imaging takes its noise from CUSTOM_SIGMA_1MIN (TOI-2431 b only); 55 Cnc e saturates NIRSpec/G395H."""
-    assert hit.rms_1min(toi2431b, "MIRI/F1280W") > 0.
-    with pytest.raises(hit.NoNoiseLevelError):
-        hit.rms_1min(hit.hi_planets_by_name("K2-141 b"), "MIRI/F1280W")
-    with pytest.raises(hit.NoNoiseLevelError):
-        hit.rms_1min(hit.hi_planets_by_name("55 Cnc e"), "JWST_NIRSpec.G395H_NRS1")
+    assert rms_1min(toi2431b, "MIRI/F1280W") > 0.
+    with pytest.raises(NoNoiseLevelError):
+        rms_1min(hi_planets_by_name("K2-141 b"), "MIRI/F1280W")
+    with pytest.raises(NoNoiseLevelError):
+        rms_1min(hi_planets_by_name("55 Cnc e"), "JWST_NIRSpec.G395H_NRS1")
 
 
 def test_paper_runs_define_every_retrieval(root):

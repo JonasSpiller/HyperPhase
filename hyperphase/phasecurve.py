@@ -1,37 +1,33 @@
-# translating the insolation model with hyperillumination to a light curve signal
+"""Phase curves: the thermal curve from a temperature map (fSPIDERMAN), the reflected curve, their sum, and the fast light-curve evaluation."""
+import contextlib
+import io
 import time
+
 import numpy as np
-import contextlib, io
+from astropy import constants as const
 with contextlib.redirect_stdout(io.StringIO()):   # mute "looking for spidermanrc..." in every process
     import fspiderman as sp
-from hyperillumination_utils import (insolation, naive_insolation, insolation_fullyilluminated_hyperillum, insolation_penumbra_hyperillum,
-                                     temperature_from_insolation, check_redistribution, INSOLATION_MODELS, EXTENDED_SOURCE_MODELS, POINT_SOURCE_MODELS)
-from HItargets_utils import DEFAULT_A_B, DEFAULT_A, DEFAULT_EMISSIVITY_BOL, DEFAULT_EMISSIVITY, DEFAULT_U_BOL, DEFAULT_U, DEFAULT_N_ORBITS, DEFAULT_N_BINS   # baseline settings
-import astro_utils
-import batman_utils
-import contextlib, io
-from astropy import constants as const
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
-from functools import lru_cache
+
+from hyperphase.defaults import (DEFAULT_A, DEFAULT_A_B, DEFAULT_EMISSIVITY, DEFAULT_EMISSIVITY_BOL, DEFAULT_N_LA, DEFAULT_N_LO, DEFAULT_U,
+                                 DEFAULT_U_BOL, STELLAR_MODEL)
+from hyperphase.irradiance import (EXTENDED_SOURCE_MODELS, INSOLATION_MODELS, POINT_SOURCE_MODELS, check_redistribution, insolation,
+                                   insolation_fullyilluminated_hyperillum, insolation_penumbra_hyperillum, naive_insolation,
+                                   temperature_from_insolation)
+from hyperphase.orbit import occultation_time, true_anomaly
+from hyperphase.stellar import T_bright, check_teff_nodes, stellar_spidergrid
+from hyperphase.transit import flux_occultation, flux_transit, light_travel_time_correction
+
 
 sigma = const.sigma_sb.value
 
-# Resolution (longitude, latitude nodes) of the insolation / temperature map of every forward-model evaluation; 300/150 differs from 600/300 by ~0.001
-# ppm (see model_times).
-DEFAULT_N_LO, DEFAULT_N_LA = 300, 150
 
-
-###########################################################################################################################
-#####
-#####   Full PhaseCurve (reflected + thermal)
-#####
-###########################################################################################################################
-
-def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=DEFAULT_U_BOL, A=DEFAULT_A, n_eta=150, n_phi=80, n_tab=1000, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insolation_model="hyperillum", F=None, stellar_model=astro_utils.STELLAR_MODEL, filter_path=False, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, N_LAYERS=None, include_transit=True, include_occultation=True, spman="fast", spman_kw=None):
+############################################################################################################################################
+#####   Full phase curve (reflected + thermal)
+############################################################################################################################################
+def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=DEFAULT_U_BOL, A=DEFAULT_A, n_eta=150, n_phi=80, n_tab=1000, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insolation_model="hyperillum", F=None, stellar_model=STELLAR_MODEL, filter_path=False, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, N_LAYERS=None, include_transit=True, include_occultation=True, spman="fast", spman_kw=None):
     """Thermal plus reflected phase curve of a bare rock in one band, with the transit and the occultation.
 
-    planet: PlanetParams. lambda_range: band edges [m]; filter_path: throughput file (HItargets_utils.filter_loc), False for a top-hat over
+    planet: PlanetParams. lambda_range: band edges [m]; filter_path: throughput file (bands.filter_loc), False for a top-hat over
     lambda_range. t: times [days] (default: 1000 points over one orbit); t0: time of mid-transit [days]. insolation_model: "hyperillum" (extended
     star), "naive" (point source) or "naive_redist" (point source with the heat redistribution F in [0, 0.5] of Kreidberg & Loeb 2016, required
     there). A_B: Bond albedo; A: band-integrated albedo of the reflected light; emissivity_bol, emissivity: bolometric and band emissivity; u, u_bol:
@@ -51,7 +47,7 @@ def full_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=DEFA
     return t_comb, total, fp
 
 
-def nightside_flux(planet, lambda_range, insolation_model="hyperillum", unit="flux", t0=0., u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, A=DEFAULT_A, F=None, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, filter_path=False, stellar_model=astro_utils.STELLAR_MODEL, N_LAYERS=None, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, n_eta=150, n_phi=80, n_tab=1000):
+def nightside_flux(planet, lambda_range, insolation_model="hyperillum", unit="flux", t0=0., u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, A=DEFAULT_A, F=None, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, filter_path=False, stellar_model=STELLAR_MODEL, N_LAYERS=None, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, n_eta=150, n_phi=80, n_tab=1000):
     """Nightside signal at mid-transit (t = t0, the nightside faces the observer), without the transit dip. It is the hemisphere the observer sees,
     not the antistellar point: under "naive" the nightside is 0 K, so for i < 90 deg the value is only the sliver of dayside visible past the pole
     (exactly 0 edge-on); "hyperillum" adds the emission of the penumbra past 90 deg and "naive_redist" the uniform Kreidberg & Loeb nightside (F
@@ -59,7 +55,7 @@ def nightside_flux(planet, lambda_range, insolation_model="hyperillum", unit="fl
     transit is excluded. lambda_range and filter_path as in thermal_PhaseCurve.
 
     unit="flux": returns (thermal, reflected) planet flux F_p/F_star [ppm].
-    unit="temperature": returns the brightness temperature [K] of the thermal part (astro_utils.T_bright, like the dayside value from the occultation
+    unit="temperature": returns the brightness temperature [K] of the thermal part (T_bright, like the dayside value from the occultation
     depth; a blackbody temperature, below the surface temperature for emissivity < 1). Reflected light is not thermal and is not included. 0 K when
     the thermal signal vanishes (<= 0, or below the band flux at T_bright's 10 K lower bracket)."""
     if unit not in ("flux", "temperature"): raise ValueError(f"unit must be 'flux' or 'temperature', got {unit!r}")
@@ -68,18 +64,15 @@ def nightside_flux(planet, lambda_range, insolation_model="hyperillum", unit="fl
     therm = 1e6 * float(therm[0])
     if unit == "temperature":
         if therm <= 0.: return 0.
-        try: return float(astro_utils.T_bright(therm, planet, lambda_range, filter_path=filter_path or None, stellar_model=stellar_model))
+        try: return float(T_bright(therm, planet, lambda_range, filter_path=filter_path or None, stellar_model=stellar_model))
         except ValueError: return 0.   # brentq has no sign change: the signal is below the band flux of the 10 K lower bracket
     _, refl, _ = reflected_PhaseCurve(planet, t=t, t0=t0, u_bol=u_bol, include_transit=False, A=A, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
     return therm, 1e6 * float(refl[0])
 
 
-###########################################################################################################################
-#####
-#####   Reflected Lightcurve
-#####
-###########################################################################################################################
-
+############################################################################################################################################
+#####   Reflected light curve
+############################################################################################################################################
 
 # Reflected light curve signal accounting for hyperillumination
 # This assumes Lambertian (isotropic, grey) reflection, circular planet
@@ -178,17 +171,15 @@ def lambertian_reflectance(epsilon, planet, unit="normalized", lambda_band_ratio
         raise ValueError("unit must be either 'normalized' or 'radiant intensity'")
 
 
-###########################################################################################################################
-#####
+############################################################################################################################################
 #####   Reflected Phase Curve
-#####
-###########################################################################################################################
+############################################################################################################################################
 
 # Reflected light curve evaluated at times t.
 def orbital_reflected_lightcurve(t, planet, t0=0., n_eps=300, A=DEFAULT_A, u_bol=DEFAULT_U_BOL, n_eta=150, n_phi=80, n_tab=1000, insolation_model="hyperillum"):
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
-    f = astro_utils.true_anomaly(t, period, ecc, w, t0=t0)
+    f = true_anomaly(t, period, ecc, w, t0=t0)
     epsilon = np.arccos(-np.sin(np.radians(incl)) * np.sin(np.radians(w) + f))
 
     # The planet-star distance is fixed to the semi-major axis R (a circular orbit): all functions take a scalar R. An eccentric orbit (ecc > 0)
@@ -211,28 +202,28 @@ def reflected_PhaseCurve(planet, t=None, t0=0., u=DEFAULT_U, u_bol=DEFAULT_U_BOL
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     if t is None: t = np.linspace(0., period, 1000, endpoint=False)
-    t_corr = batman_utils.light_travel_time_correction(t, planet, t0=t0)
+    t_corr = light_travel_time_correction(t, planet, t0=t0)
 
     orbital_ref_lightcurve = orbital_reflected_lightcurve(t, planet, t0=t0, A=A, u_bol=u_bol, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
 
     eps_occultation = np.arccos(np.sin(np.radians(incl)))  # epsilon at full phase
     fp = reflected_lightcurve(eps_occultation, planet, A=A, u_bol=u_bol, n_eta=n_eta, n_phi=n_phi, n_tab=n_tab, insolation_model=insolation_model)
-    if fp == 0.: return t_corr, include_transit*batman_utils.flux_transit(planet, t, t0=t0, u=u), fp*1e6  # no reflection (e.g. when albedo=0) -> no phase curve, only transit
+    if fp == 0.: return t_corr, include_transit*flux_transit(planet, t, t0=t0, u=u), fp*1e6  # no reflection (e.g. when albedo=0) -> no phase curve, only transit
 
     # Full Phase Curve Model. This model ignores the exact eclipse geometry during ingress and egress, instead it assumes the integrated flux to be
     # uniformly distributed over the disk
     if include_occultation:
         phase_mod = orbital_ref_lightcurve / fp
-        occultation = batman_utils.flux_occultation(planet, fp, t, t0=t0)
+        occultation = flux_occultation(planet, fp, t, t0=t0)
 
         if include_transit:
-            transit = batman_utils.flux_transit(planet, t, t0=t0, u=u)
+            transit = flux_transit(planet, t, t0=t0, u=u)
             phase_curve = transit + (occultation - 1) * phase_mod
         else:
             phase_curve = (occultation - 1) * phase_mod
     else:
         if include_transit:
-            transit = batman_utils.flux_transit(planet, t, t0=t0, u=u)
+            transit = flux_transit(planet, t, t0=t0, u=u)
             phase_curve = transit + orbital_ref_lightcurve
         else:
             phase_curve = orbital_ref_lightcurve
@@ -240,83 +231,16 @@ def reflected_PhaseCurve(planet, t=None, t0=0., u=DEFAULT_U, u_bol=DEFAULT_U_BOL
     return t_corr, phase_curve, fp*1e6
 
 
-###########################################################################################################################
-#####
+############################################################################################################################################
 #####   Thermal Phase Curve (Spiderman)
-#####
-###########################################################################################################################
-
-# SPIDERMAN stellar grid [teffs, totals]: totals = in-band surface intensity of the star (astro_utils.stellar_intensity) at each T_eff node,
-# integrated exactly like fspiderman's gen_grid (sum_flux over the closed band [l1, l2], response R*lambda/hc from get_filter), on the filter's
-# samples refined with the model's. SPIDERMAN cubic-splines totals at p.T_s and extrapolates silently outside the nodes (check_teff_nodes). The grid
-# belongs to ONE star (logg, feh) and ONE band, which is why FittingConfig derives it. [K] the whole NewEra cube range on a UNIFORM 100 K grid:
-# SPIDERMAN's spline (spline.c) swaps the interval widths of its tridiagonal rows, which only matters for non-uniform knots, so the nodes must stay
-# uniform. Every node is a NewEra model except 7100 K (the grid steps by 200 K above 7000 K), which newera_spectrum interpolates linearly in flux
-# between 7000 and 7200 K.
-TEFF_NODES = np.arange(2300., 7201., 100.)
-
-def stellar_spidergrid(lambda_range, filter_path, logg, feh, teffs=TEFF_NODES, stellar_model=astro_utils.STELLAR_MODEL):
-    l1, l2 = map(float, lambda_range)
-    return _stellar_spidergrid(l1, l2, filter_path or False, float(logg), float(feh), tuple(float(T) for T in teffs), stellar_model)
-
-# The band integration shared by the star (stellar_spidergrid) and the planet (band_planck): the filter's own samples (or gen_grid's top-hat sampling)
-# plus the band edges, and the per-energy response from fspiderman.get_filter (False for a top-hat). Cached and read-only, since every caller shares
-# the arrays.
-@lru_cache(maxsize=None)
-def _band_setup(l1, l2, filter_path):
-    filt = sp.get_filter(filter_path) if filter_path else False
-    base = np.union1d(np.asarray(filt[0], float) if filt else np.linspace(l1, l2, 1000), [l1, l2])
-    base = base[(base >= l1) & (base <= l2)]
-    for a in [base] + (list(filt) if filt else []): a.setflags(write=False)
-    return base, filt
-
-@lru_cache(maxsize=None)   # hashable arguments only, hence the wrapper above
-def _stellar_spidergrid(l1, l2, filter_path, logg, feh, teffs, stellar_model):
-    if len(teffs) < 3 or np.any(np.diff(teffs) <= 0): raise ValueError("teffs: >= 3 strictly increasing T_eff nodes (SPIDERMAN's cubic spline)")
-    base, filt = _band_setup(l1, l2, filter_path)
-    totals = []
-    for T in teffs:
-        lam = astro_utils.band_wavelengths(base, T, logg, feh, stellar_model)
-        totals.append(sp.stellar_grid.sum_flux(lam, astro_utils.stellar_intensity(lam, T, logg, feh, stellar_model), l1, l2, filt))
-    grid = [np.array(teffs), np.array(totals)]
-    for a in grid: a.setflags(write=False)   # cached and shared by every FittingConfig of this star and band
-    return grid
-
-# In-band intensity of a blackbody at T [K], integrated exactly like the stellar grid's totals (same samples, response and sum_flux). The planet side
-# of T_bright.
-def band_planck(lambda_range, filter_path, T):
-    l1, l2 = map(float, lambda_range)
-    base, filt = _band_setup(l1, l2, filter_path or False)
-    return sp.stellar_grid.sum_flux(base, astro_utils.planck_spectrum(base, T), l1, l2, filt)
-
-# The stellar surface intensity SPIDERMAN uses for a T_s: its cubic spline through the grid (spline_cubic_set with ibcbeg = ibcend = 0, "quadratic
-# over the first/last interval", and spline_cubic_val in c_src/spline.c), replicated line by line, including the swapped interval widths of the
-# interior rows (a2[i] = A(i,i-1) holds t[i+1]-t[i]), so that T_bright inverts SPIDERMAN's depths exactly. Interpolating the spectrum in T instead
-# differs from this by up to ~3e-3 below 3500 K, where the NewEra node integrals are not smooth.
-def spidergrid_value(stellar_grid, T_s):
-    t, y = (np.asarray(a, float) for a in stellar_grid); n = t.size
-    A, b = np.zeros((n, n)), np.zeros(n)
-    A[0, 0], A[0, 1] = 1., -1.
-    A[-1, -2], A[-1, -1] = -1., 1.
-    for i in range(1, n - 1):
-        b[i] = (y[i+1] - y[i]) / (t[i+1] - t[i]) - (y[i] - y[i-1]) / (t[i] - t[i-1])
-        A[i, i-1], A[i, i], A[i, i+1] = (t[i+1] - t[i]) / 6., (t[i+1] - t[i-1]) / 3., (t[i] - t[i-1]) / 6.
-    ypp = np.linalg.solve(A, b)
-    i = int(np.clip(np.searchsorted(t, T_s, side="right") - 1, 0, n - 2))   # the interval spline_cubic_val's bisection picks
-    dt, h = T_s - t[i], t[i+1] - t[i]
-    return float(y[i] + dt * ((y[i+1] - y[i]) / h - (ypp[i+1] / 6. + ypp[i] / 3.) * h + dt * (0.5 * ypp[i] + dt * ((ypp[i+1] - ypp[i]) / (6. * h)))))
-
-def check_teff_nodes(stellar_grid, T_s):
-    T_nodes = stellar_grid[0]
-    if not T_nodes[0] <= T_s <= T_nodes[-1]: raise ValueError(f"T_s = {T_s:.0f} K outside the stellar grid nodes [{T_nodes[0]:.0f}, {T_nodes[-1]:.0f}] K: SPIDERMAN's spline would extrapolate silently")
-
+############################################################################################################################################
 
 # Calculates the occultation depth of a spiderman model (spider_params.eclipse_depth() does not work with direct_T)
 # SPIDERMAN emits as a blackbody, so the band-integrated emissivity scales the depth (the thermal Fp/Fs is linear in it). Pass the emissivity of the
 # model the depth belongs to.
 def occultation_depth(spider_params, stellar_grid, emissivity=DEFAULT_EMISSIVITY):
     set_ecl = spider_params.eclipse
-    t_occ = astro_utils.occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
+    t_occ = occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
     spider_params.eclipse = False; f_unblocked_occ = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
     spider_params.eclipse = True;  f_blocked_occ = spider_params.lightcurve([t_occ], stellar_grid=stellar_grid)[0]
     spider_params.eclipse = set_ecl
@@ -359,7 +283,7 @@ def custom_temperature_grid(planet, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la
     return lo, la, temp_grid  # Custom temperature map [lo (deg), la (deg), T (K)]
 
 
-def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insolation_model="hyperillum", F=None, stellar_model=astro_utils.STELLAR_MODEL, filter_path=False, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, N_LAYERS=None, include_transit=True, include_occultation=True, spman="fast", spman_kw=None):
+def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insolation_model="hyperillum", F=None, stellar_model=STELLAR_MODEL, filter_path=False, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, N_LAYERS=None, include_transit=True, include_occultation=True, spman="fast", spman_kw=None):
     """Thermal phase curve from SPIDERMAN's direct_T model with the temperature map of insolation_model ("naive_redist": the analytic Louden model).
 
     lambda_range: band edges [m]; SPIDERMAN integrates a top-hat over them for filter_path=False, else the throughput file. F: heat redistribution in
@@ -431,13 +355,12 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=D
 
     # light_curve - 1 is the planet's thermal flux, scaled by the band emissivity (the transit is not)
     if include_transit: # Full PhaseCurve
-        f_transit = batman_utils.flux_transit(planet, t, t0=t0, u=u)
+        f_transit = flux_transit(planet, t, t0=t0, u=u)
         phase_curve = f_transit + emissivity * (light_curve - 1.)
     else: # Only Lightcurve, no stellar flux
         phase_curve = emissivity * (light_curve - 1.)
 
     return t, phase_curve, fp, spider_params
-
 
 
 # The sp.ModelParams of SPIDERMAN's Louden model (analytic Kreidberg & Loeb 2016 eq. 1 map), shared by Louden_PhaseCurve and pcurve_params. eclipse is
@@ -469,7 +392,7 @@ def louden_params(planet, lambda_range, F, t0=0., filter_path=False, A_B=DEFAULT
     return sp_louden
 
 
-def Louden_PhaseCurve(planet, lambda_range, t=None, t0=0., F=0., u=DEFAULT_U, stellar_model=astro_utils.STELLAR_MODEL, filter_path=False, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, N_LAYERS=60, include_transit=True, include_occultation=True, spman="fast", spman_kw=None):
+def Louden_PhaseCurve(planet, lambda_range, t=None, t0=0., F=0., u=DEFAULT_U, stellar_model=STELLAR_MODEL, filter_path=False, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, N_LAYERS=60, include_transit=True, include_occultation=True, spman="fast", spman_kw=None):
     """Thermal phase curve of "naive_redist": SPIDERMAN's analytic Louden map with the heat redistribution F in [0, 0.5] (Kreidberg & Loeb 2016). With
     F = 0 it equals thermal_PhaseCurve(..., insolation_model="naive"), but faster. Returns (t, flux, depth, params) as thermal_PhaseCurve."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
@@ -492,7 +415,7 @@ def Louden_PhaseCurve(planet, lambda_range, t=None, t0=0., F=0., u=DEFAULT_U, st
 
     # light_curve - 1 is the planet's thermal flux, scaled by the band emissivity (the transit is not)
     if include_transit:  # Full PhaseCurve
-        f_transit = batman_utils.flux_transit(planet, t, t0=t0, u=u)
+        f_transit = flux_transit(planet, t, t0=t0, u=u)
         phase_curve = f_transit + emissivity * (light_curve - 1.)
     else:  # Only Lightcurve, no stellar flux
         phase_curve = emissivity * (light_curve - 1.)
@@ -500,13 +423,9 @@ def Louden_PhaseCurve(planet, lambda_range, t=None, t0=0., F=0., u=DEFAULT_U, st
     return t, phase_curve, fp, sp_louden
 
 
-
-###########################################################################################################################
-#####
-#####   Fast Lightcurve - SPIDERMAN Patch
-#####
-###########################################################################################################################
-
+############################################################################################################################################
+#####   Fast light curve
+############################################################################################################################################
 def _trig_interp(y_nodes, per, t, t0=0.):
     # Exact trigonometric interpolation of a band-limited periodic signal sampled uniformly on [t0, t0 + per) (no endpoint).
     n = len(y_nodes)
@@ -524,20 +443,23 @@ def occultation_durations(spider_params): # assuming circular orbit
     # geometry, where the planet is never fully hidden.
     inc = np.radians(spider_params.inc)
     b = spider_params.a * np.cos(inc)
-    dur = lambda x: spider_params.per / np.pi * np.arcsin(min(np.sqrt(max(x ** 2 - b ** 2, 0.)) / (spider_params.a * np.sin(inc)), 1.))  # the sin(inc) matches astro_utils.transit_duration_t14; min(..., 1.) gives the half-orbit limit instead of NaN for a geometry so close-in the planet never clears the stellar disk
+    dur = lambda x: spider_params.per / np.pi * np.arcsin(min(np.sqrt(max(x ** 2 - b ** 2, 0.)) / (spider_params.a * np.sin(inc)), 1.))  # the sin(inc) matches orbit.transit_duration_t14; min(..., 1.) gives the half-orbit limit instead of NaN for a geometry so close-in the planet never clears the stellar disk
     return dur(1 + spider_params.rp), dur(1 - spider_params.rp)
+
 
 def occultation_window(spider_params, pad=0.03):
     # (t_ingress, t_egress) of the occultation, padded by `pad` durations on each side.
-    t_occultation = astro_utils.occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
+    t_occultation = occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
     T14, _ = occultation_durations(spider_params)
     return t_occultation - (0.5 + pad) * T14, t_occultation + (0.5 + pad) * T14
 
+
 def _dt_to_occultation(spider_params, t):
     # Signed offset of each `t` to the NEAREST occultation centre, in ANY orbit spanned by `t`.
-    t_occultation = astro_utils.occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
+    t_occultation = occultation_time(spider_params.per, spider_params.ecc, spider_params.w, t0=spider_params.t0)
     per = spider_params.per
     return np.mod(np.asarray(t, dtype=float) - t_occultation + 0.5 * per, per) - 0.5 * per
+
 
 def in_occultation(spider_params, t, pad=0.03):
     # Boolean mask: which of `t` fall inside an occultation, in ANY orbit spanned by `t`.
@@ -576,203 +498,3 @@ def fast_lightcurve(spider_params, stellar_grid, t, n_phase=40, pad=0.03, split_
         spider_params.eclipse = orig_eclipse # restore even if lightcurve() raised, else spider_params keeps the changed eclipse flag
 
     return out
-
-
-
-###########################################################################################################################
-#####
-#####   Fitting
-#####
-###########################################################################################################################
-
-
-# Band-integrated albedo A in the observing band as a function of the Bond albedo A_B — i.e. the FittingConfig.A_ callable. Classes rather than a
-# `def` in a notebook cell because dynesty.pool.Pool spawns its workers and dynesty checkpoints with plain pickle which cannot handle notebook
-# functions.
-@dataclass(frozen=True)
-class ConstantBandAlbedo:
-    """Fixed band-integrated albedo, independent of A_B."""
-    A: float = DEFAULT_A
-    def __call__(self, A_B): return self.A
-    @property
-    def label(self): return f"fixedA{self.A:g}"      # short tag for filenames and plot legends, e.g. 'fixedA0.1'
-
-
-@dataclass(frozen=True)
-class ScaledBandAlbedo:
-    """A = scale * A_B; scale=1 sets the band-integrated albedo equal to the Bond albedo."""
-    scale: float = 1.0
-    def __call__(self, A_B): return self.scale * A_B
-    @property
-    def label(self): return f"scaledA{self.scale:g}"   # short tag for filenames and plot legends, e.g. 'scaledA1'
-
-
-@dataclass
-class FittingConfig:
-    """The setup of one modelled light curve: the planet, the band, the albedo and emissivities, the noise and the observing plan. model_pcurve
-    evaluates it, and the fits and retrievals take it as their configuration. stellar_grid is derived from the planet and the band."""
-    planet: object          # PlanetParams for the reference system (e.g. K2-141b); single source of
-                            # truth for geometry (r1, r2, R, a_AU), orbit (period, incl, ecc, w) and the star (T2_eff, logg, feh)
-    filter_path: str = None   # SPIDERMAN throughput file. Left out (with l1, l2) it is a band-less template, which simple_bias_analysis.instrument_cfg completes with the band(s) of an instrument
-    l1: float = np.nan      # filter blue edge [m]
-    l2: float = np.nan      # filter red edge [m]
-    A_: object = ConstantBandAlbedo()   # band-integrated albedo A as a function of the Bond albedo A_B (only needed when reflected=True)
-    emissivity_bol: float = DEFAULT_EMISSIVITY_BOL   # bolometric emissivity: sets the temperature map with A_B (exactly degenerate with it)
-    emissivity: float = DEFAULT_EMISSIVITY       # band-integrated emissivity: scales the thermal planet flux
-    sigma_1min: float = 323.  # noise [ppm/min]; a placeholder for configs built without one (the analyses pass HItargets_utils.rms_1min)
-    n_orbits: int = DEFAULT_N_ORBITS  # number of orbits observed and phase-folded
-    n_bins: int = DEFAULT_N_BINS  # bins per period; the width is DERIVED so it tiles exactly
-    u_bol: float = DEFAULT_U_BOL   # bolometric linear limb darkening of the irradiance (0 = uniform disk)
-    u: tuple = DEFAULT_U       # quadratic stellar limb darkening [u1, u2] of the transit
-    reflected: bool = True  # True -> full (reflected + thermal); False -> thermal only
-    transit: bool = True    # include the primary transit (batman)
-    stellar_model: str = astro_utils.STELLAR_MODEL   # stellar SED of stellar_grid (and of dynesty_utils.brightness_temperature): "newera", an stsynphot grid name or "blackbody"
-    stellar_grid: object = field(init=False, repr=False, default=None)   # DERIVED from planet (logg, feh) and the band in __post_init__, so every replace(cfg, planet=..., l1=..., ...) rebuilds it (cached in stellar_spidergrid) and it can never belong to another star or band
-
-    def __post_init__(self):
-        # l1, l2 on an instrument's standard band become the PLANET's band of it (HItargets_utils.observed_band): the clean part where its host
-        # saturates the rest (PARTIAL_BANDS; 55 Cnc e on MIRI/LRS), else the band itself. So a config moved to another planet takes that planet's
-        # band, like its stellar grid. Any other (l1, l2) is kept as given.
-        from HItargets_utils import observed_band   # here, not at the top: it is defined late in HItargets_utils, which may still be loading (it imports hyperillumination_utils back)
-        self.l1, self.l2 = observed_band(self.filter_path, self.l1, self.l2, self.planet)
-        if np.isfinite(self.l1) and np.isfinite(self.l2): self.stellar_grid = stellar_spidergrid((self.l1, self.l2), self.filter_path, self.planet.logg, self.planet.feh, stellar_model=self.stellar_model)   # l1 = l2 = nan: a band-less template cfg, instrument_cfg fills the band
-
-    @property
-    def sigma_bin(self):
-        minutes_binning = self.planet.period * 24 * 60 / self.n_bins
-        return self.sigma_1min / np.sqrt(minutes_binning * self.n_orbits)
-
-    # Noise of a fitted phase-curve semi-amplitude (first harmonic over n_orbits): sigma_1min sqrt(2 / t_obs[min]), i.e. sigma(a) = sqrt(2/N) sigma
-    # per point (Montgomery & O'Donoghue 1999, DSSN 13, 28; Kallinger et al. 2008, A&A 481, 571, eq. 1). Binning-independent, so it is the reference
-    # for a flux level such as the nightside signal at mid-transit (sigma_bin is not: it scales with sqrt(n_bins)). A lower bound: it ignores the
-    # compensation by A_B that dchi2_F / z_F includes.
-    @property
-    def sigma_amp(self):
-        return self.sigma_1min * np.sqrt(2. / (self.planet.period * 24 * 60 * self.n_orbits))
-
-
-# The PlanetParams that model_pcurve actually evaluates, at the swept geometry, in pl's own units. Factored out so that a cached insolation map
-# (insolation_cache) is guaranteed to be built at exactly the geometry the corresponding model_pcurve call will use — the caches cannot silently go
-# stale. A T_s sweep changes T_eff only: log g and [Fe/H] stay those of cfg.planet (cfg.stellar_grid belongs to that star), so the swept stars are
-# hypothetical. A real M dwarf has log g ~ 5 rather than the reference star's 4.5, which changes its mid-IR flux by ~2 % at 3000 K and ~6 % at 2600 K
-# (LRS); bias maps are insensitive to it (the bias does not depend on k), their significances are not.
-def swept_planet(cfg, a_rs=None, T_s=None, rp_rs=None):
-    pl = cfg.planet
-    a_rs0 = pl.R / pl.r2  # default a/Rs (for the a_AU scaling)
-    a_rs = a_rs0 if a_rs is None else a_rs
-    T_s = pl.T2_eff if T_s is None else T_s
-    rp_rs = pl.r1 / pl.r2 if rp_rs is None else rp_rs
-    check_teff_nodes(cfg.stellar_grid, T_s)
-    # rebuild the planet at the swept geometry in pl's own units; a_AU scales with a/Rs (stellar size fixed)
-    return replace(pl, r1=rp_rs * pl.r2, R=a_rs * pl.r2, T2_eff=T_s, a_AU=pl.a_AU * a_rs / a_rs0)
-
-
-# Ready-made `insol` argument for model_pcurve, built at exactly the geometry model_pcurve would use. ONLY valid while a/r2, r1/r2, T2_eff, cfg.u_bol,
-# n_lo and n_la are held fixed — see dynesty_utils.GaussianLogL, which builds this and invalidates it automatically when the corresponding parameter
-# is sampled.
-def insolation_cache(cfg, insolation_model, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, **geom):
-    planet = swept_planet(cfg, **geom)   # **geom rather than named args, so adding a parameter to swept_planet is enough
-    return insolation_grid(planet, u_bol=cfg.u_bol, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model)
-
-
-# Uniform time grid for a model that is going to be BIN-AVERAGED: the midpoints of the n_t sub-intervals, not their left edges.
-# binned() averages these samples per bin, so left edges would make that a left Riemann sum - first order, with error
-# ~ (step/2) x slope, i.e. ~ transit_depth / (2 * n_t/n_bins) in the bins the transit ingress/egress falls into. At the usual
-# n_t = 50 per bin that is several ppm (measured 4.62 ppm for a 454 ppm transit), orders of magnitude above every other
-# discretisation in the forward model (n_layers 40 vs 80: 0.05 ppm; n_lo/n_la 300/150 vs 600/300: 0.001 ppm). The midpoint
-# rule removes it for free: same number of evaluations, ~70x smaller error, and it keeps converging with n_t.
-def model_times(period, n_t):
-    return np.linspace(0., period, int(n_t), endpoint=False) + 0.5 * period / int(n_t)
-
-
-def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_rs=None, n_t=None, **_):
-    """Reflected planet flux [ppm] at unit albedo (A = 1) on model_times, without the transit; the reflected light is linear in A, so model_pcurve
-    scales it. a_rs, T_s, rp_rs replace the planet's geometry and T_eff. **_ takes the other model_pcurve keywords (n_lo, n_layers, spman_kw, ...),
-    which the fits pass to every part of the model and which do not affect the reflected light."""
-    pl = cfg.planet
-    a_rs = pl.R / pl.r2  if a_rs is None else a_rs   # default a/Rs from PlanetParams
-    T_s = pl.T2_eff      if T_s is None else T_s
-    rp_rs = pl.r1 / pl.r2  if rp_rs is None else rp_rs      # default Rp/Rs from PlanetParams
-    n_t = 50 * cfg.n_bins if n_t is None else n_t
-
-    t_ = model_times(pl.period, n_t)
-    # set the ratios in the planet's own units (reflected is geometric -> a_AU unused, left as-is)
-    planet = replace(pl, r1=rp_rs * pl.r2, R=a_rs * pl.r2, T2_eff=T_s)
-    _, refl, _ = reflected_PhaseCurve(planet, t=t_, include_transit=False, A=1., u_bol=cfg.u_bol, insolation_model=insolation_model)
-    return refl * 1e6
-
-
-# The sp.ModelParams that model_pcurve feeds to SPIDERMAN, factored out exactly like swept_planet so the OCCULTATION DEPTH can be taken at the fitted
-# geometry with the existing occultation_depth(p, stellar_grid=cfg.stellar_grid) instead of duplicating this setup. F: heat redistribution, required
-# by insolation_model="naive_redist"
-def pcurve_params(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_rs=None, n_layers=None, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insol=None):
-    check_redistribution(insolation_model, F)
-    # n_layers = 30-40 usually sufficient for insolation_model="hyperillum", insolation_model="naive" (and "naive_redist") needs n_layers = 60-80
-    # Measured (TOI-2431 b/NIRSpec and K2-141 b/MIRI-LRS, vs n_layers=400): on the light CURVE the two models converge alike
-    # (max |d| at n_layers=40: naive 0.09-0.17 ppm, hyperillum 0.08-0.14 ppm; <0.02 sigma_bin once binned), and the naive-vs-truth
-    # A_B bias is stable to ~1e-4 from n_layers=20 up. The 60-80 matters for the OCCULTATION DEPTH, where naive converges only
-    # ~N^-1 against hyperillum's ~N^-2 (K2-141 b: 0.33 / 0.20 / 0.08 ppm at n_layers 40 / 60 / 120, vs 0.13 / 0.07 / 0.02).
-    # Since the hyperillum-naive depth difference is itself only ~1 ppm, use n_layers >= 120 when COMPARING depths between models.
-    if n_layers is None:
-        if insolation_model in EXTENDED_SOURCE_MODELS:
-            n_layers = 40
-        else:
-            n_layers = 60
-
-    planet = swept_planet(cfg, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs)
-
-    # "naive_redist": SPIDERMAN's analytic Louden map, as in thermal_PhaseCurve (insol, n_lo and n_la are unused)
-    if insolation_model == "naive_redist":
-        p = louden_params(planet, (cfg.l1, cfg.l2), F, t0=0., filter_path=cfg.filter_path, A_B=A_B_, emissivity_bol=cfg.emissivity_bol, N_LAYERS=n_layers)
-        p.eclipse = True
-        return p
-
-    # insol=... reuses the A_B-independent insolation map, leaving only the exact T = T(A_B=0, emissivity_bol=1)*((1-A_B)/emissivity_bol)^(1/4)
-    # rescale (valid because insol depends on geometry alone).
-    lo, la, Tg = custom_temperature_grid(planet, u_bol=cfg.u_bol, n_lo=n_lo, n_la=n_la, insolation_model=insolation_model, F=F, A_B=A_B_, emissivity_bol=cfg.emissivity_bol, insol=insol)   # F: used by "hyperillum_redist" only
-    LO, LA = np.meshgrid(lo, la, indexing="ij")
-    p = sp.ModelParams(brightness_model="direct_T")   # the stellar SED enters only through cfg.stellar_grid
-    p.n_layers = n_layers
-    p.t0, p.per = 0., planet.period
-    p.a_abs = planet.a_AU
-    p.inc, p.ecc, p.w = planet.incl, planet.ecc, planet.w
-    p.rp, p.a = planet.r1 / planet.r2, planet.R / planet.r2
-    p.p_u1 = p.p_u2 = 0.
-    p.T_s, p.l1, p.l2 = planet.T2_eff, cfg.l1, cfg.l2
-    p.grid = sp.format_grid(LO, LA, Tg.T)   # no temperature floor, see thermal_PhaseCurve
-    p.filter, p.eclipse = cfg.filter_path, True
-    return p
-
-
-def model_pcurve(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_rs=None, n_t=None, n_layers=None, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, refl_unit=None, insol=None, spman_kw=None):
-    """The light curve of cfg that the fits and retrievals evaluate: thermal (SPIDERMAN through fast_lightcurve), reflected (A = cfg.A_(A_B_) times
-    reflected_unit) and the transit, on model_times(period, n_t) (default 50 samples per bin).
-
-    A_B_: Bond albedo. F: heat redistribution, required by the redistribution models (the thermal part of "naive_redist" is the Louden model, its
-    reflected part that of "naive"). a_rs, T_s, rp_rs: geometry and stellar T_eff instead of the planet's. refl_unit, insol: precomputed
-    geometry-only pieces (reflected_unit, insolation_cache), a pure speed-up: passing them is bit-identical to rebuilding them here.
-
-    Returns (t, flux): times [days] over one orbit from mid-transit, and the flux [ppm] relative to the star alone (0 when the planet is hidden)."""
-    check_redistribution(insolation_model, F)
-    pl = cfg.planet
-    n_t = 50 * cfg.n_bins if n_t is None else n_t
-
-    t_ = model_times(pl.period, n_t)
-    planet = swept_planet(cfg, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs)
-
-    # Thermal Part
-    p = pcurve_params(cfg, insolation_model, A_B_, F=F, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs, n_layers=n_layers, n_lo=n_lo, n_la=n_la, insol=insol)
-    thermal = cfg.emissivity * (fast_lightcurve(p, cfg.stellar_grid, t_, **{"n_phase": 24, **(spman_kw or {})}) - 1) * 1e6  # SPIDERMAN emits as a blackbody, the band emissivity scales it. spman_kw overrides n_phase / pad / split_totality; it reaches here through **model_kw / **kw in the fitting loop
-
-    # Transit. Pure geometry: independent of insolation_model and A_B, so it cancels exactly in a truth - model residual.
-    f_transit = (batman_utils.flux_transit(planet, t_, t0=0., u=cfg.u) - 1.) * 1e6 if cfg.transit else 0.
-
-    if not cfg.reflected:
-        return t_, thermal + f_transit
-
-    # Reflected Part (linear in A)
-    A = cfg.A_(A_B_)
-    if refl_unit is None:
-        refl_unit = reflected_unit(cfg, insolation_model, a_rs=planet.R / planet.r2, T_s=planet.T2_eff, rp_rs=planet.r1 / planet.r2, n_t=n_t)
-
-    return t_, thermal + A * refl_unit + f_transit

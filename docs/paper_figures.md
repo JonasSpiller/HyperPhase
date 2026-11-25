@@ -23,8 +23,8 @@ Two groups need data that are not in the repository:
 
 | Item | Shows | Notebook |
 |---|---|---|
-| Table, Sec. 3.1 | Baseline parameters | The `DEFAULT_*` settings at the top of [`Utilities/HItargets_utils.py`](../Utilities/HItargets_utils.py), each with its rationale. |
-| Table, Sec. 3.2 | The planets of this study | `PAPER_PLANETS` and `CUSTOM` in [`Utilities/HItargets_utils.py`](../Utilities/HItargets_utils.py), with the published source of each value; the ESM from [`inputs/exoplanet_archive/ExoArchive_customcols.py`](../inputs/exoplanet_archive/ExoArchive_customcols.py) |
+| Table, Sec. 3.1 | Baseline parameters | The `DEFAULT_*` settings of [`hyperphase/defaults.py`](../hyperphase/defaults.py), each with its rationale. |
+| Table, Sec. 3.2 | The planets of this study | `PAPER_PLANETS` in [`hyperphase/paper.py`](../hyperphase/paper.py) and the curated parameters in [`inputs/planets/curated_planets.csv`](../inputs/planets/curated_planets.csv), with the published source of each value; the ESM from [`inputs/exoplanet_archive/ExoArchive_customcols.py`](../inputs/exoplanet_archive/ExoArchive_customcols.py) |
 
 ## Section 4: Results
 
@@ -47,7 +47,7 @@ Two groups need data that are not in the repository:
 
 | Item | Shows | Notebook |
 |---|---|---|
-| Figure, App. A.1 | Integration geometry: a cross section (a) and the star seen from the surface (b, c) | (a) is a drawing; (b, c) are not in a notebook. The integral itself is `insolation_hyperillum` in [`Utilities/hyperillumination_utils.py`](../Utilities/hyperillumination_utils.py). |
+| Figure, App. A.1 | Integration geometry: a cross section (a) and the star seen from the surface (b, c) | (a) is a drawing; (b, c) are not in a notebook. The integral itself is `insolation_hyperillum` in [`hyperphase/irradiance.py`](../hyperphase/irradiance.py). |
 | Figure, App. A.1 | Edge of the fully illuminated zone and terminator against $a/R_\star$ | [`forward_model/01_irradiance.ipynb`](../forward_model/01_irradiance.ipynb), "Illuminated Fractions of Exoplanet" |
 | Table, App. A.5 | Published treatments of the extended-source irradiance | From the literature. |
 | Figure, App. A.5 | Comparison with InstellCa and with the small-disk approximation of Kopal (1954) | [`validation/instellca_comparison.ipynb`](../validation/instellca_comparison.ipynb) §6; its §1 runs InstellCa. |

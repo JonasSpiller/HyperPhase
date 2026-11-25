@@ -130,7 +130,7 @@ def exact_xlimits(th, la, g):
 
 def exact_E_quad(la, g, u=0.6, order=96, epsrel=1e-11):
     """Exact irradiance for InstellCa's star: adaptive quad in latitude, Gauss-Legendre in longitude over the exact
-    admissible interval (smooth integrand). Independent of hyperillumination_utils."""
+    admissible interval (smooth integrand). Independent of hyperphase.irradiance."""
     I0 = intensity_scale(g, u)
     rs, rp, al = g.rs, g.rp, g.al
     rho = math.sqrt(al ** 2 + rp ** 2 - 2 * al * rp * math.cos(la))

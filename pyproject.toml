@@ -22,12 +22,10 @@ test = ["pytest"]
 [project.urls]
 Repository = "https://github.com/JonasSpiller/HyperPhase"
 
-# The modules live in Utilities/ and find the repository's data (filters, stellar spectra, PandExo cache) relative to their own location,
-# so install with `pip install -e .` (editable) rather than `pip install .`.
-[tool.setuptools]
-package-dir = { "" = "Utilities" }
-py-modules = ["hyperillumination_utils", "hyperillumination_phasecurve_utils", "astro_utils", "batman_utils", "newera_utils",
-              "HItargets_utils", "simple_bias_analysis", "dynesty_utils"]
+# The package hyperphase/ reads its data (filters, planet and band tables, stellar spectra, PandExo cache) from inputs/ of the repository
+# (hyperphase.paths; HYPERPHASE_DATA points elsewhere), so install with `pip install -e .` (editable) rather than `pip install .`.
+[tool.setuptools.packages.find]
+include = ["hyperphase*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

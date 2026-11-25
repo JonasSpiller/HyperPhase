@@ -7,19 +7,19 @@ import numpy as np
 import pytest
 from scipy.constants import c, h, k
 
-import astro_utils
-import hyperillumination_phasecurve_utils as hpu
-import hyperillumination_utils as hu
+from hyperphase.stellar import T_bright
+from hyperphase.phasecurve import full_PhaseCurve, Louden_PhaseCurve, nightside_flux, reflected_PhaseCurve, thermal_PhaseCurve
+from hyperphase.irradiance import surface_temperature
 
 
 def thermal(planet, band, model, **kw):
     (l1, l2), path = band
-    return hpu.thermal_PhaseCurve(planet, (l1, l2), filter_path=path, insolation_model=model, stellar_model="blackbody", **kw)
+    return thermal_PhaseCurve(planet, (l1, l2), filter_path=path, insolation_model=model, stellar_model="blackbody", **kw)
 
 
 def band_radiance(T, band):
     """Photon-counting band radiance of a blackbody, the integral of B_lambda(T) R(lambda) lambda over the band, with the throughput R of the filter
-    file (electrons per photon): written out here, independently of SPIDERMAN and astro_utils."""
+    file (electrons per photon): written out here, independently of SPIDERMAN and hyperphase.stellar."""
     (l1, l2), path = band
     lam_file, throughput = np.loadtxt(path).T
     lam = np.linspace(l1, l2, 2001)
@@ -31,9 +31,9 @@ def band_radiance(T, band):
 
 def disk_flux(planet, band, model, hemisphere, **kw):
     """F_p/F_star [ppm] of the hemisphere centred on the substellar ("day") or antistellar ("night") point, seen edge-on along the star-planet axis:
-    (R_p/R*)^2 2 int B(T(gamma)) |cos gamma| sin gamma dgamma / B(T_eff), with the surface temperature T(gamma) of hyperillumination_utils."""
+    (R_p/R*)^2 2 int B(T(gamma)) |cos gamma| sin gamma dgamma / B(T_eff), with the surface temperature T(gamma) of hyperphase.irradiance."""
     gamma = np.linspace(0., np.pi / 2., 1001) if hemisphere == "day" else np.linspace(np.pi / 2., np.pi, 1001)
-    B = band_radiance(hu.surface_temperature(gamma, planet, model, **kw), band)
+    B = band_radiance(surface_temperature(gamma, planet, model, **kw), band)
     integral = 2. * np.trapezoid(B * np.abs(np.cos(gamma)) * np.sin(gamma), gamma)
     return 1e6 * (planet.r1 / planet.r2)**2 * integral / band_radiance(planet.T2_eff, band)[0]
 
@@ -47,7 +47,7 @@ def test_disk_integrated_flux_matches_direct_integration(toi2431b, lrs, model):
     kw = dict(A_B=0.2, emissivity_bol=1., u_bol=0.5)
     _, _, depth, _ = thermal(planet, lrs, model, emissivity=1., include_transit=False, **kw)
     assert depth == pytest.approx(disk_flux(planet, lrs, model, "day", **kw), rel=2e-3)
-    night, _ = hpu.nightside_flux(planet, lrs[0], model, filter_path=lrs[1], stellar_model="blackbody", emissivity=1., N_LAYERS=400, **kw)
+    night, _ = nightside_flux(planet, lrs[0], model, filter_path=lrs[1], stellar_model="blackbody", emissivity=1., N_LAYERS=400, **kw)
     if model == "naive":
         assert night == 0.   # the point-source nightside is at 0 K
     else:
@@ -72,15 +72,15 @@ def test_fast_lightcurve_matches_direct_evaluation(toi2431b, lrs, model):
 
 def test_reflected_light_is_linear_in_albedo(toi2431b):
     t = np.linspace(0., toi2431b.period, 400, endpoint=False)
-    _, curve_1, depth_1 = hpu.reflected_PhaseCurve(toi2431b, t=t, A=0.1, include_transit=False)
-    _, curve_2, depth_2 = hpu.reflected_PhaseCurve(toi2431b, t=t, A=0.2, include_transit=False)
+    _, curve_1, depth_1 = reflected_PhaseCurve(toi2431b, t=t, A=0.1, include_transit=False)
+    _, curve_2, depth_2 = reflected_PhaseCurve(toi2431b, t=t, A=0.2, include_transit=False)
     assert np.allclose(2. * curve_1, curve_2, rtol=0., atol=1e-9 * np.max(curve_2))
     assert depth_2 == pytest.approx(2. * depth_1, rel=1e-12)
 
 
 def test_totality_is_the_star_alone(toi2431b, lrs):
     """While the planet is fully hidden behind the star, the flux is exactly that of the star."""
-    t, flux, _ = hpu.full_PhaseCurve(toi2431b, lrs[0], filter_path=lrs[1], stellar_model="blackbody")
+    t, flux, _ = full_PhaseCurve(toi2431b, lrs[0], filter_path=lrs[1], stellar_model="blackbody")
     totality = np.abs(t / toi2431b.period - 0.5) < 0.02
     assert totality.any() and np.all(flux[totality] == 1.)
 
@@ -88,16 +88,16 @@ def test_totality_is_the_star_alone(toi2431b, lrs):
 def test_brightness_temperature_inverts_the_occultation_depth(toi2431b, lrs):
     """With full redistribution (F = 0.5) the planet has one temperature, which T_bright must recover from the occultation depth."""
     A_B = 0.2
-    _, _, depth, _ = hpu.Louden_PhaseCurve(toi2431b, lrs[0], F=0.5, A_B=A_B, filter_path=lrs[1], stellar_model="blackbody", include_transit=False)
+    _, _, depth, _ = Louden_PhaseCurve(toi2431b, lrs[0], F=0.5, A_B=A_B, filter_path=lrs[1], stellar_model="blackbody", include_transit=False)
     T_uniform = toi2431b.T2_eff * np.sqrt(toi2431b.r2 / toi2431b.R) * ((1. - A_B) / 4.) ** 0.25
-    assert astro_utils.T_bright(depth, toi2431b, lrs[0], lrs[1], stellar_model="blackbody") == pytest.approx(T_uniform, abs=0.5)
+    assert T_bright(depth, toi2431b, lrs[0], lrs[1], stellar_model="blackbody") == pytest.approx(T_uniform, abs=0.5)
 
 
 def test_extended_star_brightens_the_planet(toi2431b, lrs):
     """The extended star heats the planet beyond the point-source terminator: the occultation is deeper and the nightside at transit brighter."""
     kw = dict(filter_path=lrs[1], stellar_model="blackbody")
-    depth = {m: hpu.full_PhaseCurve(toi2431b, lrs[0], insolation_model=m, **kw)[2] for m in ("hyperillum", "naive")}
-    night = {m: hpu.nightside_flux(toi2431b, lrs[0], insolation_model=m, **kw)[0] for m in ("hyperillum", "naive")}
+    depth = {m: full_PhaseCurve(toi2431b, lrs[0], insolation_model=m, **kw)[2] for m in ("hyperillum", "naive")}
+    night = {m: nightside_flux(toi2431b, lrs[0], insolation_model=m, **kw)[0] for m in ("hyperillum", "naive")}
     assert depth["hyperillum"] > depth["naive"]
     assert night["hyperillum"] > night["naive"]
 
@@ -106,18 +106,19 @@ INSIDE_THE_STAR = """
 import sys
 sys.path.insert(0, sys.argv[1])
 from dataclasses import replace
-import hyperillumination_phasecurve_utils as hpu
-from HItargets_utils import filter_lambda, filter_loc, hi_planets_by_name
+from hyperphase.bands import filter_lambda, filter_loc
+from hyperphase.phasecurve import thermal_PhaseCurve
+from hyperphase.targets import hi_planets_by_name
 planet = hi_planets_by_name("TOI-2431 b")
 planet = replace(planet, R=1.01 * planet.r2)   # a/R* = 1.01 < 1 + R_p/R* = 1.02
-hpu.thermal_PhaseCurve(planet, filter_lambda("MIRI/LRS"), filter_path=filter_loc("MIRI/LRS"), stellar_model="blackbody")
+thermal_PhaseCurve(planet, filter_lambda("MIRI/LRS"), filter_path=filter_loc("MIRI/LRS"), stellar_model="blackbody")
 """
 
 
 def test_planet_inside_its_star_raises(root):
     """A planet inside its star raises ValueError (fSPIDERMAN patch 7). Upstream SPIDERMAN and fSPIDERMAN builds before 81d300d end the process with
     exit status 0 instead, which would stop this test run without a summary and report it as passed: so the call runs in a process of its own."""
-    run = subprocess.run([sys.executable, "-c", INSIDE_THE_STAR, str(root / "Utilities")], cwd=root, capture_output=True, text=True, timeout=300)
+    run = subprocess.run([sys.executable, "-c", INSIDE_THE_STAR, str(root)], cwd=root, capture_output=True, text=True, timeout=300)
     error = run.stderr.strip().splitlines()[-1] if run.stderr.strip() else ""
     assert error.startswith("ValueError") and "inside the star" in error, \
         "fspiderman ends the process instead of raising: install fSPIDERMAN 81d300d or later (environment.yml)\n" + run.stdout[-2000:] + run.stderr[-2000:]
