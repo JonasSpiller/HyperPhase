@@ -80,7 +80,7 @@ sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10,
 ####################################################################################################
 
 
-OUTDIR = os.path.join(REPO_ROOT, "Dynesty Fits", "dynesty_results")   # every run, also one of the series in "more runs/", saves here
+OUTDIR = os.path.join(REPO_ROOT, "retrievals", "dynesty_results")   # every run, also one of the series in "more runs/", saves here
 
 
 def run_instrument(instrument):

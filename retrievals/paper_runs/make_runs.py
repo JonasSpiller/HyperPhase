@@ -8,7 +8,7 @@ the files side by side and moves each finished one to done/.
     python make_runs.py                 # write the run files that are not in done/ yet (pending files whose content is unchanged are left alone,
                                         # so this is safe while run_all.sh runs)
     python make_runs.py --all           # every run file, also those in done/ (run_all.sh then runs them again)
-    python make_runs.py --outdir DIR    # save the results to DIR instead of Dynesty Fits/dynesty_results, where the For_Paper notebooks read them
+    python make_runs.py --outdir DIR    # save the results to DIR instead of retrievals/dynesty_results, where the For_Paper notebooks read them
 
 A run saves its fits under its dataset tag and overwrites a stored run with the same tag, so use --outdir to rerun into a fresh folder.
 
@@ -151,7 +151,7 @@ def make_run(description, planet, instruments, seed=None, n_bins=None, n_orbits=
         src = _sub(src, r'^(sampler = dict\([^\n]*\n)', r"\g<1>" + FREE_LOGL_KW, "sampler")
         src = _sub(src, r'make_logl\(cfg, data, m, PSETS\[m\], labels=labels\)', "make_logl(cfg, data, m, PSETS[m], labels=labels, **LOGL_KW.get(m, {}))", "make_logl")
         src = _sub(src, r'^(    base = dict\([^\n]*\n)', r"\g<1>    base.update({p_.name: p_.prior.mu for p_ in _GEOM})   # the injected geometry\n", "summary base")
-    root = repr(os.path.abspath(outdir)) if outdir else 'REPO_ROOT, "Dynesty Fits", "dynesty_results"'
+    root = repr(os.path.abspath(outdir)) if outdir else 'REPO_ROOT, "retrievals", "dynesty_results"'
     subfolder = ', "free_geometry"' if free_geometry else ""
     src = _sub(src, r'^OUTDIR = [^\n]*', f"OUTDIR = os.path.join({root}{subfolder})   # set by make_runs.py", "OUTDIR")
     return f"# {description}   (written by make_runs.py from run_dynesty.py; run by run_all.sh, moved to done/ when finished)\n" + src

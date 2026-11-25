@@ -691,7 +691,7 @@ def overlay_planets(AGG, ax, ykey, ylim, a_rs_lim=(1.5, 4.0), max_rade=ROCKY_MAX
 #####
 ###########################################################################################################################
 
-# Colours as in Hyperillumination/test_thermal_redist.ipynb: F is ordered -> one-hue (blue) ramp; the models keep fixed colours
+# Colours as in forward_model/HeatRedistribution.ipynb: F is ordered -> one-hue (blue) ramp; the models keep fixed colours
 F_COLORS = ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281"]
 C_REDIST, C_HI, C_NAIVE = "#2a78d6", "#eb6834", "#52514e"   # joint A_B + F fit (blue), hyperillumination truth (orange), A_B-only fit (grey)
 INK, INK_2, AXIS, MUTED = "#0b0b0b", "#52514e", "#c3c2b7", "#898781"

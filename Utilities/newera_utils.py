@@ -1,13 +1,13 @@
 # NewEra stellar spectra (PHOENIX/1D NewEra grid, Hauschildt et al. 2025, A&A 698, A47; data DOI 10.25592/uhhfdm.18108).
 # build_cube() turns the V3 JWST product (one 12 GB tar.gz of text spectra, 0.6-28.5 um at 0.2 nm) into a compact cube once;
 # newera_spectrum() is the runtime reader behind astro_utils.stellar_spectrum(..., stellar_model="newera").
-# The cube is built and validated in Stellar Model/NewEra/build_newera.ipynb. Data live in Stellar Model/NewEra/ (gitignored).
+# The cube is built and validated in stellar_model/NewEra/build_newera.ipynb. Data live in stellar_model/NewEra/ (gitignored).
 import re, tarfile, json, datetime
 from pathlib import Path
 from functools import lru_cache
 import numpy as np
 
-NEWERA_DIR = Path(__file__).resolve().parent.parent / "Stellar Model" / "NewEra"
+NEWERA_DIR = Path(__file__).resolve().parent.parent / "stellar_model" / "NewEra"
 NEWERA_RAW = NEWERA_DIR / "raw" / "PHOENIX-NewEraV3-JWST-SPECTRA.tar.gz"            # md5 8a445ad80d3573c751b27c9a3d959cd8
 NEWERA_ADD = (NEWERA_DIR / "raw" / "PHOENIX-NewEraV3-add001-JWST-SPECTRA.Z+0.5.txt",)  # models added after the paper; only fill gaps of the main archive
 NEWERA_HSR = NEWERA_DIR / "raw" / "hsr"                                               # a few full-range (900 A - 30 um) single-model files, for validation only
@@ -103,7 +103,7 @@ def build_cube(overwrite=False, verbose=True):
 
 @lru_cache(maxsize=1)
 def _cube():
-    if not CUBE_FLUX.exists(): raise FileNotFoundError(f"{CUBE_FLUX} not found: build it with newera_utils.build_cube() (Stellar Model/NewEra/build_newera.ipynb)")
+    if not CUBE_FLUX.exists(): raise FileNotFoundError(f"{CUBE_FLUX} not found: build it with newera_utils.build_cube() (stellar_model/NewEra/build_newera.ipynb)")
     a = np.load(CUBE_AXES)
     axes = (a["wave_nm"] * 1e-9, a["teff"], a["logg"], a["feh"])
     for x in axes: x.setflags(write=False)   # shared by every caller (the flux cube is a read-only memmap already)

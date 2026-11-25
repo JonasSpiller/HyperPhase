@@ -293,7 +293,7 @@ def band_avg_planck(T, lambda_range, filter_path=None, n=300):
 # wrong units or a truncated wavelength range. Cached: treat the arrays as read-only.
 @lru_cache(maxsize=None)
 def stellar_spectrum(T_eff, logg, feh, stellar_model=STELLAR_MODEL):
-    if stellar_model == "newera":   # no sigma T^4 check: the JWST product starts at 0.6 um; validated against full-range models in Stellar Model/NewEra/build_newera.ipynb
+    if stellar_model == "newera":   # no sigma T^4 check: the JWST product starts at 0.6 um; validated against full-range models in stellar_model/NewEra/build_newera.ipynb
         wave, I = newera_utils.newera_spectrum(float(T_eff), float(logg), float(feh))
     else:
         with warnings.catch_warnings():
@@ -333,8 +333,8 @@ def band_wavelengths(lam, T_eff, logg, feh, stellar_model=STELLAR_MODEL):
 # Quadratic limb darkening of the transit, fitted with ExoTiC-LD (Grant & Wakeford 2024) to the specific intensities I(mu) of its stellar grids and
 # band-weighted with the throughput files of the forward model (ExoTiC-LD intensities are photon rates, the throughputs electrons per photon: the
 # fspiderman weighting). The NewEra cube cannot do this, it has no angular dependence. Model files are downloaded on first use into LD_DATA. exotic_ld
-# is imported inside quad_ld, so the rest of astro_utils does not depend on it. Used by Stellar Model/LimbDarkening.ipynb.
-LD_DATA = str(newera_utils.NEWERA_DIR.parent / "ExoTiC-LD")   # Stellar Model/ExoTiC-LD (gitignored, like NewEra/): model cache, filled on first use
+# is imported inside quad_ld, so the rest of astro_utils does not depend on it. Used by stellar_model/LimbDarkening.ipynb.
+LD_DATA = str(newera_utils.NEWERA_DIR.parent / "ExoTiC-LD")   # stellar_model/ExoTiC-LD (gitignored, like NewEra/): model cache, filled on first use
 LD_GRID_TEFF_MIN = {"phoenix": 2300., "mps1": 3500., "mps2": 3500., "kurucz": 3500., "stagger": 4000.}   # [K] lower T_eff edge of each ExoTiC-LD grid; below it ExoTiC-LD silently falls back to the nearest model
 LD_MU_MIN = 0.1     # ExoTiC-LD default; the steep drop of spherical models at the very limb is not fitted
 A_PER_M = 1e10      # ExoTiC-LD takes wavelengths in Angstrom

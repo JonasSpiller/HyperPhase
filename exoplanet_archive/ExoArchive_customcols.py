@@ -25,7 +25,7 @@ INPUT_GLOB = "pscomppars_*.csv"
 
 # Extra planets to splice in. Lines starting with "#" are disabled. Columns absent from the file are left as NaN, and a custom planet replaces the
 # archive row of the same name.
-CUSTOM_PLANETS_FILE = "costom_planets_my.txt"
+CUSTOM_PLANETS_FILE = "custom_planets.txt"
 
 # ADS bibcodes whose values get blanked out, e.g. ["2017AJ....153..136S"] for Stassun et al. 2017. Matched against the *_reflink columns. There is no
 # second row to fall back on in PSCompPars, so this creates NaNs rather than substituting another reference.
@@ -142,7 +142,7 @@ def fill_derived(df, col, values):
 
 
 def read_custom_planets(path, columns):
-    """Parse costom_planets_my.txt: a comma-separated header line, then one planet per line, whitespace padded. Lines starting with "#" are disabled."""
+    """Parse custom_planets.txt: a comma-separated header line, then one planet per line, whitespace padded. Lines starting with "#" are disabled."""
     lines = [l.strip() for l in Path(path).read_text().splitlines() if l.strip() and not l.strip().startswith("#")]
     rows = [[field.strip() for field in line.split(",")] for line in lines]
     df = pd.DataFrame(rows[1:], columns=rows[0])

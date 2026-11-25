@@ -36,12 +36,12 @@ DEFAULT_EMISSIVITY_BOL = 1.
 DEFAULT_EMISSIVITY = 1.
 
 # Bolometric linear limb darkening u_bol of the irradiance: a model-atmosphere value instead of the grey Eddington value of 0.6.
-# For TOI-2431 b, the primary target, the bolometric profile gives 0.49 (PHOENIX) and 0.50 (MPS-ATLAS) (Stellar Model/LimbDarkening.ipynb).
+# For TOI-2431 b, the primary target, the bolometric profile gives 0.49 (PHOENIX) and 0.50 (MPS-ATLAS) (stellar_model/LimbDarkening.ipynb).
 DEFAULT_U_BOL = 0.5
 
 # Quadratic limb darkening (u1, u2) of the batman transit. The transit is identical in both irradiation models and cancels exactly in every
 # comparison, so the value only needs to be plausible: the median of ExoTiC-LD fits over the hosts of the twelve PAPER_PLANETS of 2026-11-02, in the
-# band throughputs of the forward model (Stellar Model/LimbDarkening.ipynb). Not re-derived for the sample of 2026-11-08 (hosts of 4100-5960 K, as
+# band throughputs of the forward model (stellar_model/LimbDarkening.ipynb). Not re-derived for the sample of 2026-11-08 (hosts of 4100-5960 K, as
 # before): the value does not enter any result.
 DEFAULT_U = (0.09, 0.14)
 
@@ -184,7 +184,7 @@ OVERRIDES = {
 }
 
 # Published 1-sigma uncertainties of the two reference planets, for every analysis that does not hold the geometry fixed: the nuisance fits of
-# simple_bias_analysis (Bias Analysis/Nuisance_Robustness.ipynb), fig:res_nuisance (paper_plot_utils.nuisance_robustness) and the free-geometry
+# simple_bias_analysis (bias_analysis/Nuisance_Robustness.ipynb), fig:res_nuisance (paper_plot_utils.nuisance_robustness) and the free-geometry
 # dynesty runs. Defined once, here. GEOMETRY_PARAMS: the geometry as each planet's source FITTED it, in the column names of
 # simple_bias_analysis.nuisance_problem. Tas et al. fit the impact parameter b and the stellar density of TOI-2431 b and derive i = arccos(b /
 # (a/R*)), so its geometry is (a/R* at fixed b, Rp/R*, b); Malavolta et al. fit a/R* and i of K2-141 b directly. GEOMETRY_SIGMA: the Gaussian priors
@@ -220,7 +220,7 @@ DEFORMATION_H2_TRUE, DEFORMATION_H2_RANGE = 2., (1., 2.5)
 @lru_cache(maxsize=1)
 def _archive():
     """The aggregate table, loaded once, with the ranking metric and validity mask attached."""
-    path = sorted((Path(__file__).resolve().parent.parent / "NASAExoplanetArchive").glob(INPUT_GLOB))[-1]
+    path = sorted((Path(__file__).resolve().parent.parent / "exoplanet_archive").glob(INPUT_GLOB))[-1]
     df = apply_custom(pd.read_csv(path, low_memory=False))   # CUSTOM / OVERRIDES take precedence over the archive, also in the ranking metric below
     df["hyperillum_metric"] = (df["pl_ratror"] - 1.0) / df["a_over_r2"]   # (r1 - r2) / R
     df["hyperillum_valid"] = (df["pl_ratror"] < MAX_R1_OVER_R2) & (df["a_over_r2"] > 1.0 + df["pl_ratror"]) # & df["st_teff"].notna()
@@ -296,7 +296,7 @@ def _note_once(name, msg):
 #   16-84 %: +-0.04, M dwarfs +-0.06-0.09), while a fixed 4.5 is off by -0.28 dex for
 #   M dwarfs (log g 4.5 instead of 5.0 shifts the LRS stellar flux by ~6 % at 2600 K). Without st_teff, 4.5 (such a host has no stellar spectrum
 #     anyway).
-# - no st_met: solar [Fe/H] = 0, the standard assumption (k changes by <= 0.8 % per 0.1 dex; Stellar Model/NewEra/build_newera.ipynb).
+# - no st_met: solar [Fe/H] = 0, the standard assumption (k changes by <= 0.8 % per 0.1 dex; stellar_model/NewEra/build_newera.ipynb).
 # Keys in `skip` (values given in OVERRIDES) are neither derived nor reported.
 def _stellar_logg_feh(row, skip=()):
     name, out = row["pl_name"], {}
@@ -430,7 +430,7 @@ def load_filter(lambda_range, filter_path=None, n=300):
     return lam_out, w_out
 
 
-FILTER_DIR = Path(__file__).resolve().parent.parent / "Filters" / "Spiderman"
+FILTER_DIR = Path(__file__).resolve().parent.parent / "filters" / "Spiderman"
 
 
 # Used wavelength ranges [um] for observations -- what to integrate over
@@ -526,7 +526,7 @@ def full_lambda(instrument):
     return FULL_LAMBDA_M[instrument]
 
 def filter_loc(instrument):
-    """Path [str] to the throughput file of an instrument (a FILTER_LAMBDA_UM key) in Filters/Spiderman/."""
+    """Path [str] to the throughput file of an instrument (a FILTER_LAMBDA_UM key) in filters/Spiderman/."""
     return str(FILTER_DIR / FILTER_FILES[instrument])
 
 def pandexo_mode(instrument):
@@ -811,7 +811,7 @@ class NoNoiseLevelError(ValueError):
 # Pandeia versions. Any change (an archive update, an override, a new PandExo) is a miss: rms_1min runs PandExo and adds the row, so a value computed
 # from other inputs is never served. The file is locked while it is read or written (fcntl), so parallel kernels and joblib workers can share it. To
 # force a rerun: rms_1min(..., use_cache=False), which replaces the row, or delete rows / the file.
-PANDEXO_CACHE = Path(__file__).resolve().parent.parent / "Stellar Model" / "Pandexo" / "pandexo_cache.csv"
+PANDEXO_CACHE = Path(__file__).resolve().parent.parent / "stellar_model" / "Pandexo" / "pandexo_cache.csv"
 PANDEXO_NOISE_VERSION = 2   # version of the noise computation from a PandExo result (binning, rms_1min_pandexo); bump it when that changes. 2: summed electrons (2026-11-06)
 _PANDEXO_KEY_PARAMS = ("rp_rearth", "rs_rsun", "teff", "logg", "metal", "t14_h", "mag", "ref_wave")   # pandexo_params without the period, which PandExo does not use
 _PANDEXO_TEXT = ("planet", "instrument", "mode", "mag_band", "settings", "pandexo_version", "pandeia_version", "created")   # read as text, so "2026.10" stays a version

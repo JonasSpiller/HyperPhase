@@ -10,7 +10,7 @@ redistribution and an albedo biased low. The code covers noiseless fits with Fis
 nuisance parameters, and nested-sampling retrievals of simulated observations.
 
 <p align="center">
-  <img src="temperature_maps_TOI-2431b.png" width="560" alt="Surface temperature maps of TOI-2431 b for a point source and an extended star">
+  <img src="docs/temperature_maps_TOI-2431b.png" width="560" alt="Surface temperature maps of TOI-2431 b for a point source and an extended star">
 </p>
 
 *Surface temperature of the bare rock TOI-2431 b ($a/R_\star = 2.08$, Bond albedo 0.2) for a point-source star (top) and the extended star
@@ -40,9 +40,9 @@ Data that are not in the repository:
 
 - **Stellar spectra.** By default (`stellar_model="newera"`) the planet-to-star contrast is normalised by NewEra model spectra
   (Hauschildt et al. 2025) at each host's $T_{\rm eff}$, $\log g$ and [Fe/H]. This needs a 113 MB spectral cube that is not in the
-  repository: build it once with `Stellar Model/NewEra/build_newera.ipynb` from the NewEra JWST product
+  repository: build it once with `stellar_model/NewEra/build_newera.ipynb` from the NewEra JWST product
   ([doi:10.25592/uhhfdm.18108](https://doi.org/10.25592/uhhfdm.18108), about 12 GB). Without it, pass `stellar_model="blackbody"`.
-- **Noise levels.** `Stellar Model/Pandexo/pandexo_cache.csv` holds the PandExo precision of the planets and bands of the paper for
+- **Noise levels.** `stellar_model/Pandexo/pandexo_cache.csv` holds the PandExo precision of the planets and bands of the paper for
   PandExo and Pandeia 2026.7. Other planets, bands or versions run PandExo, which needs the Pandeia reference data (`pandeia_refdata`) and
   the CDBS files (`PYSYN_CDBS`).
 
@@ -64,7 +64,7 @@ plt.ylim(-50, 250); plt.xlabel("orbital phase"); plt.ylabel("relative flux [ppm]
 ```
 
 The insolation models are `"hyperillum"` (extended star), `"naive"` (point source) and `"naive_redist"` (point source with the heat
-redistribution $F$ of Kreidberg & Loeb 2016, passed as `F=`). The notebooks in `Hyperillumination/` show the irradiance, the temperature
+redistribution $F$ of Kreidberg & Loeb 2016, passed as `F=`). The notebooks in `forward_model/` show the irradiance, the temperature
 maps and the thermal and reflected curves step by step.
 
 ## Conventions
@@ -90,13 +90,13 @@ maps and the thermal and reflected curves step by step.
 | Folder | Contents |
 |---|---|
 | `Utilities/` | The code. `hyperillumination_utils.py`: extended-source and point-source irradiance, heat redistribution, temperature maps. `hyperillumination_phasecurve_utils.py`: thermal (fSPIDERMAN) and reflected phase curves, stellar band fluxes, the model of the fits. `astro_utils.py`: orbits, Planck functions, brightness temperatures, stellar spectra, Roche limits. `newera_utils.py`: the NewEra spectral cube. `batman_utils.py`: transits and occultations with batman. `HItargets_utils.py`: planet parameters (NASA Exoplanet Archive and a curated table with one published source per planet), instrument bands, noise levels, the baseline settings. `simple_bias_analysis.py`: noiseless fits, Fisher uncertainties, evidence predictions, nuisance parameters, bias maps. `dynesty_utils.py`: simulated observations, likelihoods, nested-sampling retrievals. |
-| `Hyperillumination/` | The forward model: irradiance and illumination zones, thermal, reflected and full phase curves, heat redistribution, the nightside signal, TESS candidates, speed and accuracy of the light curves. |
-| `Bias Analysis/` | The noiseless analysis: albedo bias and spurious redistribution for single planets, over $(a/R_\star, T_{\rm eff})$ and for the planet sample; predicted Bayes factors; nuisance parameters; planets at their Roche limit. |
-| `Dynesty Fits/` | Nested-sampling retrievals: `run_dynesty.py` (one run), `paper_runs/` (every retrieval of the paper), `example_runs/` (three stored retrievals of TOI-2431 b), and notebooks that inspect a run, validate the sampler and compare the retrievals with their predictions. |
-| `Filters/` | Instrument throughputs (`Filters/Spiderman/`) and the notebooks that made them. |
-| `Stellar Model/` | NewEra spectral cube, limb-darkening coefficients, PandExo noise levels and their cache, the blackbody against the NewEra star. |
-| `NASAExoplanetArchive/` | Download of the archive's PSCompPars table, derived columns, and the snapshot used. |
-| `InstellCa_Comparison/` | Comparison of the irradiance with InstellCa (Sadh & Gavassino 2026). |
+| `forward_model/` | The forward model: irradiance and illumination zones, thermal, reflected and full phase curves, heat redistribution, the nightside signal, TESS candidates, speed and accuracy of the light curves. |
+| `bias_analysis/` | The noiseless analysis: albedo bias and spurious redistribution for single planets, over $(a/R_\star, T_{\rm eff})$ and for the planet sample; predicted Bayes factors; nuisance parameters; planets at their Roche limit. |
+| `retrievals/` | Nested-sampling retrievals: `run_dynesty.py` (one run), `paper_runs/` (every retrieval of the paper), `example_runs/` (three stored retrievals of TOI-2431 b), and notebooks that inspect a run, validate the sampler and compare the retrievals with their predictions. |
+| `filters/` | Instrument throughputs (`filters/Spiderman/`) and the notebooks that made them. |
+| `stellar_model/` | NewEra spectral cube, limb-darkening coefficients, PandExo noise levels and their cache, the blackbody against the NewEra star. |
+| `exoplanet_archive/` | Download of the archive's PSCompPars table, derived columns, and the snapshot used. |
+| `instellca_comparison/` | Comparison of the irradiance with InstellCa (Sadh & Gavassino 2026). |
 | `tests/` | The test suite (see below). |
 
 ## Tests
@@ -115,18 +115,18 @@ run with the current stellar grid) or PandExo 2026.7 are skipped otherwise.
 
 ## Reproducing the retrievals
 
-The paper's nested-sampling retrievals (243 simulated datasets, three models each) are defined in `Dynesty Fits/paper_runs/`:
+The paper's nested-sampling retrievals (243 simulated datasets, three models each) are defined in `retrievals/paper_runs/`:
 
 ```bash
-cd "Dynesty Fits/paper_runs"
+cd retrievals/paper_runs
 python make_runs.py      # writes one run file per planet, seed and setting
 ./run_all.sh             # runs them side by side on all cores
 ```
 
-They take about 2,000 core-hours in total and save to `Dynesty Fits/dynesty_results/`, which is not part of the repository. The three
-stored retrievals in `Dynesty Fits/example_runs/` can be read with `dynesty_utils.load_fits`. The comparison with
+They take about 2,000 core-hours in total and save to `retrievals/dynesty_results/`, which is not part of the repository. The three
+stored retrievals in `retrievals/example_runs/` can be read with `dynesty_utils.load_fits`. The comparison with
 [InstellCa](https://github.com/Mradumay137/InstellCa) needs a clone of InstellCa at commit 99225f4 (see the first cell of
-`InstellCa_Comparison/InstellCa_Comparison.ipynb`).
+`instellca_comparison/InstellCa_Comparison.ipynb`).
 
 ## Limitations
 
@@ -160,5 +160,5 @@ If you use this code, please cite the paper above (see also `CITATION.cff`) and 
 
 ## License
 
-MIT, see `LICENSE`. The exception is `InstellCa_Comparison/InstellCa_3.0_exported.py`: a modified copy of InstellCa,
+MIT, see `LICENSE`. The exception is `instellca_comparison/InstellCa_3.0_exported.py`: a modified copy of InstellCa,
 Copyright (c) 2021 Mradumay137, also under the MIT License. Its header lists the changes.

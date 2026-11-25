@@ -12,7 +12,7 @@ FREE_GEOMETRY = ["free_geometry/TOI-2431b_MIRI-LRS_*.pkl"]
 
 
 def example_fits(root, pattern):
-    fits = du.load_fits(str(root / "Dynesty Fits" / "example_runs" / pattern))
+    fits = du.load_fits(str(root / "retrievals" / "example_runs" / pattern))
     assert set(fits) == {"hyperillum", "naive", "naive_redist"}
     return fits
 
@@ -54,14 +54,31 @@ def test_example_runs_are_current(root, newera_cube, pattern):
 
 def test_runs_from_another_machine_find_their_filters(root, tmp_path):
     """A pickle stores the absolute filter path of the machine that ran it; loading it elsewhere points the path into this repository."""
-    source = sorted((root / "Dynesty Fits" / "example_runs").glob("TOI-2431b_JWST_NIRSpec*naive_priors*.pkl"))[0]
+    source = sorted((root / "retrievals" / "example_runs").glob("TOI-2431b_JWST_NIRSpec*naive_priors*.pkl"))[0]
     with open(source, "rb") as f:
         fit = pickle.load(f)
     for cfg in du.detector_cfgs(fit.meta["cfg"]):
-        cfg.filter_path = "/another/machine/HyperPhase/Filters/Spiderman/" + Path(cfg.filter_path).name
+        cfg.filter_path = "/another/machine/HyperPhase/filters/Spiderman/" + Path(cfg.filter_path).name
     moved = tmp_path / source.name
     with open(moved, "wb") as f:
         pickle.dump(fit, f)
     for cfg in du.detector_cfgs(du.load_fit(moved).meta["cfg"]):
-        assert Path(cfg.filter_path).parent == root / "Filters" / "Spiderman"
+        assert Path(cfg.filter_path).parent == root / "filters" / "Spiderman"
         assert Path(cfg.filter_path).exists()
+
+
+def test_runs_with_another_spelling_of_the_filter_path_take_the_canonical_one(root, tmp_path):
+    """A stored filter path that reaches the repository's file under another spelling (a symlink here; the pre-rename Filters/ on a case-insensitive disk)
+    is replaced by the canonical path, which observed_band looks the instrument up by."""
+    source = sorted((root / "retrievals" / "example_runs").glob("TOI-2431b_JWST_NIRSpec*naive_priors*.pkl"))[0]
+    with open(source, "rb") as f:
+        fit = pickle.load(f)
+    link = tmp_path / "Spiderman"
+    link.symlink_to(root / "filters" / "Spiderman", target_is_directory=True)
+    for cfg in du.detector_cfgs(fit.meta["cfg"]):
+        cfg.filter_path = str(link / Path(cfg.filter_path).name)
+    moved = tmp_path / source.name
+    with open(moved, "wb") as f:
+        pickle.dump(fit, f)
+    for cfg in du.detector_cfgs(du.load_fit(moved).meta["cfg"]):
+        assert Path(cfg.filter_path).parent == root / "filters" / "Spiderman"

@@ -50,20 +50,20 @@ ENV/
 # ========================
 # Downloaded data (not shipped; see README)
 # ========================
-/Filters/raw SVO/
+/filters/raw SVO/
 *.throughput.dat
-/NASAExoplanetArchive/NASAExoArchive_*_aggregate.csv
-/NASAExoplanetArchive/pscomppars_*
-/Stellar Model/ExoTiC-LD/
-/Stellar Model/NewEra/raw/
-/Stellar Model/NewEra/newera_cube_axes.npz
-/Stellar Model/NewEra/newera_cube_flux.npy
+/exoplanet_archive/NASAExoArchive_*_aggregate.csv
+/exoplanet_archive/pscomppars_*
+/stellar_model/ExoTiC-LD/
+/stellar_model/NewEra/raw/
+/stellar_model/NewEra/newera_cube_axes.npz
+/stellar_model/NewEra/newera_cube_flux.npy
 
 # ========================
 # Generated outputs
 # ========================
 *.gif
 *.mp4
-/Hyperillumination/Plots */
-/InstellCa_Comparison/outfiles/
-/Dynesty Fits/dynesty_results/
+/forward_model/Plots */
+/instellca_comparison/outfiles/
+/retrievals/dynesty_results/

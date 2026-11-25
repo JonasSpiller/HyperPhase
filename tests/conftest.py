@@ -49,4 +49,4 @@ def cfg_lrs(toi2431b, lrs):
 @pytest.fixture
 def newera_cube():
     if not newera_utils.CUBE_FLUX.exists():
-        pytest.skip("needs the NewEra spectral cube (Stellar Model/NewEra/build_newera.ipynb)")
+        pytest.skip("needs the NewEra spectral cube (stellar_model/NewEra/build_newera.ipynb)")
