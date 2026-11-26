@@ -82,10 +82,11 @@ def load_fits(paths):
 #####   Dataset tags: the file names of stored runs, and finding a stored dataset again
 ############################################################################################################################################
 
-# A dataset is one simulated observation (planet, instrument, albedos, binning, noise, seed) sampled with every model at one pfrac; its tag is
-# everything the models share, and a result file is tag + "_{insolation_model}_priors-<sampled names>.pkl". The free parameters come LAST, so one
-# glob on the tag picks up every model of the dataset, while runs with different free parameters cannot overwrite each other. A joint fit joins
-# the noise levels of its detectors with "+". pfrac ends the tag: the same data sampled with another pfrac is another run.
+# A dataset is one simulated observation (planet, instrument, albedos, binning, noise, seed) sampled with every model at one pfrac; its tag
+# holds these settings only (runs that differ otherwise, e.g. null test or free geometry, go into subfolders: find_dataset), and a result
+# file is tag + "_{insolation_model}_priors-<sampled names>.pkl". The free parameters come LAST, so one glob on the tag picks up every model
+# of the dataset, while runs with different free parameters cannot overwrite each other. A joint fit joins the noise levels of its detectors
+# with "+". pfrac ends the tag: the same data sampled with another pfrac is another run.
 DATASET_TAG = "{planet}_{instrument}_{A_label}_AB{A_B:g}_nbins{n_bins}_norbits{n_orbits}_rms1min{rms}_sigmascale{sigma_scaling:g}_seed{seed}_pfrac{pfrac:g}"
 _RESULT_FILE_RE = re.compile(r"^(?P<planet>[^_]+)_(?P<instrument>.+?)_(?P<A_label>(?:fixed|scaled)A[\d.]+)_AB(?P<A_B>[\d.]+)_nbins(?P<n_bins>\d+)_norbits(?P<n_orbits>\d+)"
                              r"_rms1min(?P<rms>[\d.+]+)_sigmascale(?P<sigma_scaling>[\d.]+)_seed(?P<seed>\d+)_pfrac(?P<pfrac>[\d.]+)"

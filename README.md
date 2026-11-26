@@ -153,7 +153,7 @@ current stellar grid) or PandExo 2026.7 are skipped otherwise.
 
 ## Reproducing the retrievals
 
-The paper's nested-sampling retrievals (243 simulated datasets, three models each) are defined in `retrievals/paper_runs/`:
+The paper's nested-sampling retrievals (249 simulated datasets, three models each) are defined in `retrievals/paper_runs/`:
 
 ```bash
 cd retrievals/paper_runs

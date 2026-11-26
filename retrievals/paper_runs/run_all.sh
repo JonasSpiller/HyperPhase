@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 #
 # Run the paper's retrievals: every run file in THIS folder (*.py except make_runs.py), several side by side. The run files are copies of
-# ../run_dynesty.py with other settings, written by make_runs.py; they save to ../dynesty_results unless make_runs.py was given --outdir.
+# ../run_dynesty.py with other settings, written by make_runs.py; they save to ../dynesty_results (free geometry: its free_geometry/)
+# unless make_runs.py was given --outdir.
 #
-#   python make_runs.py                      write the run files first
-#   ./run_all.sh                             all of them, in alphabetical order
-#   ./run_all.sh toi2431b_seed40 k2141b.py   only these (with or without .py)
-#   SLOTS=8 ./run_all.sh                     on at most 8 cores (default: all logical cores)
-#   PYTHON=/path/to/python ./run_all.sh      with another interpreter (default: python, i.e. the active environment)
-#   nohup ./run_all.sh > run_all.log 2>&1 &  the usual way to run them overnight
-#   kill -TERM <pid of run_all.sh>           stop it and every run it started (Ctrl-C does the same); the files stay here
+#   python make_runs.py                             write the run files first
+#   ./run_all.sh                                    all of them, in alphabetical order
+#   ./run_all.sh toi2431b_seed40 k2141b_seed40.py   only these (with or without .py)
+#   SLOTS=8 ./run_all.sh                            on at most 8 cores (default: all logical cores)
+#   PYTHON=/path/to/python ./run_all.sh             with another interpreter (default: python, i.e. the active environment)
+#   nohup ./run_all.sh > run_all.log 2>&1 &         the usual way to run them overnight
+#   kill -TERM <pid of run_all.sh>                  stop it and every run it started (Ctrl-C does the same); the files stay here
 #
 # Side by side: a run whose sampler line says nprocs = n occupies n of the SLOTS cores (nprocs = 1: one process, no pool), and the next run
 # starts as soon as enough slots are free. One fit on many workers scales poorly (dynesty's pool waits for its slowest worker in every round:

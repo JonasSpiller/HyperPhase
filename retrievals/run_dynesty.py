@@ -93,7 +93,7 @@ sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10,
 ####################################################################################################
 
 
-OUTDIR = os.path.join(REPO_ROOT, "retrievals", "dynesty_results")   # every run saves here, also those of paper_runs/ (make_runs.py)
+OUTDIR = os.path.join(REPO_ROOT, "retrievals", "dynesty_results")   # every run saves here, also those of paper_runs/ (make_runs.py; its free-geometry runs in free_geometry/, its null tests in null_test/)
 
 
 def run_instrument(instrument):

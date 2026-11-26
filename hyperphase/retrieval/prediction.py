@@ -82,7 +82,7 @@ def noiseless_reference(cfg, data, models, A_B_true=None, insolation_truth=None,
 
 
 def run_kind(fits):
-    """What a stored run is beyond its tag, read from its pickles: "null_test" (data drawn from the point-source model), "free_geometry"
+    """What a stored run is beyond its tag, read from its pickles: "null_test" (any truth but "hyperillum", e.g. the point source), "free_geometry"
     (any geometry parameter sampled: a_rs, T_s, rp_rs, incl or b) or "" (hyperillumination truth, fixed geometry). It must match the
     run's subfolder (series_table checks)."""
     f = next(iter(fits.values()))
@@ -93,7 +93,7 @@ def run_kind(fits):
 
 def alternative_model(fits):
     """(truth model, misspecified one-parameter model) of a run: the point-source model for a hyperillumination truth, the
-    extended-source model for a point-source truth (null test)."""
+    extended-source model for any other truth (null test: a point-source truth)."""
     true_m = next(iter(fits.values())).meta["data"]["truth"]["insolation_model"]
     return true_m, ("naive" if true_m == "hyperillum" else "hyperillum")
 

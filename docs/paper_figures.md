@@ -4,7 +4,7 @@ Each figure and table of Spiller, Zieba & Wordsworth (in prep.), with the notebo
 notebook size and set the planet, mode and settings in their first cells. Where these differ from the figure in the paper, the entry says
 what to set. § refers to a notebook's numbered sections, a quoted heading to a notebook whose sections are not numbered.
 
-The nested-sampling retrievals (Section 4.3, Appendix E) need data that are not in the repository: they read the 243 retrievals defined in
+The nested-sampling retrievals (Section 4.3, Appendix E) need data that are not in the repository: they read the 249 retrievals defined in
 `retrievals/paper_runs/` (see [Reproducing the retrievals](../README.md#reproducing-the-retrievals)). The observation of the two corner
 plots is shipped in `retrievals/example_runs/`.
 

@@ -1,23 +1,25 @@
 """Write the run files of every nested-sampling retrieval used in the paper.
 
-Each run file is a copy of ../run_dynesty.py with its input lines set (planet, instruments, seed, n_bins, n_orbits, A_B_true, the sampler's pfrac and
-nprocs) and a one-line description on top; the free-geometry runs also sample the orbital geometry (see FREE_GEOMETRY below). Everything else (models,
+Each run file is a copy of ../run_dynesty.py with its input lines set (planet, instruments, seed, n_bins, n_orbits, A_B_true, INSOL_TRUTH, the sampler's
+pfrac and nprocs) and a one-line description on top; the free-geometry runs also sample the orbital geometry (see FREE_GEOMETRY below). Everything else (models,
 priors, sampler settings, forward-model resolution) is whatever run_dynesty.py says, so re-run this script after changing run_dynesty.py. run_all.sh runs
 the files side by side and moves each finished one to done/.
 
     python make_runs.py                 # write the run files that are not in done/ yet (pending files whose content is unchanged are left alone,
                                         # so this is safe while run_all.sh runs)
     python make_runs.py --all           # every run file, also those in done/ (run_all.sh then runs them again)
-    python make_runs.py --outdir DIR    # save the results to DIR instead of retrievals/dynesty_results, where 01_retrieval_example.ipynb and 03_retrieval_series.ipynb read them
+    python make_runs.py --outdir DIR    # save the results to DIR instead of retrievals/dynesty_results, where 03_retrieval_series.ipynb reads them
+                                        # (01_retrieval_example.ipynb with RESULTS_DIR = "dynesty_results")
 
 A run saves its fits under its dataset tag and overwrites a stored run with the same tag, so use --outdir to rerun into a fresh folder.
 
-The runs (243 datasets with three fits each, in 129 run files):
+The runs (249 datasets with three fits each, in 132 run files):
   retrievals          every paper planet in the joint NIRSpec/G395H fit and in MIRI/LRS (55 Cnc e: MIRI/LRS only), seeds 40-69 for TOI-2431 b and K2-141 b
                       and 40-43 for the other planets; at seed 42 also NRS1 and NRS2 alone (both reference planets) and the MIRI imaging filters (TOI-2431 b)
   observing time      TOI-2431 b: 3 and 10 orbits in both modes, 2 orbits (one visit) in MIRI/LRS
   settings            TOI-2431 b: 20 and 36 phase bins, true albedo 0.4 and 0.05; both reference planets: NRS1, NRS2 and MIRI/LRS in one fit
-  free geometry       both reference planets, seeds 61-64, and the corner-plot realization of TOI-2431 b (MIRI/LRS, seed 44)
+  free geometry       both reference planets, seeds 61-64, and the corner-plot realization of TOI-2431 b (MIRI/LRS, seed 44); saved in free_geometry/
+  null test           TOI-2431 b with data drawn from the point-source model, seeds 43-45, both modes; saved in null_test/
   sampler weighting   TOI-2431 b at pfrac = 0 and 1, against the baseline pfrac = 0.8
 
 nprocs is set to the value each stored run used. It changes the individual samples (dynesty batches its proposals by the number of workers), not their
@@ -82,11 +84,15 @@ add("toi2431b_AB0.05_seed43", f"{TARGET}, true A_B = 0.05 (the prior edge A_B = 
 for stem, name in (("toi2431b", TARGET), ("k2141b", OTHER)):
     add(f"{stem}_3det_seed43", f"{name}, seed 43: {bands_text(THREE_DETECTORS)}", planet=name, instruments=THREE_DETECTORS, seed=43)
 
-# Free geometry: two side by side per core pair (nprocs = 2), except the corner-plot run
+# Free geometry: nprocs = 2 (two cores per run, the files run side by side), except the corner-plot run (12 workers)
 for stem, name in (("toi2431b", TARGET), ("k2141b", OTHER)):
     for seed in range(61, 65):
         add(f"{stem}_freegeom_seed{seed}", f"{name}, free geometry, seed {seed}: {bands_text(MODES)}", planet=name, instruments=MODES, seed=seed, nprocs=2, free_geometry=True)
 add("toi2431b_freegeom_seed44", f"{TARGET}, free geometry, seed 44 (the realization of the corner plots): MIRI/LRS", planet=TARGET, instruments=(LRS,), seed=44, free_geometry=True)
+
+# Null test: data drawn from the point-source model, which the extended-source model then fits as the misspecified one
+for seed in (43, 44, 45):
+    add(f"toi2431b_null_seed{seed}", f"{TARGET}, null test (point-source truth), seed {seed}: {bands_text(MODES)}", planet=TARGET, instruments=MODES, seed=seed, truth="naive")
 
 # Sampler weighting: the evidences at pfrac = 0 (all effort on lnZ) and 1 (all on the posterior) against those of the retrievals at 0.8
 for seed in range(40, 50):
@@ -135,7 +141,9 @@ def _sub(src, pattern, repl, what):
     return new
 
 
-def make_run(description, planet, instruments, seed=None, n_bins=None, n_orbits=None, A_B_true=None, pfrac=None, nprocs=None, free_geometry=False, outdir=None):
+def make_run(description, planet, instruments, seed=None, n_bins=None, n_orbits=None, A_B_true=None, pfrac=None, nprocs=None, free_geometry=False, truth=None,
+             outdir=None):
+    if free_geometry and truth is not None: raise ValueError("make_runs.py: a run is either a free-geometry run or a null test, not both")
     src = open(BASE).read()
     src = _sub(src, r'^planet = hi_planets_by_name\("[^"]+"\)', f'planet = hi_planets_by_name("{planet}")', "planet")
     src = _sub(src, r'^instruments = \([^\n]*?\)(?=\s*(#|$))', "instruments = " + repr(tuple(instruments)), "instruments")
@@ -143,6 +151,7 @@ def make_run(description, planet, instruments, seed=None, n_bins=None, n_orbits=
     if n_bins is not None:   src = _sub(src, r'^n_bins = \S+', f"n_bins = {n_bins}", "n_bins")
     if n_orbits is not None: src = _sub(src, r'^n_orbits = \S+', f"n_orbits = {n_orbits}", "n_orbits")
     if A_B_true is not None: src = _sub(src, r'^A_B_true = \S+', f"A_B_true = {A_B_true}", "A_B_true")
+    if truth is not None:    src = _sub(src, r'^INSOL_TRUTH = "[^"]+"', f'INSOL_TRUTH = "{truth}"', "INSOL_TRUTH")
     if pfrac is not None:    src = _sub(src, r'^(sampler = dict\([^\n]*?pfrac=)[0-9.]+', rf"\g<1>{pfrac:g}", "sampler pfrac")
     if nprocs is not None:   src = _sub(src, r'^(sampler = dict\([^\n]*?nprocs=)[0-9]+', rf"\g<1>{nprocs}", "sampler nprocs")
     if free_geometry:
@@ -152,7 +161,7 @@ def make_run(description, planet, instruments, seed=None, n_bins=None, n_orbits=
         src = _sub(src, r'make_logl\(cfg, data, m, PSETS\[m\], labels=labels\)', "make_logl(cfg, data, m, PSETS[m], labels=labels, **LOGL_KW.get(m, {}))", "make_logl")
         src = _sub(src, r'^(    base = dict\([^\n]*\n)', r"\g<1>    base.update({p_.name: p_.prior.mu for p_ in _GEOM})   # the injected geometry\n", "summary base")
     root = repr(os.path.abspath(outdir)) if outdir else 'REPO_ROOT, "retrievals", "dynesty_results"'
-    subfolder = ', "free_geometry"' if free_geometry else ""
+    subfolder = ', "free_geometry"' if free_geometry else ', "null_test"' if truth is not None else ""
     src = _sub(src, r'^OUTDIR = [^\n]*', f"OUTDIR = os.path.join({root}{subfolder})   # set by make_runs.py", "OUTDIR")
     return f"# {description}   (written by make_runs.py from run_dynesty.py; run by run_all.sh, moved to done/ when finished)\n" + src
 
