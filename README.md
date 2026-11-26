@@ -199,5 +199,6 @@ If you use this code, please cite the paper above (see also `CITATION.cff`) and 
 
 ## License
 
-MIT, see `LICENSE`. The exception is `validation/InstellCa_3.0_exported.py`: a modified copy of InstellCa,
-Copyright (c) 2021 Mradumay137, also under the MIT License. Its header lists the changes.
+MIT, see `LICENSE`. There are two exceptions. `validation/InstellCa_3.0_exported.py` is a modified copy of InstellCa,
+Copyright (c) 2021 Mradumay137, also under the MIT License; its header lists the changes. `validation/spiderman_numpy2.patch` is a patch to
+SPIDERMAN (Louden & Kreidberg 2018) and, like SPIDERMAN, under the GNU GPL v3.

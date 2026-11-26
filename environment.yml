@@ -32,4 +32,5 @@ dependencies:
       - pytest==9.2.0
       - fspiderman-package @ git+https://github.com/JonasSpiller/fSPIDERMAN.git@81d300d341454d90d89d2ff0f718600f0f17c0e9
       - -e .
-# Upstream SPIDERMAN (module spiderman) is not installed: it is only the benchmark baseline of validation/speed_accuracy.ipynb.
+# Upstream SPIDERMAN (module spiderman) is not installed: it is only the benchmark baseline of section 7 of validation/speed_accuracy.ipynb,
+# which says how to build it with validation/spiderman_numpy2.patch.
