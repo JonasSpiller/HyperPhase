@@ -35,8 +35,8 @@ CUSTOM_PLANETS_FILE = "custom_planets.txt"
 # second row to fall back on in PSCompPars, so this creates NaNs rather than substituting another reference.
 MASK_BIBCODES = []
 
-# Stellar-parameter overrides, by exact planet name.
-STELLAR_OVERRIDES = {"HD 80653 b": {"st_teff": 5838.0}} # st_teff missing
+# Stellar-parameter overrides, by exact planet name, e.g. {"HD 80653 b": {"st_teff": 5959.0}}.
+STELLAR_OVERRIDES = {}
 
 
 # --------------------------------------------------------------------------
@@ -104,7 +104,7 @@ SHORT_COLUMNS = [
     "occdep_1400nm_Teq",        # same at 1.4 um, cold limit (full redistribution)
     "occdep_7500nm_Trock",      # predicted occultation depth [ppm] at 7.5 um, hot limit
     "occdep_15000nm_Trock",     # predicted occultation depth [ppm] at 15 um, hot limit
-    "occdep_refl_A0p1",         # reflected-light contrast [ppm] at albedo A = 0.1
+    "occdep_refl_A0p1",         # reflected-light contrast [ppm] at geometric albedo 0.1
     "ESM",                      # emission metric, ~S/N of a 7.5 um occultation
     "occdep_ESM_err",           # 1-sigma [ppm] on the depth behind ESM
     "TSM",                      # transmission metric, ~S/N of a NIRISS transmission spectrum
@@ -230,7 +230,7 @@ for nm in OCCDEP_WAVELENGTHS_NM:
     for t_name in ("Trock", "Teq"):
         df[f"occdep_{nm}nm_{t_name}"] = planck_ratio(df["pl_rprs2"], df["st_teff"], df[f"pl_{t_name}"], nm * 1e-9)
 
-# Reflected light occ depth at A=0.1 (placeholder)
+# Reflected-light occultation depth at geometric albedo 0.1 (placeholder; for the band albedo A of the model: (2/3) A (Rp/a)^2)
 df["occdep_refl_A0p1"] = 0.1 * df["pl_rprs2"] / df["pl_ratdor"] ** 2 * 1e6
 
 df = df.copy()

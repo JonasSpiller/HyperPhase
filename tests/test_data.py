@@ -3,12 +3,14 @@ import importlib.util
 from dataclasses import replace
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from hyperphase.bands import FILTER_FILES, filter_lambda, filter_loc, full_lambda
 from hyperphase.noise import _package_version, _pandexo_cache_store, _pandexo_key, NoNoiseLevelError, pandexo_params, rms_1min
 from hyperphase.paper import PAPER_PLANETS
-from hyperphase.targets import CUSTOM, hi_planets_by_name
+from hyperphase.paths import ARCHIVE_DIR
+from hyperphase.targets import CUSTOM, INPUT_GLOB, hi_planets_by_name, planet_archive_value
 
 
 def test_filter_files_and_bands():
@@ -26,8 +28,13 @@ def test_paper_planets_have_a_curated_geometry(name):
 
 
 def test_curated_parameters_take_precedence_over_the_archive():
-    """HD 80653 b: the published T_eff of the curated table, not the value of the archive aggregate."""
-    assert hi_planets_by_name("HD 80653 b").T2_eff == 5959.
+    """TOI-1798.02: the T_eff of the curated table, not the different value of the archive aggregate, by name and in the archive frame."""
+    agg = sorted(ARCHIVE_DIR.glob(INPUT_GLOB))[-1]
+    raw = pd.read_csv(agg, low_memory=False).drop_duplicates("pl_name").set_index("pl_name").loc["TOI-1798.02", "st_teff"]
+    curated = CUSTOM["TOI-1798.02"].T2_eff
+    assert curated != raw
+    assert hi_planets_by_name("TOI-1798.02").T2_eff == curated
+    assert planet_archive_value(agg, "TOI-1798.02", "st_teff") == curated
 
 
 def test_noise_level_from_the_cache(toi2431b, monkeypatch):

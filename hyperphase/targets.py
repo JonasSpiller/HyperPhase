@@ -14,6 +14,7 @@ from hyperphase._util import _normalise
 from hyperphase.paths import ARCHIVE_DIR, PLANETS_TABLE
 from hyperphase.planet import PlanetParams
 from hyperphase.roche import main_sequence_M_star, main_sequence_R_star
+from hyperphase.stellar import planck_ratio
 
 
 ############################################################################################################################################
@@ -25,6 +26,9 @@ INPUT_GLOB = "NASAExoArchive_*_aggregate_short.csv"
 
 # Reject companions comparable in size to their star (white dwarf systems, unconverged grazing fits).
 MAX_R1_OVER_R2 = 0.3
+
+# Emission spectroscopy metric (Kempton et al. 2018, Eq. 4): occultation depth at 7.5 um with T_day = 1.1 T_eq, as in ExoArchive_customcols.py.
+ESM_WAVELENGTH = 7.5e-6
 
 # Rocky planets: Rp < ROCKY_MAX_RADE Earth radii. The cut is on the absolute radius pl_rade, not on Rp/Rs: a giant around an evolved star has a
 # small ratio (Kepler-91 b, Rp/Rs = 0.022 but 15.3 R_Earth) and would otherwise pass. A planet without pl_rade cannot be confirmed rocky and
@@ -42,11 +46,11 @@ AU_IN_R_SUN = float(const.au / const.R_sun)
 
 # Curated planets (inputs/planets/curated_planets.csv; register_planet and load_planets add more for the session): CUSTOM = {name: PlanetParams}.
 # They take precedence over the archive everywhere: hi_planets_by_name returns these objects, and apply_custom writes them into every archive frame.
-# Every value comes from a published source (the table's `source` column): a/R*, Rp/R* and i as fitted; where no paper fits a/R*, the ratio of
-# the paper's tabulated a and R* (TOI-2431 b, TOI-2260 b, Kepler-1323 b) or its stellar density (TOI-1798.02); i = acos(b / (a/R*)) from the
-# published b, or 90 deg where nothing is published (stated per entry); T14 as published, else from the geometry (it only sets PandExo's
-# in-transit integration count). Stellar parameters are published spectroscopic values or a named catalogue (TICv8, Fulton & Petigura 2018,
-# Berger et al. 2020). r2 = 1, so R is a/R*; T14 in hours. a_AU = (a/R*) x R* of the adopted star: it only feeds the light-travel-time
+# Every value comes from a published source (the table's `source` column): a/R*, Rp/R* and i as fitted; where no paper fits a/R* or Rp/R*, the
+# ratio of the paper's tabulated a, Rp and R* (TOI-2431 b, TOI-2260 b, Kepler-1323 b) or its stellar density (TOI-1798.02); i = acos(b / (a/R*))
+# from the published b, or 90 deg for two Adams et al. (2021) fits whose i is consistent with it (stated per entry); T14 as published, else
+# from the geometry (it only sets PandExo's in-transit integration count). Stellar parameters are published spectroscopic values or a named
+# catalogue (TICv8, Fulton & Petigura 2018, Berger et al. 2020). r2 = 1, so R is a/R*; T14 in hours. a_AU = (a/R*) x R* of the adopted star: it only feeds the light-travel-time
 # correction, and apply_custom recovers R* and Rp from it. Left out for lack of a citable, consistent geometry: Kepler-780 b, -1340 b, -1368 b,
 # -1547 b, -1566 b, -879 c.
 _PLANET_FIELDS = ("period", "incl", "ecc", "w", "r1", "r2", "R", "T2_eff", "a_AU", "T14", "logg", "feh")
@@ -102,7 +106,9 @@ R_EARTH_IN_R_SUN = float(const.R_earth / const.R_sun)
 def apply_custom(df):
     """A copy of an archive table with the curated planets (CUSTOM) written in, matched on the normalised name; a curated planet the table lacks
     is skipped. It replaces the _FIELD_COLUMNS, pl_ratror and pl_rprs2 (r1/r2), a_over_r2 and pl_ratdor (R/r2), st_rad = a_AU / (a/R*) and
-    pl_rade = Rp/R* x st_rad. Columns derived from these in ExoArchive_customcols.py (pl_Teq, the occultation depths, ESM, ...) are not recomputed."""
+    pl_rade = Rp/R* x st_rad. Of the columns derived from these in ExoArchive_customcols.py, pl_Teq, occdep_ESM and ESM are recomputed;
+    occdep_ESM_err is set to NaN (it needs the errors of the curated values), and the rest (the other occultation depths, pl_insol, RR_RP) are left
+    as they are: the package does not read them."""
     df = df.copy()
     key = df["pl_name"].map(_normalise)
     for name, pl in CUSTOM.items():
@@ -116,6 +122,11 @@ def apply_custom(df):
         r_star = pl.a_AU * AU_IN_R_SUN / a_rs   # [R_sun]
         if "st_rad" in df: df.loc[rows, "st_rad"] = r_star
         if "pl_rade" in df: df.loc[rows, "pl_rade"] = rp_rs * r_star / R_EARTH_IN_R_SUN
+        teq = pl.T2_eff / np.sqrt(2.0 * a_rs)                                  # full redistribution, A_B = 0
+        depth = planck_ratio(rp_rs ** 2, pl.T2_eff, 1.1 * teq, ESM_WAVELENGTH)  # [ppm]
+        for col, val in (("pl_Teq", teq), ("occdep_ESM", depth), ("occdep_ESM_err", np.nan)):
+            if col in df: df.loc[rows, col] = val
+        if "ESM" in df and "sy_kmag" in df: df.loc[rows, "ESM"] = 4.29 * depth * 10 ** (-0.2 * df.loc[rows, "sy_kmag"])
     return df
 
 
@@ -129,7 +140,7 @@ def _note_once(name, msg):
 
 def _stellar_logg_feh(row):
     """{"logg", "feh"} of the host from an archive row (only the stellar SED uses them), with reported fallbacks:
-    no st_logg: log10(G M / R^2), M the main-sequence mass at st_teff (the archive has no stellar mass) and R = st_rad, or the main-sequence
+    no st_logg: log10(G M / R^2), M the main-sequence mass at st_teff (the short aggregate has no st_mass) and R = st_rad, or the main-sequence
       radius. Where st_logg is known, this reproduces it within +-0.04 dex (16-84 %), while a fixed 4.5 is off by -0.28 dex for M dwarfs.
       Without st_teff: 4.5.
     no st_met: solar [Fe/H] = 0."""
@@ -224,8 +235,8 @@ def best_hi_planets_df(n_planets, max_rade=ROCKY_MAX_RADE):
 
 
 def archive_densities(name):
-    """(rho_star, rho_p) [g/cm^3] of an archive planet by loose name: the host from st_logg and st_rad (rho = 3 g / (4 pi G R); the archive has
-    no stellar mass), the planet from pl_bmasse and pl_rade. NaN where the archive lacks a value; KeyError for a planet the archive does not
+    """(rho_star, rho_p) [g/cm^3] of an archive planet by loose name: the host from st_logg and st_rad (rho = 3 g / (4 pi G R); the short aggregate
+    has no st_mass), the planet from pl_bmasse and pl_rade. NaN where the archive lacks a value; KeyError for a planet the archive does not
     have (the curated planets are not consulted)."""
     row = _archive_row(name)
     g = 10. ** row["st_logg"]                                                   # [cm/s^2]

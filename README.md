@@ -116,7 +116,7 @@ modified catalogued planet keeps the catalogued noise. Give such a configuration
 - **Baseline settings** (albedos, emissivities, limb darkening, orbits, bins, map resolution, stellar model) and the fit ranges are defined once,
   in `hyperphase/defaults.py` (`DEFAULT_*`, `A_B_BOUNDS`, ...), and are the default of every function argument. The paper's planet sample, the
   published uncertainties of its reference planets and its fit list are in `hyperphase/paper.py` (`PAPER_PLANETS`, `GEOMETRY_SIGMA`, ...).
-- **Data tables.** The curated planet parameters (`inputs/planets/curated_planets.csv`, one published source per planet, taking precedence over
+- **Data tables.** The curated planet parameters (`inputs/planets/curated_planets.csv`, with the published source of each value, taking precedence over
   the archive), the bands (`inputs/filters/bands.csv`) and the per-planet noise exceptions (`inputs/noise/`: bands without a PandExo mode, modes a
   planet cannot be observed in, bands observable only in part) are CSV files, read when the package is imported.
 

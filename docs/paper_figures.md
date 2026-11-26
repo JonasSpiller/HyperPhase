@@ -21,7 +21,7 @@ plots is shipped in `retrievals/example_runs/`.
 | Item | Shows | Notebook |
 |---|---|---|
 | Table, Sec. 3.1 | Baseline parameters | The `DEFAULT_*` settings of [`hyperphase/defaults.py`](../hyperphase/defaults.py), each with its rationale. |
-| Table, Sec. 3.2 | The planets of this study | `PAPER_PLANETS` in [`hyperphase/paper.py`](../hyperphase/paper.py) and the curated parameters in [`inputs/planets/curated_planets.csv`](../inputs/planets/curated_planets.csv), with the published source of each value; the ESM from [`inputs/exoplanet_archive/ExoArchive_customcols.py`](../inputs/exoplanet_archive/ExoArchive_customcols.py) |
+| Table, Sec. 3.2 | The planets of this study | `PAPER_PLANETS` in [`hyperphase/paper.py`](../hyperphase/paper.py) and the curated parameters in [`inputs/planets/curated_planets.csv`](../inputs/planets/curated_planets.csv), with the published source of each value. The ESM is Eq. 4 of Kempton et al. (2018) with the curated parameters ([`inputs/exoplanet_archive/ExoArchive_customcols.py`](../inputs/exoplanet_archive/ExoArchive_customcols.py) computes it from archive values); $\gamma_{\rm f}$ and $\gamma_{\rm t}$ from `PlanetParams.terminator_penumbra` and `terminator_nightside`; $\sigma_{\rm 1\,min}$ from `hyperphase.noise.rms_1min`. |
 
 ## Section 4: Results
 

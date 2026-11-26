@@ -32,9 +32,9 @@ DEFAULT_EMISSIVITY = 1.
 DEFAULT_U_BOL = 0.5
 
 # Quadratic limb darkening (u1, u2) of the batman transit. The transit is identical in both irradiation models and cancels in every
-# comparison, so the value only needs to be plausible: the median of ExoTiC-LD fits over twelve hosts of close-in rocky planets (4100-5960 K,
-# the range of the sample's hosts) in the band throughputs of the forward model (inputs/stellar_model/limb_darkening.ipynb).
-DEFAULT_U = (0.09, 0.14)
+# comparison, so the value only needs to be plausible: the median of ExoTiC-LD fits (PHOENIX) for the hosts of PAPER_PLANETS in NRS1 and NRS2,
+# where PHOENIX covers the band (inputs/stellar_model/limb_darkening.ipynb).
+DEFAULT_U = (0.10, 0.14)
 
 # Orbits observed and phase-folded. The periods are only 4-7 h, so five orbits are roughly 1-1.5 days of JWST time (about 27 h for TOI-2431 b,
 # 34 h for K2-141 b): ambitious, but within the range of a large program.
