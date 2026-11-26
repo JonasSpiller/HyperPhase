@@ -33,12 +33,13 @@ def test_simulated_noise_is_reproducible(cfg_lrs):
 
 
 @pytest.mark.parametrize("pattern", FIXED_GEOMETRY)
-def test_example_runs_reproduce_their_likelihood(root, pattern, monkeypatch):
+def test_example_runs_reproduce_their_likelihood(root, pattern, tmp_path, monkeypatch):
     """The shipped retrievals load on any machine (their filter paths move into this repository), and for every model the likelihood the current
-    code rebuilds from the pickle reproduces the stored best fit. The pickle carries the stellar grid of the run, so this needs no NewEra cube;
-    whether that grid is still the one the current code builds is checked by test_example_runs_are_current."""
-    monkeypatch.setattr("hyperphase.retrieval.storage.check_fit_current", lambda *args, **kwargs: 0.)   # builds today's stellar grid, which needs the NewEra cube
+    code rebuilds from the pickle reproduces the stored best fit. The pickle carries the stellar grid of the run, so this needs no NewEra cube:
+    without it check_fit_current skips the comparison with today's grid (NaN), which test_example_runs_are_current makes with the cube."""
+    monkeypatch.setattr("hyperphase.retrieval.storage.CUBE_FLUX", tmp_path / "no_cube.npy")   # as on a machine without the NewEra cube
     for model, fit in example_fits(root, pattern).items():
+        assert np.isnan(check_fit_current(fit)), model
         theta, logl = best_sample(fit)
         assert logl_from_fit(fit)(theta) == pytest.approx(logl, abs=1e-6), model
 

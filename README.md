@@ -41,7 +41,14 @@ Data that are not in the repository:
 - **Stellar spectra.** By default (`stellar_model="newera"`) the planet-to-star contrast is normalised by NewEra model spectra
   (Hauschildt et al. 2025) at each host's $T_{\rm eff}$, $\log g$ and [Fe/H]. This needs a 113 MB spectral cube that is not in the
   repository: build it once with `inputs/stellar_model/NewEra/build_newera.ipynb` from the NewEra JWST product
-  ([doi:10.25592/uhhfdm.18108](https://doi.org/10.25592/uhhfdm.18108), about 12 GB). Without it, pass `stellar_model="blackbody"`.
+  ([doi:10.25592/uhhfdm.18108](https://doi.org/10.25592/uhhfdm.18108), about 12 GB). Without the cube, use a blackbody star: pass
+  `stellar_model="blackbody"` to a call, or set the environment variable `HYPERPHASE_STELLAR_MODEL=blackbody` before starting Python or
+  Jupyter, which makes it the default of every function and notebook. The albedo biases stay the same, but the uncertainties and the
+  evidence scale with the stellar flux in the band, so the numbers differ from the stored notebook outputs (for TOI-2431 b in MIRI/LRS
+  the uncertainty of $A_B$ is about 9 % larger and the expected $\ln B$ about 15 % lower). The stored retrievals in
+  `retrievals/example_runs/` were run with the NewEra star: without the cube their fixed-geometry likelihoods are rebuilt from the
+  pickles, while the free-geometry example, the last section of `retrievals/01_retrieval_example.ipynb` and
+  `validation/blackbody_vs_newera.ipynb` need the cube.
 - **Noise levels.** `inputs/noise/pandexo_cache.csv` holds the PandExo precision of the planets and bands of the paper, computed with
   PandExo and Pandeia 2026.7. Without PandExo installed these values are used as they are; with another version installed they are recomputed.
   Other planets and bands run PandExo, which needs the Pandeia reference data (`pandeia_refdata`) and the CDBS files (`PYSYN_CDBS`). Their
@@ -139,8 +146,9 @@ The tests check the irradiance against the closed form of the absorbed power, an
 integration over the stellar surface; that heat redistribution conserves energy; SPIDERMAN's occultation depth and nightside flux against a
 direct integral of the temperature map, the fast light curves against direct SPIDERMAN evaluation, and that a planet inside its star raises an
 error instead of ending the process; the noiseless fits against a brute-force χ² grid; that the stored retrievals reproduce their
-likelihood; and the structure of the package (its layers, the band and planet registries). They use a blackbody star, so they run without the NewEra cube; the tests that need the cube (whether the stored retrievals were
-run with the current stellar grid) or PandExo 2026.7 are skipped otherwise.
+likelihood; and the structure of the package (its layers, the band and planet registries, the default stellar model). They use a
+blackbody star, so they run without the NewEra cube; the tests that need the cube (whether the stored retrievals were run with the
+current stellar grid) or PandExo 2026.7 are skipped otherwise.
 
 ## Reproducing the retrievals
 
@@ -152,8 +160,9 @@ python make_runs.py      # writes one run file per planet, seed and setting
 ./run_all.sh             # runs them side by side on all cores
 ```
 
-They take about 2,000 core-hours in total and save to `retrievals/dynesty_results/`, which is not part of the repository. The three
-stored retrievals in `retrievals/example_runs/` can be read with `hyperphase.retrieval.storage.load_fits`.
+They take about 2,000 core-hours in total and save to `retrievals/dynesty_results/`, which is not part of the repository. The paper's
+retrievals use the NewEra star, so they need the spectral cube (see Installation). `retrievals/03_retrieval_series.ipynb` reads them
+from there. The three stored retrievals in `retrievals/example_runs/` can be read with `hyperphase.retrieval.storage.load_fits`.
 
 ## Limitations
 

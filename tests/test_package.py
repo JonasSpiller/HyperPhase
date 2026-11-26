@@ -1,5 +1,8 @@
 """The structure of the package: its layers, the band and planet registries, and how a configuration takes its band."""
 import ast
+import os
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -53,6 +56,25 @@ def test_only_plotting_imports_matplotlib_at_module_level():
     for module, (_, other) in module_imports().items():
         if not module.startswith("hyperphase.plotting"):
             assert not other & {"matplotlib", "PIL"}, f"{module} imports {sorted(other & {'matplotlib', 'PIL'})} at module level"
+
+
+STELLAR_MODEL_DEFAULTS = """
+import inspect, sys
+sys.path.insert(0, sys.argv[1])
+from hyperphase.model import FittingConfig
+from hyperphase.phasecurve import full_PhaseCurve
+print(FittingConfig.__dataclass_fields__["stellar_model"].default, inspect.signature(full_PhaseCurve).parameters["stellar_model"].default)
+"""
+
+
+def test_the_default_stellar_model_follows_the_environment(root):
+    """HYPERPHASE_STELLAR_MODEL sets the default star of every function and configuration, and an unknown name raises. The defaults are bound
+    at import, so each value gets a process of its own."""
+    def run(value):
+        return subprocess.run([sys.executable, "-c", STELLAR_MODEL_DEFAULTS, str(root)], cwd=root, capture_output=True, text=True, timeout=300,
+                              env={**os.environ, "HYPERPHASE_STELLAR_MODEL": value})
+    assert run("blackbody").stdout.split()[-2:] == ["blackbody", "blackbody"]
+    assert "HYPERPHASE_STELLAR_MODEL" in run("bb").stderr
 
 
 def test_a_registered_band_works_like_a_shipped_one():

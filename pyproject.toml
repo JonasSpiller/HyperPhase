@@ -17,6 +17,7 @@ dependencies = ["numpy>=2", "scipy", "matplotlib", "pandas", "astropy", "joblib"
 [project.optional-dependencies]
 noise = ["pandexo.engine", "pandeia.engine", "synphot", "stsynphot"]   # PandExo noise levels beyond the shipped cache
 limb-darkening = ["exotic-ld"]
+newera = ["h5py"]   # inputs/stellar_model/NewEra/build_newera.ipynb, which builds the NewEra cube
 test = ["pytest"]
 
 [project.urls]

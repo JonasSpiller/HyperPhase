@@ -4,6 +4,7 @@ Every function argument and FittingConfig field that has one of these settings d
 with other codes deviate from them. Override them per call (full_PhaseCurve(..., A_B=0.3)) or per configuration (dataclasses.replace(cfg,
 u_bol=0.6)): they are bound as default arguments when the modules are imported, so assigning a new value to a constant here at runtime does not
 change those defaults."""
+import os
 
 
 ############################################################################################################################################
@@ -62,8 +63,11 @@ A_B_FIT_BOUNDS = (-2., 1.)
 
 # Uniform prior of the free baseline offset of the dynesty fits [ppm]; the least-squares fits profile the offset out analytically.
 OFFSET_BOUNDS = (-50., 50.)
-# Stellar SED: "newera" (the cube of newera), an stsynphot grid ("phoenix", "ck04models", "k93models") or "blackbody".
-STELLAR_MODEL = "newera"
+# Stellar SED: "newera" (the cube of newera), an stsynphot grid ("phoenix", "ck04models", "k93models") or "blackbody". The environment variable
+# HYPERPHASE_STELLAR_MODEL sets another default, e.g. "blackbody" to run without the NewEra cube; set it before hyperphase is imported.
+STELLAR_MODELS = ("newera", "blackbody", "phoenix", "ck04models", "k93models")
+STELLAR_MODEL = os.environ.get("HYPERPHASE_STELLAR_MODEL", "newera")
+if STELLAR_MODEL not in STELLAR_MODELS: raise ValueError(f"HYPERPHASE_STELLAR_MODEL = {STELLAR_MODEL!r}: must be one of {STELLAR_MODELS}")
 
 # Resolution (longitude, latitude nodes) of the insolation / temperature map of every forward-model evaluation; 300/150 differs from 600/300
 # by ~0.001 ppm (convergence study: validation/speed_accuracy.ipynb).

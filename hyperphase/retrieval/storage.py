@@ -14,6 +14,7 @@ from hyperphase.bands import joint_name, observed_band, resolve_instrument
 from hyperphase.bias.detectors import detector_cfgs
 from hyperphase.defaults import DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS
 from hyperphase.model import ConstantBandAlbedo, FittingConfig
+from hyperphase.newera import CUBE_FLUX
 from hyperphase.paths import FILTER_DIR
 from hyperphase.retrieval.likelihood import make_logl
 from hyperphase.retrieval.sampler import SamplerConfig
@@ -174,12 +175,17 @@ def check_datasets(results_dir, datasets):
     return found
 
 
+_NOTED = set()   # notes already printed in this session
+
+
 def check_fit_current(fit, cfg=None, rtol=1e-6):
     """Is a saved fit still a fit of the current forward model? Returns the relative difference between the pickled stellar grid and
     the one the current code builds from the same inputs (max over detectors); 0 means identical. inf where the planet's observed band
-    itself changed (bands.PARTIAL_BANDS). Prints a warning above rtol or on a band change; raises for a cfg from an older FittingConfig."""
+    itself changed (bands.PARTIAL_BANDS). NaN where the grids cannot be compared: the run used the NewEra star and the cube is not
+    installed (noted once; the band is still checked). Prints a warning above rtol or on a band change; raises for a cfg from an older
+    FittingConfig."""
     cfg = cfg if cfg is not None else fit.meta["cfg"]
-    rel_max, band_changed = 0., False
+    rel_max, band_changed, unchecked = 0., False, False
     for c in detector_cfgs(cfg):
         missing = [f.name for f in fields(FittingConfig) if not hasattr(c, f.name)]
         if missing: raise ValueError(f"the saved FittingConfig predates the field(s) {missing}: this fit ({fit.meta.get('file', '?')}) was run with an older forward model and has to be re-run")
@@ -188,6 +194,9 @@ def check_fit_current(fit, cfg=None, rtol=1e-6):
             print(f"WARNING [{fit.meta['insolation_model']}]: {fit.meta.get('file', 'this fit')} was run over {1e6 * c.l1:.2f}-{1e6 * c.l2:.2f} um, but the current code observes "
                   f"{c.planet.name} in {1e6 * band[0]:.2f}-{1e6 * band[1]:.2f} um of this band (bands.PARTIAL_BANDS). Re-run the fit before quoting it.", file=sys.stderr, flush=True)
             band_changed = True
+        if c.stellar_model == "newera" and not CUBE_FLUX.exists():   # today's grid cannot be built without the cube
+            unchecked = True
+            continue
         now = stellar_spidergrid((c.l1, c.l2), c.filter_path, c.planet.logg, c.planet.feh, stellar_model=c.stellar_model)
         then = c.stellar_grid
         rel = np.inf if (np.shape(now[1]) != np.shape(then[1]) or not np.allclose(now[0], then[0])) else float(np.max(np.abs(np.asarray(now[1], float) / np.asarray(then[1], float) - 1.)))   # inf: different T_eff nodes
@@ -195,7 +204,11 @@ def check_fit_current(fit, cfg=None, rtol=1e-6):
     if rel_max > rtol:
         print(f"WARNING [{fit.meta['insolation_model']}]: the stellar grid of the current code differs from the one this fit was run with by up to {100 * rel_max:.3g} % "
               f"(stellar model, filter or band changed since {fit.meta.get('file', 'the run')}). Its samples are not the posterior of the current likelihood: re-run the fit before quoting it.", file=sys.stderr, flush=True)
-    return np.inf if band_changed else rel_max
+    if unchecked and "cube" not in _NOTED:
+        _NOTED.add("cube")
+        print("Note: the NewEra cube is not installed, so stored runs are not compared with the current stellar grid; their likelihoods use the grid "
+              "saved with each run.", file=sys.stderr, flush=True)
+    return np.inf if band_changed else (np.nan if unchecked else rel_max)
 
 
 def logl_from_fit(fit, cfg=None, **model_kw):
