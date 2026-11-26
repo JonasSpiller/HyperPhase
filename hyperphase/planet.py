@@ -48,7 +48,8 @@ class PlanetParams:
         return np.degrees(gp) if unit == "deg" else gp
 
     def fraction_illuminated(self, extra=False):
-        """Fraction of the surface that receives starlight (Carter 2019); extra=True splits it into the fully illuminated zone and the penumbra."""
+        """Fraction of the surface that receives starlight (Carter 2018, eqs. 5.3.6-5.3.8; Carter et al. 2024); extra=True splits it into the fully
+        illuminated zone and the penumbra."""
         fraction_fullyilluminated = (1. - (self.r1 + self.r2) / self.R) / 2.
         fraction_penumbra = self.r2 / self.R
         if extra:

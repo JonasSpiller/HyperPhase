@@ -158,7 +158,7 @@ def plot_evidence_jitter(bf, figsize=(5.2, 3.0), bins=40):
     ax.hist(bf["samples"], bins=bins, density=True, histtype="stepfilled", color="0.75", edgecolor="0.35")
     ax.axvline(bf["lnB"], color="k", lw=1.4, label=f"$\\ln B$ = {bf['lnB']:+.2f}")
     ax.axvline(0., color="C3", lw=1.0, ls="--")
-    for d in (1., 2.5, 5.): ax.axvline(d, color="0.85", lw=0.7, ls=":")   # Jeffreys thresholds
+    for d in (1., 2.5, 5.): ax.axvline(d, color="0.85", lw=0.7, ls=":")   # Trotta (2008) thresholds
     ax.set_xlabel(r"$\ln B$ (jittered)"); ax.set_ylabel("density"); ax.legend(frameon=False, fontsize=8)
     fig.tight_layout()
     return fig, ax
@@ -298,7 +298,7 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
         d["y"], d["offset"] = (ys if joint else ys[0]), (offs if joint else offs[0])
         d["bias_A_B"] = d["A_B"] - A_B_true
         d["dT_over_T"] = float(temperature_bias(A_B_true, d["bias_A_B"], d["F"] or 0.))   # substellar temperature
-        # the nightside the false-positive F implies (0 K in the truth)
+        # the uniform nightside the false-positive F implies (the truth's antistellar point is at 0 K)
         if d["F"] is not None: d["T_night"] = float(surface_temperature(np.pi, cfg0.planet, "naive_redist", A_B=d["A_B"], emissivity_bol=cfg0.emissivity_bol, F=d["F"]))
 
     # --- the noisy fits: posterior median (what you would report) and max-lnL (= MAP, uniform priors) -------------
@@ -351,7 +351,7 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
         d["sigma_1min_crit"] = None if joint else cfg0.sigma_1min * d["bias_sigma0"]
         if d["F"] is not None:
             d["sigma_F"] = float(0.5 * (summ[m]["F"]["hi"] - summ[m]["F"]["lo"]))
-            d["F_sigma0"] = d["F"] / d["sigma_F"]                            # F in units of its (one-sided) posterior width
+            d["F_sigma0"] = d["F"] / d["sigma_F"]                            # F in units of half its central 68 % interval
         if fisher:   # Fisher sigma at the noiseless fit, marginalised over the baselines (and F)
             sf = fisher_sigma(fit_cfg, m, d["A_B"], F=d["F"], bounds=A_B_bounds, F_bounds=F_BOUNDS, insol=insols[m], **truth_kw)
             d["sigma_A_B_fisher"] = float(sf[0])
@@ -387,8 +387,8 @@ def plot_noisy_vs_truth(cfg, data, logls, fits, A_B_true, base, insolation_truth
         if joint:
             print(f"   {'':12s} |dA_B|/sigma_A_B = {d['bias_sigma0']:.2f}   (all detectors scaled alike: " + (f"{fac:.1f}x finer photometry - or {fac ** 2:.0f}x the orbits - before the bias reaches 1 sigma)" if d["bias_sigma0"] < 1. else f"the bias is a {d['bias_sigma0']:.1f} sigma effect at the delivered noise)"))
         else:
-            print(f"   {'':12s} |dA_B|/sigma_A_B = {d['bias_sigma0']:.2f}   ->   sigma_1min,crit = {d['sigma_1min_crit']:.1f} ppm/min"
-                  + (f" (posterior) / {d['sigma_1min_crit_fisher']:.1f} ppm/min (Fisher)" if fisher else "")
+            print(f"   {'':12s} |dA_B|/sigma_A_B = {d['bias_sigma0']:.2f}   ->   sigma_1min,crit = {d['sigma_1min_crit']:.1f} ppm"
+                  + (f" (posterior) / {d['sigma_1min_crit_fisher']:.1f} ppm (Fisher)" if fisher else "")
                   + (f"   (now {cfg0.sigma_1min:.1f}, so {fac:.1f}x finer photometry - or {fac ** 2:.0f}x the orbits - before the bias reaches 1 sigma)" if d["bias_sigma0"] < 1.
                      else f"   (now {cfg0.sigma_1min:.1f}, already finer: the bias is a {d['bias_sigma0']:.1f} sigma effect at the delivered noise)"))
         if verbose:

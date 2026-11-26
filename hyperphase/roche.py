@@ -13,8 +13,8 @@ from scipy.optimize import brentq
 # planet of radius ROCHE_R_P: the mean density follows from rocky_mean_density (Fortney et al. 2007), the Roche period from roche_period_h
 # (Rappaport et al. 2013 eq. 5).
 # - "Earth-like": Earth's iron fraction 0.33 and central concentration 13.1 / 5.51 = 2.37 (PREM). The limit of a typical rocky planet.
-# - "iron-rich": 70 % iron, the most that collisional mantle stripping leaves in planets above ~1 M_E (Marcus et al. 2010, as used by Rappaport
-#   et al. 2013), with rho_0 / rho_mean = 2.5, the top of Rappaport's range 1-2.5 (a larger ratio survives closer in, so this is the permissive
+# - "iron-rich": 70 % iron, the super-Mercuries of Marcus et al. (2010), which giant impacts produce only below ~5 M_E (at ROCHE_R_P such a
+#   planet has ~8 M_E), with rho_0 / rho_mean = 2.5, the top of Rappaport's range 1-2.5 (a larger ratio survives closer in, so this is the permissive
 #   end). The innermost limit: inside it no rocky planet of radius ROCHE_R_P survives around a main-sequence host.
 # ROCHE_R_P = 1.5 R_E, typical of PAPER_PLANETS (TOI-2431 b and K2-141 b are 1.5 R_E). Compression makes larger planets denser, so their limits
 # lie further in.
@@ -83,7 +83,7 @@ def rocky_mean_density(R_p_earth, iron_fraction):
 # Dwarf Stellar Color and Effective Temperature Sequence", version 2022.04.16
 # (https://www.pas.rochester.edu/~emamajek/EEM_dwarf_UBVIJHK_colors_Teff.txt; Pecaut & Mamajek 2013, ApJS 208, 9).
 # rho_star interpolates log rho linearly in T_eff, the other main_sequence_* functions R and M linearly; all clip outside the table, so a T_eff
-# beyond F0V / M6V silently gets the end value. rho falls with T_eff except for a 2 % dip at K8V/K9V (as tabulated). Main sequence only: a
+# beyond F0V / M6V silently gets the end value. rho falls with T_eff except for a 1.5 % dip at K9V (as tabulated). Main sequence only: a
 # young (contracting) or evolved host is less dense.
 MAIN_SEQUENCE = {"F0V": (7220, 1.728, 1.61), "F1V": (7020, 1.679, 1.50), "F2V": (6820, 1.622, 1.46), "F3V": (6750, 1.578, 1.44), "F4V": (6670, 1.533, 1.38), "F5V": (6550, 1.473, 1.33),
                  "F6V": (6350, 1.359, 1.25), "F7V": (6280, 1.324, 1.21), "F8V": (6180, 1.221, 1.18), "F9V": (6050, 1.167, 1.13), "F9.5V": (5990, 1.142, 1.08), "G0V": (5930, 1.100, 1.06),

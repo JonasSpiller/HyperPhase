@@ -141,7 +141,7 @@ def run_nested_fit(logl, pset, scfg=None, resume=False):
 ############################################################################################################################################
 def equal_samples(fit, n=None, seed=0):
     """Equal-weight posterior draws, shape (n, ndim), columns in fit.pset.names order; n=None: all of them.
-    res.samples is NOT posterior-distributed (it is ~uniform in ln X); these draws need no weights."""
+    res.samples is NOT posterior-distributed (it needs the importance weights); these draws need no weights."""
     rng = np.random.default_rng(seed)
     s = fit.results.samples_equal(rstate=rng)
     if n is None or n >= len(s): return s
@@ -196,7 +196,7 @@ def bayes_factor(fits, num="hyperillum", den="naive", K=200, seed=0, verbose=Tru
     out = dict(lnB=float(lnB), err_analytic=err_a, err_jitter=float(np.std(s, ddof=1)), samples=s)
     if verbose:
         print(f"ln B ({num} vs {den}) = {lnB:+.3f} +/- {err_a:.3f} (analytic) +/- {out['err_jitter']:.3f} (jitter, K={K})  ->  B = {np.exp(lnB):.3g}")
-        print(f"P(sign of ln B secure) = {np.mean(s > 0.):.3f}  [sampler noise only, NOT a model probability]")
+        print(f"P(ln B > 0) = {np.mean(s > 0.):.3f}  [sampler noise only, NOT a model probability]")
     return out
 
 

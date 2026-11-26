@@ -34,8 +34,8 @@ def fit_truth(cfg, A_B_true, models=("naive",), free_offset=True, bounds=A_B_FIT
 
 
 def measurability(bias, sigma, sigma_1min):
-    """bias / sigma, and the per-minute noise sigma_1min_crit at which |bias| = sigma. sigma_1min_crit = sigma_1min * |bias| / sigma is exact, not an
-    extrapolation: the bias does not depend on the noise, and the Fisher sigma is proportional to sigma_1min."""
+    """|bias| / sigma, and the per-minute noise sigma_1min_crit at which |bias| = sigma. sigma_1min_crit = sigma_1min * |bias| / sigma is exact,
+    not an extrapolation: the bias does not depend on the noise, and the Fisher sigma is proportional to sigma_1min."""
     bias_sigma = np.abs(bias) / sigma
     return bias_sigma, sigma_1min * bias_sigma
 
@@ -51,8 +51,9 @@ def flat_prior_sigma(bounds):
 # "naive OK".
 VERDICT_NEEDS_HI, VERDICT_NAIVE_OK, VERDICT_UNCONSTRAINED = "needs hyperillum", "naive OK", "unconstrained"
 
-# A row without a noise level (no PandExo mode and no CUSTOM_SIGMA_1MIN entry) is fitted at cfg's own sigma_1min, which only has to be finite. Its
-# fitted values and bias are exact, since they do not depend on the noise; the Fisher sigma and everything derived from it are NaN.
+# A row without a noise level (no PandExo mode and no CUSTOM_SIGMA_1MIN entry, or not observable: UNOBSERVABLE / fully saturated) is fitted at
+# cfg's own sigma_1min, which only has to be finite. Its fitted values and bias are exact, since they do not depend on the noise; the Fisher sigma
+# and everything derived from it are NaN.
 VERDICT_NO_NOISE = "no noise level"
 
 
@@ -88,7 +89,7 @@ def whitened_jacobian(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A
 
 def fisher_covariance(cfg, insolation_model, A_B_, F=None, free_offset=True, h_A=1e-3, h_F=1e-3, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, refl_unit=None, **kw):
     """Fisher covariance C = (J'J)^-1 of (A_B) or (A_B, F), J the whitened Jacobian, baselines marginalised. Its diagonal gives fisher_sigma; the
-    off-diagonal is the A_B-F correlation a derived quantity needs (fisher_depth)."""
+    off-diagonal is the A_B-F covariance a derived quantity needs (fisher_depth)."""
     J = whitened_jacobian(cfg, insolation_model, A_B_, F=F, free_offset=free_offset, h_A=h_A, h_F=h_F, bounds=bounds, F_bounds=F_bounds, refl_unit=refl_unit, **kw)
     try:
         return np.linalg.inv(J.T @ J)   # the inverse marginalises; 1/F_ii would fix the other parameters
@@ -101,7 +102,8 @@ def fisher_sigma(cfg, insolation_model, A_B_, F=None, **kw):
     return np.sqrt(np.diag(fisher_covariance(cfg, insolation_model, A_B_, F=F, **kw)))
 
 
-# n_layers of model_depth: the naive and naive_redist depths converge only ~1/n_layers (pcurve_params), so it is set well above the fitting default.
+# n_layers of model_depth: the naive and naive_redist depths converge only ~1/n_layers (phasecurve.thermal_PhaseCurve), so it is set well above the
+# fitting default.
 DEPTH_N_LAYERS = 200
 
 
@@ -140,10 +142,11 @@ def fisher_depth(cfg, insolation_model, A_B_, F=None, h_A=1e-3, h_F=1e-3, bounds
 
 def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, **kw):
     """Spurious heat redistribution: both fits of the noiseless truth (F = 0) and dchi2_F = chi2(A_B-only fit) - chi2(joint A_B + F fit), both at
-    their best fit with a free baseline. sqrt(dchi2_F) is the median expected one-sided significance of "F > 0" (Asimov data; Cowan et al. 2011),
-    exact for the nonlinear T ∝ F^(1/4) response and the F = 0 boundary (null distribution 1/2 chi2_1). Not F_fit / sigma_F: the Fisher sigma_F is
-    the slope at F_fit, but the model responds ∝ F^~1.5 near 0, so that ratio overstates the significance, and it ignores the boundary.
-    dchi2_F ∝ n_orbits / sigma_1min^2 (critical_sigma_1min).
+    their best fit with a free baseline. z_F = sqrt(dchi2_F) is the approximate median one-sided significance of "F > 0" (Asimov data; Cowan
+    et al. 2011); it accounts for the F = 0 boundary (null distribution 1/2 chi2_1) and does not depend on how F is parametrised. F_fit / sigma_F
+    (Fisher) is not a significance: it is about p z_F, with p = (1/4) d ln B / d ln T of the band flux at the fitted nightside temperature (the
+    nightside flux goes as F^p). p > 1 on the Wien side (NIRSpec G395H, where F_fit / sigma_F exceeds z_F), p < 1 towards Rayleigh-Jeans
+    (MIRI/LRS, where it falls short of z_F). dchi2_F ∝ n_orbits / sigma_1min^2 (critical_sigma_1min).
     Returns the false-positive table row: A_B_fit_naive, chi2_naive, A_B_fit, F_fit, chi2_joint, dchi2_F, railed and T_night_fit, the nightside
     temperature [K] the fitted (A_B, F) imply (Kreidberg & Loeb 2016 eq. 1); F_fit, dchi2_F and T_night_fit are NaN on a rail."""
     fit = fit_truth(cfg, A_B_true, models=("naive", "naive_redist"), free_offset=free_offset, bounds=bounds, F_bounds=F_bounds, **kw)
@@ -153,7 +156,8 @@ def false_F_fit(cfg, A_B_true, free_offset=True, rail_tol=RAIL_TOL, bounds=A_B_F
 
 def _false_F_result(n, r, planet, emissivity_bol, bounds, F_bounds, rail_tol=RAIL_TOL):
     """The dict of false_F_fit from its two fit_truth results n (A_B-only) and r (joint). planet, emissivity_bol: those of the fit's first detector.
-    dchi2_F >= 0, since the A_B-only model is the F = 0 member of the joint one; small negative values from the tolerances are clipped."""
+    dchi2_F >= 0, since the A_B-only model is (up to ~0.03 ppm between the Louden and the direct_T implementations) the F = 0 member of the joint
+    one; small negative values from this and the tolerances are clipped."""
     railed = fit_railed(n, bounds, F_bounds, rail_tol) or fit_railed(r, bounds, F_bounds, rail_tol)
     return dict(A_B_fit_naive=n["A_B_fit"], chi2_naive=n["chi2"], A_B_fit=r["A_B_fit"], F_fit=np.nan if railed else r["F_fit"], chi2_joint=r["chi2"],
                 dchi2_F=np.nan if railed else max(n["chi2"] - r["chi2"], 0.), railed=bool(railed),
@@ -161,6 +165,6 @@ def _false_F_result(n, r, planet, emissivity_bol, bounds, F_bounds, rail_tol=RAI
 
 
 def critical_sigma_1min(dchi2, sigma_1min, z=2.):
-    """The per-minute noise [ppm/min] at which the spurious F is a z-sigma detection (dchi2_F = z^2), at the fit's n_orbits:
+    """The per-minute noise [ppm] at which the spurious F is a z-sigma detection (dchi2_F = z^2), at the fit's n_orbits:
     sigma_1min * sqrt(dchi2_F) / z, with sigma_1min the noise of the fit. Exact (see measurability), since dchi2_F ∝ 1 / sigma_1min^2."""
     return sigma_1min * np.sqrt(np.asarray(dchi2, float)) / z

@@ -81,18 +81,19 @@ def drop_unsupported_hosts(cfg, pls, verbose=True):
 
 
 def _has_noise(s1):
-    """True if s1 is a noise level: {detector: ppm/min} for a detector set, a finite number for one band. Without one, see VERDICT_NO_NOISE."""
+    """True if s1 is a noise level: {detector: ppm} for a detector set, a finite number for one band. Without one, see VERDICT_NO_NOISE."""
     return isinstance(s1, dict) or (s1 is not None and np.isfinite(s1))
 
 
 def _table_noise(sigma_1min, cfg, name):
-    """The checked entry of `sigma_1min` ({name: level}) for one planet: a number for one band, {detector: ppm/min} with every detector for a set (a
-    planet lacking one has no noise level, as for a joint fit in instrument_retrievals). A non-finite level raises instead of propagating: it
-    enters sigma_bin and so the chi^2 of the fit itself, which then returns a wrong bias, not just a NaN sigma."""
+    """The checked entry of `sigma_1min` ({name: level}) for one planet: a number for one band, {detector: ppm} with every detector for a set (a
+    planet lacking one has no noise level, as for a joint fit in instrument_retrievals). NaN or None counts as no noise level (VERDICT_NO_NOISE).
+    An infinite level, or a non-finite per-detector level of a set, raises instead of propagating: it enters sigma_bin and so the chi^2 of the
+    fit itself, which then returns a wrong bias, not just a NaN sigma."""
     s = sigma_1min.get(name, np.nan)
     if is_detector_set(cfg):
         if s is None or (not isinstance(s, dict) and np.isnan(s)): return np.nan
-        if not isinstance(s, dict): raise ValueError(f"sigma_1min for {name}: a detector set needs {{detector: ppm/min}} (rms_1min_pandexo_sample(names, instrument) gives it), got {s!r}")
+        if not isinstance(s, dict): raise ValueError(f"sigma_1min for {name}: a detector set needs {{detector: ppm}} (rms_1min_pandexo_sample(names, instrument) gives it), got {s!r}")
         dets = cfg_detectors(cfg)
         if any(d not in s for d in dets): return np.nan
         if not all(np.isfinite(s[d]) for d in dets): raise ValueError(f"non-finite sigma_1min for {name}: {s}")
@@ -138,12 +139,14 @@ def _planet_bias_row(cfg, A_B_true, pl, s1, redist, bounds, F_bounds, kw):
 
 def planet_bias_table(cfg, A_B_true, planets, sigma_1min, redist=False, quantity=None, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, AGG=None, n_jobs=-1, verbose=True, **kw):
     """Bias, Fisher sigma and critical noise for a sample of planets in one band or detector set, each at its own geometry and noise, sorted by a/Rs.
-    A_B_true is the same assumed albedo for every planet. planets: see _planet_items. sigma_1min: {name: ppm/min}, e.g. from
-    noise.rms_1min_pandexo_sample, or {name: {detector: ppm/min}} for a detector set, whose scalar sigma_1min and sigma_1min_crit columns are then
-    NaN and the sigma_1min:<label> columns carry the levels (noise_cols). A planet without an entry is fitted at cfg.sigma_1min
-    (VERDICT_NO_NOISE); a non-finite entry raises (_table_noise). quantity: "A_B" (default) or "F" (redist=True only), the parameter the bias,
-    sigma, bias_sigma, sigma_1min_crit and verdict columns refer to; the truth has F = 0, so F_fit is the bias in F. Verdicts: bias_verdict. AGG:
-    the archive aggregate path; with it the table carries each planet's ESM (esm) and radius (rp_rearth)."""
+    A_B_true is the same assumed albedo for every planet. planets: see _planet_items. sigma_1min: {name: ppm}, e.g. from
+    noise.rms_1min_pandexo_sample, or {name: {detector: ppm}} for a detector set, whose scalar sigma_1min and sigma_1min_crit columns are then
+    NaN and the sigma_1min:<label> columns carry the levels (noise_cols). A planet without an entry, or with NaN, is fitted at
+    cfg.sigma_1min (VERDICT_NO_NOISE); an infinite entry raises (_table_noise). quantity: "A_B" (default) or "F" (redist=True only), the
+    parameter the bias, sigma, bias_sigma, sigma_1min_crit and verdict columns refer to; the truth has F = 0, so F_fit is the bias in F. For F,
+    bias_sigma is F_fit / sigma_F (Fisher), not the significance of the spurious F: that is z_F = sqrt(dchi2_F) of planet_false_F_table
+    (see bias.fisher.false_F_fit).
+    Verdicts: bias_verdict. AGG: the archive aggregate path; with it the table carries each planet's ESM (esm) and radius (rp_rearth)."""
     quantity = quantity or "A_B"
     if quantity not in ("A_B", "F"): raise ValueError(f'quantity must be "A_B" or "F", got {quantity!r}')
     if quantity == "F" and not redist: raise ValueError('quantity="F" needs redist=True (only the joint fit has an F)')
@@ -265,7 +268,7 @@ def _planet_false_F_row_from(tabs, cfg, pl, s1, bounds, F_bounds):
     noise = _noise_columns(cfg, s1)
     for tab, row in zip(tabs, rows):
         for col, lv in noise.items():   # the scalar level, or a set's per-detector levels (scalar NaN on both sides)
-            if np.isfinite(lv) and not _same_noise(row[col], lv): raise ValueError(f"fits: {pl.name} was fitted at {col} = {row[col]} ppm/min in the {tab.attrs['model']} table, this call has {lv}")
+            if np.isfinite(lv) and not _same_noise(row[col], lv): raise ValueError(f"fits: {pl.name} was fitted at {col} = {row[col]} ppm in the {tab.attrs['model']} table, this call has {lv}")
     return dict(name=pl.name, a_rs=pl.R / pl.r2, period=pl.period, T_eff=pl.T2_eff, **noise, **_false_F_result(n, r, pl, template_cfg(cfg).emissivity_bol, bounds, F_bounds))
 
 
@@ -309,7 +312,7 @@ def _instrument_false_F_row_from(tabs, cfg, pl, instrument, sigma_1min, bounds, 
         if tab.attrs.get("planet") != pl.name: raise ValueError(f"fits: the {tab.attrs['model']} table is of {tab.attrs.get('planet')}, not {pl.name}")
         for d in dets:
             s_tab = tab.attrs["sigma_1min"].get(d, np.nan)
-            if not _same_noise(s_tab, sigma_1min[d]): raise ValueError(f"fits: {d} was fitted at sigma_1min = {s_tab} ppm/min in the {tab.attrs['model']} table, this call has {sigma_1min[d]}")
+            if not _same_noise(s_tab, sigma_1min[d]): raise ValueError(f"fits: {d} was fitted at sigma_1min = {s_tab} ppm in the {tab.attrs['model']} table, this call has {sigma_1min[d]}")
     return dict(instrument=instrument, sigma_1min=float(sigma_1min[dets[0]]) if len(dets) == 1 else np.nan, **_false_F_result(n, r, pl, template_cfg(cfg).emissivity_bol, bounds, F_bounds))
 
 
@@ -327,7 +330,7 @@ def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None
                 with contextlib.redirect_stdout(io.StringIO()): sigma_1min[d] = rms_1min(planet, d)
             except NoNoiseLevelError:
                 missing.append(d)
-        if missing and verbose: print(f"{planet.name}: no noise level on {', '.join(missing)} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry), left out")
+        if missing and verbose: print(f"{planet.name}: no noise level on {', '.join(missing)} (no PandExo mode and no CUSTOM_SIGMA_1MIN entry, or not observable: UNOBSERVABLE / fully saturated), left out")
     used = [ins for ins in instruments if all(d in sigma_1min for d in detectors(ins))]
     if not used: raise ValueError(f"{planet.name}: no noise level for any of {instruments}")
     if fits is None:
@@ -344,7 +347,7 @@ def instrument_false_F(cfg, planet, instruments, A_B_true, z=2., sigma_1min=None
 def _instrument_row(cfg, A_B_true, pl, instrument, sigma_1min, redist, bounds, F_bounds, kw):
     dets = detectors(instrument)
     has_noise = all(d in sigma_1min for d in dets)   # False only for a single detector: see VERDICT_NO_NOISE
-    c = _detector_cfgs(cfg, pl, instrument, sigma_1min) if has_noise else replace(instrument_cfg(cfg, instrument), planet=pl)
+    c = _detector_cfgs(cfg, pl, instrument, sigma_1min) if has_noise else with_planet(instrument_cfg(cfg, instrument), pl)
     model = "naive_redist" if redist else "naive"
     fit = fit_truth(c, A_B_true, models=(model,), free_offset=True, bounds=bounds, F_bounds=F_bounds, fisher=has_noise, **kw)[model]
     # a joint fit has one noise level per detector: see tab.attrs["sigma_1min"]
@@ -356,7 +359,7 @@ def _instrument_row(cfg, A_B_true, pl, instrument, sigma_1min, redist, bounds, F
 def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigma_1min=None, bounds=A_B_FIT_BOUNDS, F_bounds=F_BOUNDS, n_jobs=-1, verbose=True, **kw):
     """One planet, several instruments: the fitted A_B and its Fisher sigma per instrument for an extended-source truth at A_B_true (the
     multi-instrument counterpart of planet_bias_table). cfg supplies everything but the band. An entry of `instruments` is a band key, or a tuple
-    of keys for a joint fit (its row carries the "+"-joined key and NaN as sigma_1min). sigma_1min: {detector: ppm/min}; by default noise.rms_1min
+    of keys for a joint fit (its row carries the "+"-joined key and NaN as sigma_1min). sigma_1min: {detector: ppm}; by default noise.rms_1min
     per detector. The returned attrs["sigma_1min"] can be passed back in to refit with the same levels. A single detector without a noise level is
     fitted without one (VERDICT_NO_NOISE); a joint fit lacking one is left out, since it weights its detectors by their noise. Returns a DataFrame
     in the order of `instruments`, with the verdict (bias_verdict) of each fit."""
@@ -372,7 +375,7 @@ def instrument_retrievals(cfg, planet, instruments, A_B_true, redist=False, sigm
                 pass
     no_noise = [ins for ins in instruments if len(detectors(ins)) == 1 and ins not in sigma_1min]
     joint_out = [ins for ins in instruments if len(detectors(ins)) > 1 and not all(d in sigma_1min for d in detectors(ins))]
-    if no_noise and verbose: print(f"{planet.name}: no noise level on {', '.join(no_noise)} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry): fitted without one (the fitted A_B does not depend on it), so no Fisher sigma")
+    if no_noise and verbose: print(f"{planet.name}: no noise level on {', '.join(no_noise)} (no PandExo mode and no CUSTOM_SIGMA_1MIN entry, or not observable: UNOBSERVABLE / fully saturated): fitted without one (the fitted A_B does not depend on it), so no Fisher sigma")
     if joint_out and verbose: print(f"{planet.name}: joint fit(s) {', '.join(joint_out)} left out: a joint fit weights its detectors by their noise levels, and not all of them have one")
     if no_noise and not np.isfinite(c0.sigma_1min): raise ValueError(f"cfg.sigma_1min = {c0.sigma_1min}: the fits without a noise level run at it, so it must be finite")
     used = [ins for ins in instruments if ins not in joint_out]
@@ -394,7 +397,7 @@ def _instrument_depth_row(cfg, planet, r, det, sigma_1min, model, A_B_true, boun
         c_det = c[detectors(r["instrument"]).index(det)] if is_detector_set(c) else c   # ... and the detector whose band the depth is in
         depth_fit, sigma_depth = fisher_depth(c, model, float(r["A_B_fit"]), F=F, bounds=bounds, F_bounds=F_bounds, n_layers=n_layers, depth_cfg=c_det, **kw)
     else:   # no noise level (VERDICT_NO_NOISE): the depth only, no Fisher sigma
-        c_det = replace(instrument_cfg(cfg, det), planet=planet)
+        c_det = with_planet(instrument_cfg(cfg, det), planet)
         depth_fit, sigma_depth = model_depth(c_det, model, float(r["A_B_fit"]), F=F, n_layers=n_layers, **kw), np.nan
     depth_true = model_depth(c_det, "hyperillum", A_B_true, n_layers=n_layers, **kw)
     return dict(instrument=det, fit=r["instrument"], sigma_1min=float(sigma_1min.get(det, np.nan)), depth_true=depth_true, depth_fit=depth_fit, sigma_depth=sigma_depth)
@@ -402,10 +405,10 @@ def _instrument_depth_row(cfg, planet, r, det, sigma_1min, model, A_B_true, boun
 
 def instrument_depths(cfg, planet, tab, n_layers=DEPTH_N_LAYERS, joint=False, n_jobs=-1, **kw):
     """The occultation depth of each fit of an instrument_retrievals table next to that of the extended-source truth, from the fitted parameters in
-    `tab` (no refit, so cfg, planet and kw must be those that made it). Both depths are exact (model_depth at n_layers), sigma_depth is the
-    propagated Fisher sigma (fisher_depth). Adds bias_depth = depth_fit - depth_true [ppm] and depth_bias_sigma = |bias_depth| / sigma_depth. A
-    depth is per band, so joint fits are left out by default; joint=True gives one row per detector of a joint fit, with that band's depth and the
-    joint covariance."""
+    `tab` (no refit, so cfg, planet and kw must be those that made it). Both depths are computed directly at mid-occultation (model_depth at
+    n_layers), sigma_depth is the propagated Fisher sigma (fisher_depth). Adds bias_depth = depth_fit - depth_true [ppm] and
+    depth_bias_sigma = |bias_depth| / sigma_depth. A depth is per band, so joint fits are left out by default; joint=True gives one row per
+    detector of a joint fit, with that band's depth and the joint covariance."""
     a = tab.attrs
     rows_in = [r for _, r in tab.iterrows() if joint or len(detectors(r["instrument"])) == 1]
     jobs = [(cfg, planet, r, d, a["sigma_1min"], a["model"], a["A_B_true"], a["bounds"], a["F_bounds"], n_layers, kw) for r in rows_in for d in detectors(r["instrument"])]

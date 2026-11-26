@@ -159,8 +159,10 @@ def plot_quad_insolmap(planet, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_
 
 def plot_model_insolmaps(planets, phase=0.25, models=("hyperillum", "naive"), u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None, n_grid=400, theme="black", terminator=True, show_penumbra="both", title=None, incl=90.):
     """Surface temperature maps at one phase: one column per planet, one row per insolation model.
-    Each column has its own scale, 0 to 1.1 x its substellar temperature (the same in every model: there is no substellar boost), so the panels
-    of one planet are comparable. Terminator in grey, penumbra borders in green (hyperillum panels only). planets: {name: PlanetParams} or a list.
+    Each column has its own scale, 0 to 1.1 x the point-source substellar temperature (the extended source is ~0.5 % hotter there, from the
+    finite planet radius; the fit with redistribution cooler), so the panels of one planet are comparable. The 90 deg terminator of the point
+    source in grey; the penumbra borders gamma_f and gamma_t (the extended-source terminator) in green (hyperillum panels only).
+    planets: {name: PlanetParams} or a list.
     F goes to "naive_redist" only. Returns fig, axs (len(models) x len(planets))."""
     planets = list(planets.values()) if isinstance(planets, dict) else list(planets)
     bg, tc = ("black", "#04d9ff") if theme == "black" else ("white", "black")

@@ -52,7 +52,7 @@ def _insolation_penumbra_hyperillum_simpleint_scalar(gamma1, planet, u_bol, **qu
 
 
 def _theta_kernels_simpleint(theta, alpha, rho, r2):
-    """Return (cosb/rp^2, sinb/rp^2, cos theta', Delta) at polar angle theta."""
+    """Return (cos(beta)/rho'^2, sin(beta)/rho'^2, cos theta', Delta) at polar angle theta."""
     ct = np.cos(theta)
     st = np.sin(theta)
     rp2 = rho**2 + r2**2 - 2.0 * rho * r2 * ct          # rho'^2                (Eq. A3)
@@ -124,7 +124,8 @@ def insolation_hyperillum_bruteforce(gamma1, planet, u_bol=DEFAULT_U_BOL, n_thet
     """Irradiance [W m^-2] at any gamma1 by brute-force integration over the stellar sphere, independent of the geometry of irradiance (no alpha_,
     theta kernels or Delta). Stellar surface points Q lie on a midpoint grid about the star -> planet-centre axis; Q counts where both its
     emission cosine (Q faces the surface point P) and the incidence cosine at P (Q above P's horizon) are positive. Linear limb darkening. Slow
-    (~1 s per point at the default grid, accurate to ~1e-6 of the substellar insolation): for spot checks, parallelised across points."""
+    (a fraction of a second per point at the default grid, accurate to ~1e-7 of the substellar insolation or better): for spot checks;
+    parallelise across points in the caller."""
     t0 = time.perf_counter()
     gamma1 = np.atleast_1d(np.asarray(gamma1, dtype=float))
     result = np.array([_insolation_hyperillum_bruteforce_scalar(g, planet, u_bol, n_theta, n_phi) for g in gamma1])

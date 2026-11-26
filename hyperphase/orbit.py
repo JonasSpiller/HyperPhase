@@ -33,7 +33,8 @@ def eccentric_to_true(E, ecc):
 
 
 def occultation_time(period, ecc, w, t0=0.):
-    """Time of mid-occultation (units of period), t0 the time of mid-transit, from the true, eccentric and mean anomalies (Kepler's equation)."""
+    """Time of mid-occultation [days, same units as period], t0 the time of mid-transit, from the true, eccentric and mean anomalies (Kepler's
+    equation)."""
     w_rad = np.radians(w)
     f_transit = np.pi / 2. - w_rad
     f_occultation = 3. * np.pi / 2. - w_rad
@@ -42,13 +43,12 @@ def occultation_time(period, ecc, w, t0=0.):
     M_occultation = eccentric_to_mean(true_to_eccentric(f_occultation, ecc), ecc)
 
     delta_M = (M_occultation - M_transit) % (2. * np.pi)
-    t_ecl = delta_M / (2. * np.pi) * period + t0
-    return t_ecl
+    t_occultation = delta_M / (2. * np.pi) * period + t0
+    return t_occultation
 
 
 def AU_to_RS(a, rs):
-    """Returns the distance in solar radii for a given distance a in AU.
-    a in AU, rs (stellar radius) in solar radii."""
+    """Distance a [AU] in units of the stellar radius (a/R_star); rs: stellar radius [R_sun]."""
     return a * (au / R_sun) / rs
 
 

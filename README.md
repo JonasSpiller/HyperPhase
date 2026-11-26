@@ -23,7 +23,7 @@ How Finite-Star Geometry Biases Albedos and Heat Redistribution Inferred from JW
 ## Installation
 
 ```bash
-git clone https://github.com/JonasSpiller/HyperPhase.git
+git clone --depth 1 https://github.com/JonasSpiller/HyperPhase.git   # the current version only, without the history (about 25 MB instead of 300 MB)
 cd HyperPhase
 conda env create -f environment.yml    # Python 3.11 with the package versions of the paper; builds fSPIDERMAN and runs pip install -e .
 conda activate hyperphase
@@ -109,8 +109,8 @@ modified catalogued planet keeps the catalogued noise. Give such a configuration
   and `emissivity` scales the thermal flux in the band.
 - **Limb darkening.** `u_bol` is the bolometric linear limb darkening of the irradiance, `u = (u1, u2)` the quadratic limb darkening of the transit.
 - **Units.** Times in days from mid-transit, wavelengths in m, irradiance in W m⁻², temperatures in K. Light curves are relative to the star:
-  `full_PhaseCurve` returns 1 + planet − transit, `model_pcurve` the same minus 1 in ppm. Occultation depths are in ppm, noise levels in ppm per
-  minute of integration.
+  `full_PhaseCurve` returns 1 + planet − transit, `model_pcurve` the same minus 1 in ppm. Occultation depths are in ppm, noise levels in ppm
+  (the precision of a one-minute integration).
 - **"Joint"** means two things: the fit of $A_B$ and $F$ together (`fit_redist`, the `_J` columns of the tables), and the fit of several detectors
   with one $A_B$ (`JointGaussianLogL`, the mode `"JWST_NIRSpec.G395H_joint"` of NRS1 and NRS2).
 - **Baseline settings** (albedos, emissivities, limb darkening, orbits, bins, map resolution, stellar model) and the fit ranges are defined once,
@@ -124,7 +124,7 @@ modified catalogued planet keeps the catalogued noise. Give such a configuration
 
 | Folder | Contents |
 |---|---|
-| `hyperphase/` | The package, in layers (a module imports only from the layers before it). Settings and data: `defaults` (baseline settings, fit ranges), `paths` (where the data live), `bands` (observing bands). Forward model: `planet` (`PlanetParams`), `irradiance` (extended- and point-source irradiance, heat redistribution, temperature maps), `stellar` (Planck functions, stellar spectra, SPIDERMAN's stellar grid, brightness temperatures, limb darkening), `newera` (the NewEra cube), `orbit`, `roche`, `transit` (batman), `phasecurve` (thermal and reflected phase curves). Catalogue and fit model: `targets` (archive and curated planets), `noise` (PandExo), `model` (`FittingConfig`, `model_pcurve`). Analyses: `bias` (noiseless fits, Fisher uncertainties, evidence, nuisance parameters, maps, per-planet tables, sweeps), `retrieval` (simulated data, priors, likelihoods, dynesty, stored runs and their predictions). Figures: `plotting`. Also `paper` (the paper's configuration) and `validation` (alternative irradiance integrators). |
+| `hyperphase/` | The package, in layers (a module imports only from its own layer or the layers before it). Settings and data: `defaults` (baseline settings, fit ranges), `paths` (where the data live), `bands` (observing bands). Forward model: `planet` (`PlanetParams`), `irradiance` (extended- and point-source irradiance, heat redistribution, temperature maps), `stellar` (Planck functions, stellar spectra, SPIDERMAN's stellar grid, brightness temperatures, limb darkening), `newera` (the NewEra cube), `orbit`, `roche`, `transit` (batman), `phasecurve` (thermal and reflected phase curves). Catalogue and fit model: `targets` (archive and curated planets), `noise` (PandExo), `model` (`FittingConfig`, `model_pcurve`). Analyses: `bias` (noiseless fits, Fisher uncertainties, evidence, nuisance parameters, maps, per-planet tables, sweeps), `retrieval` (simulated data, priors, likelihoods, dynesty, stored runs and their predictions). Figures: `plotting`. Also `paper` (the paper's configuration) and `validation` (alternative irradiance integrators). |
 | `forward_model/` | The forward model, in notebooks numbered in reading order: irradiance and illumination zones, thermal, reflected and full phase curves, heat redistribution, the nightside signal. |
 | `bias_analysis/` | The noiseless analysis, in notebooks numbered in reading order: albedo bias and spurious redistribution for single planets, over $(a/R_\star, T_{\rm eff})$ and for the planet sample; predicted Bayes factors; nuisance parameters; planets at their Roche limit; unconfirmed TESS candidates. |
 | `retrievals/` | Nested-sampling retrievals: `run_dynesty.py` (one run), `paper_runs/` (every retrieval of the paper), `example_runs/` (three stored retrievals of TOI-2431 b), and numbered notebooks that inspect a stored run, validate the sampler and compare the retrievals with their predictions. |

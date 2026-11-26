@@ -27,18 +27,13 @@ plots is shipped in `retrievals/example_runs/`.
 
 | Item | Shows | Notebook |
 |---|---|---|
-| Figure, Sec. 4.1 | The phase-curve signature: both models, the residuals of the noiseless fits, and the share of each phase bin in $\chi^2_{\min}$ | [`bias_analysis/04_evidence_prediction.ipynb`](../bias_analysis/04_evidence_prediction.ipynb) §1, for the fit without redistribution. The residuals of the fit with redistribution: [`bias_analysis/02_redistribution_bias.ipynb`](../bias_analysis/02_redistribution_bias.ipynb) §2. |
+| Figure, Sec. 4.1 | The phase-curve signature: both models, the residuals of the noiseless fits, and the share of each phase bin in $\chi^2_{\min}$ | [`bias_analysis/04_evidence_prediction.ipynb`](../bias_analysis/04_evidence_prediction.ipynb) §1, for the fit without redistribution. The residuals of the fit with redistribution: [`bias_analysis/02_redistribution_bias.ipynb`](../bias_analysis/02_redistribution_bias.ipynb) §2, for MIRI/LRS; the joint NIRSpec fit with redistribution is not drawn in a notebook. |
 | Figure, Sec. 4.2 | Albedo bias and spurious redistribution in every band, for TOI-2431 b and K2-141 b | [`bias_analysis/03_bias_maps.ipynb`](../bias_analysis/03_bias_maps.ipynb) §2.3 ($A_B$ in each mode, with the joint fits), §2.6 ($F$ in each mode) and §2.7 (NRS1, NRS2 and MIRI/LRS in one fit); set `retrieval_planet` to the planet. The nightside panel: [`forward_model/06_nightside_temperature.ipynb`](../forward_model/06_nightside_temperature.ipynb) §3. |
 | Figure, Sec. 4.3 | Retrievals of thirty simulated observations of TOI-2431 b | [`retrievals/03_retrieval_series.ipynb`](../retrievals/03_retrieval_series.ipynb) §7. Needs the paper's retrievals. |
 | Figure, Sec. 4.4 | Robustness to nuisance parameters | [`bias_analysis/05_nuisance_robustness.ipynb`](../bias_analysis/05_nuisance_robustness.ipynb) §5 (both fits with the same nuisance parameters) and §6 (the tidal deformation with a uniform prior on $h_2$) |
 | Figure, Sec. 4.5 | Bias maps over $a/R_\star$ and the host's $T_{\rm eff}$ in MIRI/LRS | [`bias_analysis/03_bias_maps.ipynb`](../bias_analysis/03_bias_maps.ipynb) §1.1 (without redistribution) and §2.1 (with redistribution), as shipped (`instrument = "MIRI/LRS"`) |
 | Table, Sec. 4.5 | Bias, redistribution, nightside temperature and expected evidence of the paper's planets in the two primary modes | [`bias_analysis/03_bias_maps.ipynb`](../bias_analysis/03_bias_maps.ipynb) §1.2, §2.2 and §2.6, run once with `instrument = "JWST_NIRSpec.G395H_joint"` and once with `"MIRI/LRS"`. Expected evidence: [`bias_analysis/04_evidence_prediction.ipynb`](../bias_analysis/04_evidence_prediction.ipynb) §2. Nightside temperatures in MIRI/LRS: [`forward_model/06_nightside_temperature.ipynb`](../forward_model/06_nightside_temperature.ipynb) §2. |
-
-## Section 5: Discussion
-
-| Item | Shows | Notebook |
-|---|---|---|
-| Table, Sec. 5.1 | The results at the observing time of the JWST phase curves executed so far | Not in a notebook: the fits of the table of Section 4.5, with `n_orbits` set to each visit's exposure time divided by the orbital period. |
+| Table, Sec. 4.5 | The results at the observing time of the JWST phase curves executed so far | Not in a notebook: the fits of the previous table, with `n_orbits` set to each visit's exposure time divided by the orbital period. |
 
 ## Appendix A: The extended-source irradiance
 

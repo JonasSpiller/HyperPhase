@@ -1,7 +1,7 @@
 """HyperPhase: phase curves of rocky exoplanets close enough to their star that it can no longer be treated as a point source.
 
-The package is layered; a module imports only from the layers above it in this list:
-- defaults, paths, bands: the baseline settings, where the data live, the observing bands;
+The package is layered; a module imports only from its own layer or the layers above it in this list:
+- defaults, paths, _util, bands, parallel: the baseline settings, where the data live, the observing bands, process-parallel map;
 - planet, orbit, roche, irradiance, stellar, newera, transit, phasecurve: the forward model (no pandas, no matplotlib);
 - targets, noise, model: planet parameters, noise levels, and the model of the fits (FittingConfig, model_pcurve);
 - bias, retrieval: the noiseless analysis and the nested-sampling retrievals;

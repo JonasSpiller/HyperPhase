@@ -40,8 +40,8 @@ def BBtemp_from_insolation(insol, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSI
 
 
 def _tabulate_insolation(planet, u_bol, insolation_model, n_tab=3000):
-    """(gamma1, insolation) tabulated once on a 1-D grid over [0, pi] (n_tab points per illuminated zone), for 2-D maps and integrals to
-    interpolate."""
+    """(gamma1, insolation) tabulated once on a 1-D grid over [0, pi] (n_tab points per illuminated zone; n_tab over [0, pi] for the point
+    source), for 2-D maps and integrals to interpolate."""
     if insolation_model in EXTENDED_SOURCE_MODELS:
         gp1 = planet.terminator_penumbra()
         gp2 = planet.terminator_nightside()
@@ -108,8 +108,8 @@ def insolation_hyperillum(gamma1, planet, u_bol=DEFAULT_U_BOL):
 
 
 def insolation_fullyilluminated_hyperillum(gamma1, planet):
-    """Irradiance [W m^-2] in the fully illuminated zone: Eq. (3), the closed form of Eq. (A6). Independent of limb darkening (its integral term
-    vanishes by symmetry)."""
+    """Irradiance [W m^-2] in the fully illuminated zone: Eq. (3), the closed form of Eq. (A6). Independent of limb darkening: with every ring of
+    the disk visible it is cos(alpha) times the radial flux L/(4 pi rho^2)."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     mu = np.cos(gamma1)
@@ -164,7 +164,7 @@ def _leggauss_cached(order):
 
 
 def _theta_kernels_vec(theta, alpha, rho, r2):
-    """Return (cosb/rp^2, sinb/rp^2, cos theta', Delta, sin theta) at polar angle theta --
+    """Return (cos(beta)/rho'^2, sin(beta)/rho'^2, cos theta', Delta, sin theta) at polar angle theta --
     vectorized over (point, quadrature-node) grids: theta has shape (N, order), alpha/rho
     shape (N,)."""
     rho = rho[:, None]
@@ -240,8 +240,8 @@ def surface_temperature(gamma1, planet, insolation_model, u_bol=DEFAULT_U_BOL, A
 def hemisphere_temperatures(planet, insolation_model="hyperillum", u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None, n=40001):
     """Bolometric hemisphere temperatures [K] of the dayside (gamma1 <= 90 deg) and nightside (>= 90 deg) in local radiative equilibrium (F for the
     redistribution models), under three weights of gamma1. Returns {<weight>_day, <weight>_night} for
-      uniform: dgamma1 / (pi/2), the hemisphere averages of Sadh & Gavassino 2026 (ApJ 997, 167) eqs. 15-17. Not an area mean: it over-counts the
-        polar caps (point source: T0 (2/pi)^(1/4));
+      uniform: dgamma1 / (pi/2), the hemisphere averages of Sadh & Gavassino 2026 (ApJ 997, 167) eqs. 15-17. Not an area mean: it over-weights the
+        cap about the substellar (antistellar) point (point source: T0 (2/pi)^(1/4));
       area: sin(gamma1) dgamma1, the area mean of the flux over the hemisphere (point source: T0 (1/2)^(1/4));
       disk: 2 |cos gamma1| sin gamma1 dgamma1, the disk-integrated brightness temperature seen edge-on along the star-planet axis (dayside at
         mid-occultation, nightside at mid-transit). The point-source dayside is the T_d,max of Teske et al. 2025, T0 (2/3)^(1/4) (f = 2/3 of

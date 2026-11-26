@@ -35,7 +35,7 @@ def cfg_detectors(cfg):
 def common_sigma_1min(cfg):
     """The one per-minute noise of a cfg, or of a detector set whose detectors share it (the placeholder noise of the maps)."""
     levels = {float(c.sigma_1min) for c in (cfg if is_detector_set(cfg) else [cfg])}
-    if len(levels) != 1: raise ValueError(f"the detectors have different noise levels {sorted(levels)} ppm/min: a critical noise needs one common sigma_1min (give every detector the same placeholder)")
+    if len(levels) != 1: raise ValueError(f"the detectors have different noise levels {sorted(levels)} ppm: a critical noise needs one common sigma_1min (give every detector the same placeholder)")
     return levels.pop()
 
 
@@ -45,7 +45,7 @@ def common_sigma_1min(cfg):
 
 def instrument_cfg(cfg, instrument, sigma_1min=None):
     """cfg rebuilt for an instrument entry: a band name gives one FittingConfig with that band (the stellar grid follows), a joint fit (detector
-    tuple or bands.JOINT_INSTRUMENTS alias) a detector set. sigma_1min: one number for every detector, or {detector: ppm/min}; None keeps cfg's.
+    tuple or bands.JOINT_INSTRUMENTS alias) a detector set. sigma_1min: one number for every detector, or {detector: ppm}; None keeps cfg's.
     All other settings come from template_cfg(cfg), so a band-less FittingConfig(planet=..., ...) is the natural template."""
     c0, cfgs = template_cfg(cfg), []
     for d in detectors(instrument):
@@ -73,13 +73,13 @@ def detectors(instrument):
 
 
 def _detector_cfgs(cfg, planet, instrument, sigma_1min):
-    """The cfg or detector set of one table row: the planet's geometry with each detector's band and noise level ({detector: ppm/min})."""
+    """The cfg or detector set of one table row: the planet's geometry with each detector's band and noise level ({detector: ppm})."""
     return instrument_cfg(replace(template_cfg(cfg), planet=planet), instrument, sigma_1min)
 
 
 def retrieval_cfg(cfg, planet, instrument, sigma_1min=None):
     """The cfg or detector set of one planet in one retrieval mode at the planet's own noise, as instrument_retrievals fits it. sigma_1min:
-    {detector: ppm/min}; None looks the levels up (noise.noise_levels)."""
+    {detector: ppm}; None looks the levels up (noise.noise_levels)."""
     dets = detectors(instrument)
     if sigma_1min is None: sigma_1min = noise_levels(planet, dets)
     missing = [d for d in dets if d not in sigma_1min]

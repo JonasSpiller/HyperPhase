@@ -52,7 +52,7 @@ class FittingConfig:
     A_: object = ConstantBandAlbedo()   # band albedo A as a function of the Bond albedo A_B (used when reflected=True)
     emissivity_bol: float = DEFAULT_EMISSIVITY_BOL   # bolometric emissivity: sets the temperature map with A_B
     emissivity: float = DEFAULT_EMISSIVITY       # band emissivity: scales the thermal planet flux
-    sigma_1min: float = 323.  # noise [ppm/min]; a placeholder, the analyses pass noise.rms_1min
+    sigma_1min: float = 323.  # noise of a one-minute integration [ppm]; a placeholder, the analyses pass noise.rms_1min
     n_orbits: int = DEFAULT_N_ORBITS  # orbits observed and phase-folded
     n_bins: int = DEFAULT_N_BINS  # bins per period; the width is derived, so they tile it exactly
     u_bol: float = DEFAULT_U_BOL   # bolometric linear limb darkening of the irradiance (0 = uniform disk)

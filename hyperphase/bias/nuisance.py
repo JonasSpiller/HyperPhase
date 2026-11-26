@@ -19,7 +19,8 @@ The columns (nuisance_problem):
   only through alpha_ell(u, g) (ellipsoidal_amplitude), by ~10 % across the infrared, so this is its physical form, and with the prior of
   ellipsoidal_prior, centred on the truth (no ellipsoidal term in truth or model), the realistic one.
 - "planetary": the planet's tidal deformation (planetary_area_factor), linearised: F_p(phi) sin^2 i sin^2(2 pi phi), with F_p the point-source
-  planet flux at the fitted A_B. One amplitude for all detectors (it is geometric); zero in occultation, like the residual itself.
+  planet flux at the fitted A_B. One amplitude for all detectors (it is geometric); the term vanishes in occultation (before the mean is
+  removed), where the residual does not, so it resembles the residual less than the stellar term.
 - "T_s": the stellar T_eff [K] at fixed log g and [Fe/H] (step TEFF_STEP). The planet's temperature scales with it, so it acts like
   (1 - A_B)^(1/4), up to the part that cancels against the stellar band flux in F_p / F_star.
 redist=True linearises the fit with redistribution around its own solution (A_B_fit, F_fit > 0; extra column j_F): the A_B-only fit sits at the
@@ -143,13 +144,13 @@ def stellar_shared_column(columns, ratios):
 
 def planetary_area_factor(delta, incl, phi):
     """Projected area of the tidally deformed planet relative to mid-transit, A(phi) / A(0) (Akinsanmi et al. 2024, A&A 682, A15, eqs. 2 and 11;
-    Leconte et al. 2011): the triaxial ellipsoid of Correia (2014), r1 = r2 (1 + 3q), r3 = r2 (1 - q) (r1 towards the star, r2 along the orbit, r3
-    polar), with amplitude delta = (r1 - r2) / r2 = 3q, at the orbital angle phi [rad, 0 = mid-transit] and inclination incl [deg]. To first order
-    1 + delta sin^2 i sin^2 phi, the "planetary" column of nuisance_problem."""
+    Leconte et al. 2011): the triaxial ellipsoid of Correia (2014), a1 = a2 (1 + 3q), a3 = a2 (1 - q), a1 the semi-axis toward the star, a2 the
+    one along the orbit, a3 the polar one, with amplitude delta = (a1 - a2) / a2 = 3q (xi in the paper), at the orbital angle phi [rad,
+    0 = mid-transit] and inclination incl [deg]. To first order 1 + delta sin^2 i sin^2 phi, the "planetary" column of nuisance_problem."""
     q = delta / 3.
-    r1, r2, r3 = 1. + 3. * q, 1., 1. - q
+    a1, a2, a3 = 1. + 3. * q, 1., 1. - q
     ci2, si2 = np.cos(np.radians(incl)) ** 2, np.sin(np.radians(incl)) ** 2
-    area = lambda ph: np.sqrt(r1 ** 2 * r2 ** 2 * ci2 + r3 ** 2 * si2 * (r1 ** 2 * np.sin(ph) ** 2 + r2 ** 2 * np.cos(ph) ** 2))
+    area = lambda ph: np.sqrt(a1 ** 2 * a2 ** 2 * ci2 + a3 ** 2 * si2 * (a1 ** 2 * np.sin(ph) ** 2 + a2 ** 2 * np.cos(ph) ** 2))
     return area(np.asarray(phi, float)) / area(0.)
 
 
@@ -163,8 +164,8 @@ def nuisance_names(problem, nuisances):
 
 def nuisance_solve(problem, nuisances=(), priors=None, time_factor=1., limits=None):
     """One nuisance fit of `problem` (the A_B-only fit, or the fit with redistribution if it has j_F) with the columns of `nuisances` added (() = the
-    fixed-geometry fit). priors: {name: sigma} replacing the problem's (None = flat). time_factor: the observing time relative to the problem's;
-    the data rows scale with its square root but the prior rows do not, so a fit with priors does not scale as sqrt(time). limits:
+    fixed-geometry fit). priors: {name: sigma} overriding the problem's per name (None = flat). time_factor: the observing time relative to the
+    problem's; the data rows scale with its square root but the prior rows do not, so a fit with priors does not scale as sqrt(time). limits:
     {name: (lo, hi)} hard limits on a nuisance's shift from its true value (bounded least squares); a nuisance that ends on a limit is held there
     (sigma_post 0, listed in on_limit) and the covariance is that of the others. Returns the shifted A_B_fit (and F_fit), sigma_A_B (and sigma_F),
     chi2, lnB_mean = chi2 / 2 (an expected ln B only for the A_B-only fit), per nuisance its shift (delta), sigma_post and
@@ -279,7 +280,7 @@ def nuisance_both_fits_uniform(problem, problem_redist, A_B_true, nuisances, pri
 def nuisance_table(problem, A_B_true, rows):
     """Nuisance table of one configuration, one row per entry of `rows` ({label: tuple of nuisances}): sigma_A_B, bias_A_B, bias_sigma, chi2 and
     lnB_mean, and per nuisance: for the geometry its shrinkage sigma_post / sigma_prior ("shrink <name>") or, with a flat prior, its fitted shift
-    and sigma ("<name>", "sig <name>"); for an amplitude its fitted value and sigma (stellar in ppm, planetary as delta = (r1 - r2) / r2), plus
+    and sigma ("<name>", "sig <name>"); for an amplitude its fitted value and sigma (stellar in ppm, planetary as delta = (a1 - a2) / a2), plus
     the shrinkage with a prior."""
     out = []
     for label, nuis in rows.items():
@@ -375,11 +376,11 @@ def ellipsoidal_amplitude(planet, mass_ratio, u, g):
 
 
 def ellipsoidal_prior(planet, mass_ratio, frac_q, u_range, g_range, sig_a_rs=0., sig_incl=0.):
-    """Prior of the shared stellar term: the expected semi-amplitude A [ppm] (ellipsoidal_amplitude at the middle of the (u, g) bracket) and its
-    fractional 1-sigma error, the quadrature sum of those of M_p / M_star (frac_q), (R_star / a)^3 (3 sig_a_rs / (a/R*)), sin^2 i
-    (2 sig_incl / tan i, sig_incl in deg) and alpha_ell (half the bracket over its middle, taken as 1 sigma: generous for a bracket). Errors
-    independent (the M_star - a/R* correlation through the stellar density is ignored). Returns dict(A, frac, sigma = frac * A [ppm], parts
-    {source: fractional error})."""
+    """Prior of the shared stellar term: the expected semi-amplitude A [ppm] (the mean of ellipsoidal_amplitude at the two ends of the (u, g)
+    bracket) and its fractional 1-sigma error, the quadrature sum of those of M_p / M_star (frac_q), (R_star / a)^3 (3 sig_a_rs / (a/R*)),
+    sin^2 i (2 sig_incl / tan i, sig_incl in deg) and alpha_ell (half the bracket over its middle, taken as 1 sigma: generous for a bracket).
+    Errors independent (the M_star - a/R* correlation through the stellar density is ignored). Returns dict(A, frac, sigma = frac * A [ppm],
+    parts {source: fractional error})."""
     lo, hi = ellipsoidal_amplitude(planet, mass_ratio, u_range[0], g_range[0]), ellipsoidal_amplitude(planet, mass_ratio, u_range[1], g_range[1])
     parts = {"M_p / M_star": float(frac_q), "(R_star / a)^3": 3. * sig_a_rs / (planet.R / planet.r2), "sin^2 i": 2. * np.radians(sig_incl) / np.tan(np.radians(planet.incl)),
              "alpha_ell (u, g)": (hi - lo) / (hi + lo)}
@@ -388,9 +389,10 @@ def ellipsoidal_prior(planet, mass_ratio, frac_q, u_range, g_range, sig_a_rs=0.,
 
 
 def deformation_amplitude(planet, mass_ratio, h2=1.):
-    """Expected amplitude delta = (r1 - r2) / r2 of the planet's tidal deformation (the "planetary" column) for the fluid Love number h2: the tidal
-    and the centrifugal potential displace the surface of a synchronously rotating body in equilibrium by 7/6, -1/3 and -5/6 (in units of h2 zeta
-    R_p, zeta = (M_star / M_p) (R_p / a)^3) along r1, r2, r3, so to first order delta = 1.5 h2 zeta. mass_ratio = M_p / M_star."""
+    """Expected amplitude delta = (a1 - a2) / a2 of the planet's tidal deformation (the "planetary" column; a1 the semi-axis toward the star, a2
+    the one along the orbit, a3 the polar one; xi in the paper) for the fluid Love number h2: the tidal and the centrifugal potential displace
+    the surface of a synchronously rotating body in equilibrium by 7/6, -1/3 and -5/6 (in units of h2 zeta R_p, zeta = (M_star / M_p)
+    (R_p / a)^3) along a1, a2, a3, so to first order delta = 1.5 h2 zeta. mass_ratio = M_p / M_star."""
     return 1.5 * h2 / mass_ratio * (planet.r1 / planet.R) ** 3
 
 

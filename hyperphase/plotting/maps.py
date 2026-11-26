@@ -135,7 +135,7 @@ def plot_limit_curve(sweep, geo, cfg, rp_rs, roche_a_rs, anchors, sweep_ubol0=No
          a2.plot(sweep["a_rs"], np.sqrt(sweep["chi2"]), "d:", color=C_HI, lw=1.4, ms=5, label=r"$\sqrt{\chi^2}$: misfit of the best $A_B$-only fit")[0],
          a2.axhline(1., color=INK, lw=.9, ls="--", label=r"1 $\sigma$")]
     a2.set_yscale("log"); a2.set_ylabel(r"significance [$\sigma$]")
-    a2.set_title(titles[2] or rf"Measurability  ($\sigma_{{1\rm min}}$ = {cfg.sigma_1min:.0f} ppm/min, {cfg.n_orbits} orbits, {cfg.n_bins} bins)")
+    a2.set_title(titles[2] or rf"Measurability  ($\sigma_{{1\rm min}}$ = {cfg.sigma_1min:.0f} ppm, {cfg.n_orbits} orbits, {cfg.n_bins} bins)")
     a2.legend(handles=h, fontsize=9, loc="upper right", frameon=True, facecolor="#fcfcfb", edgecolor="none")
 
     from matplotlib.ticker import FixedLocator, FormatStrFormatter, NullFormatter
@@ -156,6 +156,7 @@ def plot_bias_maps(xg, yg, bias_map, A_B_true, AGG, ykey, ylabel, rp_rs_of, incl
                    show_absolute=True, show_relative=False, show_F=False, target=None, title=None, roche=True, legend_fontsize=12, n_closest=10, *, planets, verbose=True):
     """Stacked maps over (a/R*, ykey): |Delta A_B|, |Delta A_B|/A_B and the fitted F of the joint fit (show_absolute / show_relative / show_F;
     show_F needs F_map). Dash-dot contour: the fitted A_B = 0, on every panel where the map crosses it.
+    With F_map, bias_map must be the joint fit's bias (the titles say "(joint fit)").
     Grey: railed cells and, with F_map, cells without an occultation (b = (a/R*) cos i >= 1 + Rp/R*), where nothing anchors the flux level and
     A_B and F are degenerate; dashed lines bound the grazing zone 1 - Rp/R* < b < 1 + Rp/R*.
     rp_rs_of(y): Rp/R* at the map's y values; incl [deg]: the inclination the map was computed at.
@@ -278,11 +279,11 @@ def plot_false_F_map(xg, yg, dchi2_map, cfg, AGG, ykey, ylabel, rp_rs_of, incl=9
     ax.set_xlim(xg[0], xg[-1]); ax.set_ylim(yg[0], yg[-1])
     ax.set_xlabel(r"$a/R_\star$"); ax.set_ylabel(ylabel)
     ax.set_title(title or rf"Critical noise for a {z:g}$\sigma$ false-positive $F$ ({n_orbits} orbits)")
-    fig.colorbar(im, ax=ax, label=rf"$\sigma_{{1\,\rm min,\,crit}}$ [ppm/min] for a {z:g}$\sigma$ detection of $F > 0$")
+    fig.colorbar(im, ax=ax, label=rf"$\sigma_{{1\,\rm min,\,crit}}$ [ppm] for a {z:g}$\sigma$ detection of $F > 0$")
     fig.tight_layout()
     fig.legend(*ax.get_legend_handles_labels(), loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=8, framealpha=.9)
 
-    if verbose: print(f"occulting, non-railed cells: {ok.sum()} of {ok.size};  sigma_1min,crit ({z:g} sigma, {n_orbits} orbits) in [{sig_crit[ok].min():.1f}, {sig_crit[ok].max():.1f}] ppm/min;  "
-          f"sqrt(dchi2_F) at sigma_1min = {sigma_1min:g} ppm/min in [{np.sqrt(dchi2_map[ok]).min():.2f}, {np.sqrt(dchi2_map[ok]).max():.2f}] sigma")
+    if verbose: print(f"occulting, non-railed cells: {ok.sum()} of {ok.size};  sigma_1min,crit ({z:g} sigma, {n_orbits} orbits) in [{sig_crit[ok].min():.1f}, {sig_crit[ok].max():.1f}] ppm;  "
+          f"sqrt(dchi2_F) at sigma_1min = {sigma_1min:g} ppm in [{np.sqrt(dchi2_map[ok]).min():.2f}, {np.sqrt(dchi2_map[ok]).max():.2f}] sigma")
     if verbose: print(f"railed: {(~no_occultation & ~np.isfinite(dchi2_map)).sum()},  without occultation: {no_occultation.sum()}")
     return sig_crit

@@ -97,8 +97,8 @@ def fit_naive(cfg, truth, free_offset=True, bounds=A_B_FIT_BOUNDS, xatol=1e-4, *
     return fit_AB_only(cfg, truth, "naive", free_offset=free_offset, bounds=bounds, xatol=xatol, **kw)
 
 
-# F nodes of fit_redist's profile scan, as fractions of the F_bounds width: dense near F = 0, where the joint optimum usually sits (F ~ 0.005 for an
-# extended-source truth).
+# F nodes of fit_redist's profile scan, as fractions of the F_bounds width: dense near F = 0, where the joint optimum usually sits (F ~ 0.002-0.02 for
+# an extended-source truth).
 F_SCAN_FRAC = np.array([0., 0.004, 0.01, 0.02, 0.04, 0.08, 0.15, 0.3, 0.6, 1.])
 
 
@@ -106,8 +106,9 @@ def fit_redist(cfg, truth, free_offset=True, bounds=A_B_FIT_BOUNDS, F_bounds=F_B
     """Best-fit naive_redist (A_B, F) against a noiseless truth: (A_B_fit, F_fit, chi2, resid_rms), with the binning, noise weighting and offset of
     fit_naive. Profile fit: chi2_p(F) = min over A_B (bounded Brent), scanned on F_SCAN_FRAC to bracket its global minimum, then refined by
     bounded Brent in the bracket; a lower scan node wins, so F exactly on its bound is a possible result.
-    Why not a 2-D local optimizer: the nightside is T ∝ F^(1/4), so the curve responds to F only ∝ F^~1.5 near 0 and dchi2/dF ≈ 0 on the F = 0
-    edge. A simplex or gradient fit started there stays there. Profiling also makes the outer problem insensitive to the inner tolerance."""
+    Why not a 2-D local optimizer: the nightside is T ∝ F^(1/4), so once A_B has adjusted, chi2 changes only slowly with F near 0 (the curve
+    responds ∝ F^~1.5) and dchi2/dF ≈ 0 on the F = 0 edge. A simplex or gradient fit started there stays there. Profiling also makes the outer
+    problem insensitive to the inner tolerance."""
     resid, cost, _ = _chi2_problem(cfg, truth, "naive_redist", free_offset=free_offset, **kw)
 
     def profile(F):   # (chi2, A_B) at the best A_B for fixed F

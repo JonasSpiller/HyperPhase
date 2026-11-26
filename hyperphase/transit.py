@@ -32,7 +32,7 @@ def flux_occultation(planet, fp, t, t0=0.):
 
     params_occultation = batman.TransitParams()
 
-    params_occultation.t0 = t0  # time of mid-transit (units of period)
+    params_occultation.t0 = t0  # time of mid-transit [days, same units as period]
     params_occultation.per = period
     params_occultation.rp = r1/r2
     params_occultation.a = R/r2
@@ -57,7 +57,7 @@ def flux_transit(planet, t, t0=0., u=DEFAULT_U):
 
     params_transit = batman.TransitParams()
 
-    params_transit.t0 = t0  # time of mid-transit (units of period)
+    params_transit.t0 = t0  # time of mid-transit [days, same units as period]
     params_transit.per = period
     params_transit.rp = r1/r2
     params_transit.a = R/r2

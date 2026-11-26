@@ -18,7 +18,7 @@ DEFAULT_A_B = 0.2
 # (Essack et al. 2020).
 DEFAULT_A = 0.1
 
-# Bolometric emissivity in emissivity_bol sigma T^4 = (1-A_B) S, degenerate with A_B (see irradiance.BBtemp_from_insolation). 1 assumes a
+# Bolometric emissivity in emissivity_bol sigma T^4 = (1-A_B) I, degenerate with A_B (see irradiance.BBtemp_from_insolation). 1 assumes a
 # surface that is black in the thermal infrared.
 DEFAULT_EMISSIVITY_BOL = 1.
 
@@ -36,8 +36,8 @@ DEFAULT_U_BOL = 0.5
 # where PHOENIX covers the band (inputs/stellar_model/limb_darkening.ipynb).
 DEFAULT_U = (0.10, 0.14)
 
-# Orbits observed and phase-folded. The periods are only 4-7 h, so five orbits are roughly 1-1.5 days of JWST time (about 27 h for TOI-2431 b,
-# 34 h for K2-141 b): ambitious, but within the range of a large program.
+# Orbits observed and phase-folded: the number of orbits is fixed, not the time. Five orbits take 27 h for TOI-2431 b and 34 h for K2-141 b, up
+# to 88 h for 55 Cnc e: ambitious, but within the range of a large program.
 DEFAULT_N_ORBITS = 5
 
 # Bins per orbit of the phase-folded light curve: 12 min for TOI-2431 b, 15 min for K2-141 b. The width is derived from the period, so the
@@ -70,5 +70,5 @@ STELLAR_MODEL = os.environ.get("HYPERPHASE_STELLAR_MODEL", "newera")
 if STELLAR_MODEL not in STELLAR_MODELS: raise ValueError(f"HYPERPHASE_STELLAR_MODEL = {STELLAR_MODEL!r}: must be one of {STELLAR_MODELS}")
 
 # Resolution (longitude, latitude nodes) of the insolation / temperature map of every forward-model evaluation; 300/150 differs from 600/300
-# by ~0.001 ppm (convergence study: validation/speed_accuracy.ipynb).
+# by < 0.005 ppm for the extended source and < 0.03 ppm for the point source (TOI-2431 b, K2-141 b; validation/speed_accuracy.ipynb).
 DEFAULT_N_LO, DEFAULT_N_LA = 300, 150

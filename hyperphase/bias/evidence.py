@@ -5,8 +5,8 @@ likelihood ratio. Linearised around the truth, with the data d = truth + sigma z
     ln B(ext vs ps) = chi2_min / 2 + zeta sqrt(chi2_min),   zeta = r_perp_hat . z ~ N(0, 1),
 where r_perp = (truth - m_ps(A_fit) - baseline) / sigma_bin is the whitened residual of the noiseless A_B-only fit and chi2_min = |r_perp|^2 the
 chi2 that fit_naive returns. So <ln B> = chi2_min / 2 with scatter sqrt(chi2_min) over noise realisations, and r_perp^2 says at which orbital
-phases it arises. Only for equal parameter counts: against the fit with redistribution the F prior adds an Occam term of ~3 nats and F's posterior
-is one-sided, so chi2 / 2 is then only the likelihood part."""
+phases it arises. Only for equal parameter counts: against the fit with redistribution the F prior adds an Occam penalty of about 3-5 nats
+(prior U(0, 0.5)) and F's posterior is one-sided, so chi2 / 2 is then only the likelihood part."""
 import contextlib
 import io
 

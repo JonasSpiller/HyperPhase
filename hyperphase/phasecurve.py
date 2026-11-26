@@ -1,7 +1,14 @@
 """Phase curves: the thermal curve from a temperature map (fSPIDERMAN), the reflected curve, their sum, and the fast light-curve evaluation.
 
 The irradiance takes the semi-major axis R as the planet-star distance, and fast_lightcurve assumes a circular orbit; an eccentric orbit would need
-the instantaneous distance R (1 - ecc^2) / (1 + ecc cos f)."""
+the instantaneous distance R (1 - ecc^2) / (1 + ecc cos f).
+
+Light travel time (from a_AU). SPIDERMAN delays the thermal curve internally: by 0 at transit and by about 2 a sin(i) / c at occultation. The
+transit (batman) and the reflected light are computed at the times given. full_PhaseCurve and reflected_PhaseCurve return those times shifted by
+transit.light_travel_time_correction (-a sin(i) / c at transit, +a sin(i) / c at occultation), and full_PhaseCurve computes the thermal part on
+the shifted times, so SPIDERMAN delays it once more. The thermal occultation therefore lies about 2 a sin(i) / c after the reflected one in
+model_pcurve, which keeps the unshifted times, and a sin(i) / c after it in full_PhaseCurve (TOI-2431 b: 5.8 s and 3.0 s). That changes a
+12-min bin by < 0.1 ppm, and truth and fit share it."""
 import contextlib
 import io
 import time
@@ -80,10 +87,10 @@ def reflected_lightcurve(epsilon, planet, u_bol=DEFAULT_U_BOL, unit="normalized"
     epsilon: angle between the substellar point and the line of sight [rad].
     unit: "normalized" returns F_p/F_star, "radiant intensity" the power per solid angle towards the observer [W/sr] (the flux at distance d is
         that / d^2).
-    lambda_band_ratio: for unit="radiant intensity" in a band, F_star,band / F_star (for a throughput T(lambda): int T B_lambda(T_eff) dlambda /
-        sigma T_eff^4).
+    lambda_band_ratio: for unit="radiant intensity" in a band, F_star,band / F_star (for a throughput T(lambda): pi int T B_lambda(T_eff) dlambda
+        / (sigma T_eff^4)).
     A: spherical albedo, bolometric or band-integrated (not a geometric albedo). For a bolometric measurement, A = 1 gives reflected plus thermal
-        light.
+        light of a planet without heat redistribution (emissivity_bol = 1).
     n_eta, n_phi: Gauss-Legendre orders of the inner (eta) and outer (phi) integral; n_tab: gamma1 samples of the tabulated irradiance."""
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
@@ -182,8 +189,8 @@ def orbital_reflected_lightcurve(t, planet, t0=0., n_eps=300, A=DEFAULT_A, u_bol
 
 def reflected_PhaseCurve(planet, t=None, t0=0., u=DEFAULT_U, u_bol=DEFAULT_U_BOL, include_transit=True, include_occultation=True, A=DEFAULT_A, n_eta=150, n_phi=80, n_tab=1000, insolation_model="hyperillum"):
     """Reflected-light phase curve (Lambertian, grey) with the transit and the occultation. With the band albedo A it holds in any band: the
-    reflected F_p/F_star does not depend on the stellar spectrum, up to the stellar limb darkening and reddening in the penumbra, which are
-    neglected (weak in the infrared). Parameters as in full_PhaseCurve.
+    reflected F_p/F_star does not depend on the stellar spectrum, up to the wavelength dependence of the stellar limb darkening in the penumbra
+    (the bolometric u_bol is used), which is neglected (weak in the infrared). Parameters as in full_PhaseCurve.
 
     Returns (t, flux, depth): the times [days] corrected for the light travel time, the flux relative to the star alone (1 + planet - transit; the
     planet flux only for include_transit=False), and the reflected flux at full phase [ppm]."""
@@ -272,8 +279,8 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=D
     lambda_range: band edges [m]; SPIDERMAN integrates a top-hat over them for filter_path=False, else the throughput file. F: heat redistribution
     of the redistribution models. emissivity_bol sets the temperature map with A_B. emissivity scales the planet flux and the depth, not the
     transit: SPIDERMAN emits the Planck function, so the thermal flux is exactly linear in it. N_LAYERS: radial layers of SPIDERMAN's map, by
-    default 40 for the extended source and 60 for the point source, whose sharp terminator makes the occultation depth converge more slowly (~1/N
-    against ~1/N^2); use >= 120 to compare depths between models. spman="fast" interpolates the phase modulation (fast_lightcurve, options in
+    default 40 for the extended source and 60 for the point source, whose terminator lies on the limb at full phase, so its occultation depth
+    converges more slowly; use >= 120 to compare depths between models. spman="fast" interpolates the phase modulation (fast_lightcurve, options in
     spman_kw), "normal" evaluates every time.
 
     Returns (t, flux, depth, params): the times [days], the flux relative to the star alone (1 + planet - transit; the planet flux only for
@@ -413,7 +420,7 @@ def _trig_interp(y_nodes, per, t, t0=0.):
 
 
 def occultation_durations(spider_params):
-    """(T14, T23) of the occultation for a circular orbit: total duration (1st-4th contact) and totality (2nd-3rd contact), Winn 2010 eq. 14.
+    """(T14, T23) of the occultation for a circular orbit: total duration (1st-4th contact) and totality (2nd-3rd contact), Winn 2010 eqs. 14-15.
     T23 = 0 for a grazing geometry, where the planet is never fully hidden."""
     inc = np.radians(spider_params.inc)
     b = spider_params.a * np.cos(inc)

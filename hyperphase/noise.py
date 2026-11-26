@@ -36,7 +36,8 @@ PANDEXO_PARAM_KEYS = (*PANDEXO_COLUMNS, "mag", "ref_wave")
 
 
 def sigma_1min_from_integration(snr_int, t_int_s):
-    """sigma_1min [ppm/min] from the S/N of one integration and its duration [s]: (1e6 / snr_int) ppm, scaled to one minute by sqrt(t_int_s / 60)."""
+    """sigma_1min [ppm], the precision of a one-minute integration, from the S/N of one integration and its duration [s]: (1e6 / snr_int) ppm,
+    scaled to one minute by sqrt(t_int_s / 60)."""
     return 1e6 / snr_int * np.sqrt(t_int_s / 60.)
 
 
@@ -50,7 +51,7 @@ def _read_planet_table(path, fields):
     return out
 
 
-# sigma_1min [ppm/min] for bands without a PandExo mode (MIRI imaging, ...), from the S/N and duration of one integration
+# sigma_1min [ppm] for bands without a PandExo mode (MIRI imaging, ...), from the S/N and duration of one integration
 # (inputs/noise/custom_sigma_1min.csv): {planet name: {band: sigma_1min}}. Planet names are matched loosely (_util._normalise).
 CUSTOM_SIGMA_1MIN = _read_planet_table(CUSTOM_SIGMA_TABLE, lambda r: sigma_1min_from_integration(float(r["snr_int"]), float(r["t_int_s"])))
 CUSTOM_SIGMA_1MIN_N = {_normalise(k): v for k, v in CUSTOM_SIGMA_1MIN.items()}
@@ -71,7 +72,7 @@ def observable(planet_name, instrument):
 
 
 def rms_1min_pandexo(result, T14, lambda_range, visualize=False, extra=False):
-    """sigma_1min [ppm/min] from a PandExo result (run_pandexo, R = None) over lambda_range [m], for a transit of T14 [h].
+    """sigma_1min [ppm] from a PandExo result (run_pandexo, R = None) over lambda_range [m], for a transit of T14 [h].
 
     binning() gives the band's transit-depth precision rms_transit = rms_int sqrt(1/N_in + 1/N_out), since the depth is measured against the
     baseline. With N_in = N_out = T14 / t_int (true only for PANDEXO_FIXED's noccultations=1, baseline_unit='frac', baseline=1) this gives the
@@ -191,7 +192,8 @@ def binning(lam_start, lam_end, result, visualize=True):
 
     Sums the electrons and variances of the band's pixels and applies PandExo's depth error to the sums: how PandExo's own engine bins when R
     is set, and the noise of the photon-weighted band depth SPIDERMAN computes. Fully saturated pixels are left out (see bands.PARTIAL_BANDS).
-    Not sqrt(sum sigma_i^2) / N: that is the error of an equal-weight mean of the pixel depths, 1.4-1.6 times larger on MIRI/LRS."""
+    Not sqrt(sum sigma_i^2) / N: that is the error of an equal-weight mean of the pixel depths, up to 1.8 times larger on MIRI/LRS (1.5 for
+    TOI-2431 b)."""
     raw, spec, timing = result["RawData"], result["FinalSpectrum"], result["timing"]
     wave, error = np.asarray(raw["wave"]), np.asarray(spec["error_w_floor"])
     N_in, N_out, V_in, V_out = (np.asarray(raw[k], float) for k in ("electrons_in", "electrons_out", "var_in", "var_out"))
@@ -307,7 +309,7 @@ def _pandexo_cache_row(key):
 
 
 def pandexo_cache_lookup(key):
-    """sigma_1min [ppm/min] of the newest row matching key, from the user cache or else the shipped one; None if neither has it."""
+    """sigma_1min [ppm] of the newest row matching key, from the user cache or else the shipped one; None if neither has it."""
     row = _pandexo_cache_row(key)
     return None if row is None else float(row["sigma_1min"])
 
@@ -346,7 +348,7 @@ def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
         if instrument not in custom:
             raise NoNoiseLevelError(f"no noise level for {planet.name!r} on {instrument!r}: PandExo has no mode for this instrument and inputs/noise/custom_sigma_1min.csv has no entry "
                              f"for this planet/instrument (it has {sorted(custom) or 'none'} for this planet). Add one there, or pass sigma_1min by hand.")
-        if overrides.pop("verbose", False): print(f"{planet.name} [{instrument}]: sigma_1min = {custom[instrument]:.1f} ppm/min from CUSTOM_SIGMA_1MIN (no PandExo mode)")
+        if overrides.pop("verbose", False): print(f"{planet.name} [{instrument}]: sigma_1min = {custom[instrument]:.1f} ppm from CUSTOM_SIGMA_1MIN (no PandExo mode)")
         return custom[instrument]
     if lrs_range is None: lrs_range = filter_lambda(instrument, planet)   # bands.PARTIAL_BANDS
     overrides.setdefault("t14_h", planet.T14)
@@ -360,7 +362,7 @@ def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
             if not _pandexo_installed(key) and version not in _VERSION_NOTED:
                 _VERSION_NOTED.add(version)
                 print(f"note: PandExo is not installed, so the noise levels come from the cached runs of {version}")
-            if verbose: print(f"{p['name']} [{instrument}]: sigma_1min = {cached:.2f} ppm/min from the PandExo cache" + ("" if _pandexo_installed(key) else f" ({version})"))
+            if verbose: print(f"{p['name']} [{instrument}]: sigma_1min = {cached:.2f} ppm from the PandExo cache" + ("" if _pandexo_installed(key) else f" ({version})"))
             return cached
     if not _pandexo_installed(key):
         raise ImportError(f"no cached noise level for {planet.name!r} on {instrument!r} at these inputs, and PandExo is not installed to compute one: install the "
@@ -382,7 +384,7 @@ def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
 
 
 def rms_1min_pandexo_sample(names, instrument, verbose=False, **overrides):
-    """sigma_1min [ppm/min] per planet on one instrument: {PlanetParams.name: value}, or {name: {detector: value}} for a joint fit (a detector
+    """sigma_1min [ppm] per planet on one instrument: {PlanetParams.name: value}, or {name: {detector: value}} for a joint fit (a detector
     tuple or a JOINT_INSTRUMENTS alias). Planets without a noise level (on any detector of a joint fit) are left out, with a note. Archive or
     PandExo failures raise instead of giving NaN, which would silently corrupt the fits."""
     dets = resolve_instrument(instrument)
@@ -400,7 +402,7 @@ def rms_1min_pandexo_sample(names, instrument, verbose=False, **overrides):
 
 
 def noise_levels(planet, instruments, **overrides):
-    """{instrument: sigma_1min [ppm/min]} of one planet; an instrument without a noise level is left out silently, so callers test
+    """{instrument: sigma_1min [ppm]} of one planet; an instrument without a noise level is left out silently, so callers test
     `ins in levels`. Archive or PandExo failures raise, as in rms_1min_pandexo_sample."""
     out = {}
     for ins in instruments:

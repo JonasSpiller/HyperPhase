@@ -42,7 +42,7 @@ def disk_flux(planet, band, model, hemisphere, **kw):
 def test_disk_integrated_flux_matches_direct_integration(toi2431b, lrs, model):
     """SPIDERMAN's occultation depth and mid-transit nightside flux against the disk integral of the temperature map, edge-on. Catches a rotated or
     transposed direct_T grid (which fails silently), a wrong stellar normalisation and a wrong band weighting. The penumbra is a thin ring along
-    the limb at mid-transit, so the nightside needs many more radial layers than SPIDERMAN's default (40 layers: 5 % too faint)."""
+    the limb at mid-transit, so the nightside needs many more radial layers than the default of thermal_PhaseCurve (40 layers: about 3 % too faint)."""
     planet = replace(toi2431b, incl=90.)
     kw = dict(A_B=0.2, emissivity_bol=1., u_bol=0.5)
     _, _, depth, _ = thermal(planet, lrs, model, emissivity=1., include_transit=False, **kw)

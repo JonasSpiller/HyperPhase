@@ -155,7 +155,8 @@ def exact_E_quad(la, g, u=0.6, order=96, epsrel=1e-11):
 
 
 def analytic_FZ(la, g, u=0.6):
-    """L cos(psi) / (4 pi rho^2) for InstellCa's star (luminosity P (1 - u/3)): exact in the fully illuminated zone."""
+    """L cos(alpha) / (4 pi rho^2) for InstellCa's star (luminosity P (1 - u/3)), with alpha and rho the zenith angle and distance of the
+    stellar centre: exact in the fully illuminated zone."""
     rs, rp, al = g.rs, g.rp, g.al
     fa = g.fa1 * 1.0573 if u == 0.6 else g.fa1
     L = SIGMA_INSTELLCA * fa ** 4 * 4 * math.pi * rs ** 2 * (1 - u / 3)
@@ -164,7 +165,7 @@ def analytic_FZ(la, g, u=0.6):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# 3. Dissection: InstellCa's own integrand and nested quad, with the domain / abs() switched one at a time
+# 3. Dissection: InstellCa's integrand (vector form, signed_kernel) and nested quad, with the domain / abs() switched one at a time
 # ---------------------------------------------------------------------------------------------------------------------
 def instellca_variant(la, g, u=0.6, domain="box", use_abs=True, quad_kw=None):
     """domain = 'box'        : InstellCa's rectangle (with abs() as in InstellCa if use_abs, else signed factors)

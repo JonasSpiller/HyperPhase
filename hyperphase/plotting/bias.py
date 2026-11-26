@@ -63,18 +63,24 @@ def plot_joint_bias_vs_true_AB(A_B_grid, sweep, i0, target_label, title):
     return fig, axs
 
 
-def measurability_panel(ax, A_B_grid, curves, i0, cfg, target_label, ylabel, title):
-    """One measurability panel: |bias| / sigma^Fisher on a log axis per (y, fmt, color, label) curve, with the 1-sigma and 0.3-sigma lines.
-    The right axis is the same curve times cfg.sigma_1min: the per-minute precision at which the bias is a 1-sigma effect (measurability)."""
+_BIAS_LINES = ((1., "--", .9, r"bias $=1\,\sigma$  ($\sigma_{1\rm min}$ = $\sigma_{1\rm min, crit}$)"),
+               (.3, ":", .8, r"bias $=0.3\,\sigma$  (negligible: $+4\%$ on the total error)"))
+
+
+def measurability_panel(ax, A_B_grid, curves, i0, cfg, target_label, ylabel, title, lines=_BIAS_LINES, crit_at=1., crit_label=None, log=True):
+    """One measurability panel: a significance that scales as 1 / sigma_1min (|bias| / sigma^Fisher, or z_F) per (y, fmt, color, label) curve, on
+    a log axis (log=False: linear), with the reference lines (value, linestyle, linewidth, label). The right axis is the same curve times
+    cfg.sigma_1min / crit_at: the per-minute noise at which the curve reaches crit_at (1: the bias is a 1-sigma effect, measurability)."""
     for y, fmt, color, label in curves:
         ax.plot(A_B_grid, y, fmt, color=color, lw=1.5, ms=5, label=label)
     ax.plot(A_B_grid[i0], curves[-1][0][i0], label=target_label, **TARGET)
-    ax.axhline(1., color=INK, lw=.9, ls="--", label=r"bias $=1\,\sigma$  ($\sigma_{1\rm min}$ = $\sigma_{1\rm min, crit}$)")
-    ax.axhline(.3, color=INK, lw=.8, ls=":", label=r"bias $=0.3\,\sigma$  (negligible: $+4\%$ on the total error)")
-    ax.set_yscale("log")
-    # linear rescale -> a shift on the log axis
-    sec = ax.secondary_yaxis("right", functions=(lambda v: cfg.sigma_1min * v, lambda v: v / cfg.sigma_1min))
-    sec.set_ylabel(r"required $\sigma_{1\rm min, crit}$ [ppm/min]")
+    for value, ls, lw, label in lines:
+        ax.axhline(value, color=INK, lw=lw, ls=ls, label=label)
+    if log: ax.set_yscale("log")
+    # a linear rescale: a shift on a log axis
+    s = cfg.sigma_1min / crit_at
+    sec = ax.secondary_yaxis("right", functions=(lambda v: s * v, lambda v: v / s))
+    sec.set_ylabel(crit_label or r"required $\sigma_{1\rm min, crit}$ [ppm]")
     ax.spines["right"].set_visible(True)
     # the frame keeps the reference lines from running through the text
     ax.legend(fontsize=9, frameon=True, facecolor="#fcfcfb", edgecolor="none", framealpha=0.9)
@@ -82,19 +88,22 @@ def measurability_panel(ax, A_B_grid, curves, i0, cfg, target_label, ylabel, tit
 
 
 def plot_joint_measurability(A_B_grid, sweep, i0, cfg, target_label, title):
-    """Measurability of the joint-fit biases, side by side: |Delta A_B| / sigma_A_B (joint solid, A_B-only dashed) and F_fit / sigma_F (the
-    truth has F = 0, so F_fit is the bias). Marginal Fisher sigmas, baseline marginalised. Returns fig, axs."""
+    """Measurability of both biases over the true A_B, side by side: |Delta A_B| / sigma_A_B^Fisher (fit with F solid, A_B-only fit dashed;
+    baseline marginalised) and the significance z_F = sqrt(dchi2_F) of the spurious F (the truth has F = 0), with the false-positive threshold
+    z_F = 2. sweep: bias_vs_true_AB(..., redist=True). Returns fig, axs."""
     naive, joint = sweep["naive"], sweep["naive_redist"]
     bs_naive, _ = measurability(naive["bias_A_B"], naive["sigma_A_B"], cfg.sigma_1min)
     bs_joint, _ = measurability(joint["bias_A_B"], joint["sigma_A_B"], cfg.sigma_1min)
-    bs_F, _ = measurability(joint["F_fit"], joint["sigma_F"], cfg.sigma_1min)
+    z_F = np.sqrt(np.clip(naive["chi2"] - joint["chi2"], 0., None))   # as false_F_fit
 
     fig, axs = plt.subplots(1, 2, figsize=(16, 5.5))
     measurability_panel(axs[0], A_B_grid, [(bs_naive, "o--", C_NAIVE, "$A_B$ only (naive)"), (bs_joint, "o-", C_REDIST, "$A_B$ and $F$ (naive_redist)")],
                         i0, cfg, target_label, r"$|\Delta A_B|\,/\,\sigma_{A_B}^{\rm Fisher}$", r"Measurability of the $A_B$ bias")
-    measurability_panel(axs[1], A_B_grid, [(bs_F, "o-", C_REDIST, "$A_B$ and $F$ (naive_redist)")],
-                        i0, cfg, target_label, r"$F_{\rm fit}\,/\,\sigma_F^{\rm Fisher}$", r"Measurability of the spurious $F$")
-    fig.suptitle(title + r"  ($n_{\rm orbits}$=%d, $\sigma_{1\rm min}$=%.0f ppm/min)" % (cfg.n_orbits, cfg.sigma_1min), y=1.02)
+    measurability_panel(axs[1], A_B_grid, [(z_F, "o-", C_REDIST, "$A_B$ and $F$ (naive_redist)")],
+                        i0, cfg, target_label, r"$z_F = \sqrt{\Delta\chi^2_F}$", r"Significance of the spurious $F$",
+                        lines=((2., "--", .9, r"$z_F = 2$: false positive  ($\sigma_{1\rm min}$ = $\sigma_{1\rm min, crit}$)"),), crit_at=2.,
+                        crit_label=r"$\sigma_{1\rm min}$ at which $z_F = 2$ [ppm]", log=False)
+    fig.suptitle(title + r"  ($n_{\rm orbits}$=%d, $\sigma_{1\rm min}$=%.0f ppm)" % (cfg.n_orbits, cfg.sigma_1min), y=1.02)
     fig.tight_layout()
     return fig, axs
 
@@ -178,7 +187,7 @@ def _false_F_bars(tab, title, figsize, ax):
     def noise_label(col):
         """Label of "sigma_1min", "sigma_1min_crit" or a joint fit's per-detector column ("sigma_1min:NRS1")."""
         base, _, det = col.partition(":")
-        return (r"$\sigma_{1\,\rm min,\,crit}$" if base.endswith("_crit") else r"$\sigma_{1\,\rm min}$") + (f" {det}" if det else "") + " [ppm/min]"
+        return (r"$\sigma_{1\,\rm min,\,crit}$" if base.endswith("_crit") else r"$\sigma_{1\,\rm min}$") + (f" {det}" if det else "") + " [ppm]"
     rows = [(r"fitted $F$", tab["F_fit"], "{:.4f}"),
             (r"implied $T_{\rm night}$ [K]", tab["T_night_fit"], "{:.0f}"),
             *[(noise_label(c), tab[c], "{:.0f}") for c in noise_cols(tab)],   # delivered and critical noise, per detector for a joint fit
@@ -240,6 +249,7 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
                           bias_break=None, hide_unconstrained=True, *, planets, verbose=True):
     """Bars of a planet_bias_table: |bias| next to its Fisher sigma for each quantity in `quantities` (default: the table's own; ("F", "A_B")
     needs a redist=True table), and with sigma_crit_plot=True a panel of the delivered sigma_1min against sigma_1min_crit below each.
+    For F the Fisher sigma is indicative only (one-sided at F = 0); its significance is z_F (plot_planet_false_F_bars).
     The verdict (bias_verdict, recomputed per quantity) is written above every bar group.
     hide_unconstrained: drop the planets unconstrained in any plotted quantity; False draws them hatched, with the flat-prior std as a line.
     param_rows: a/Rs, ESM, Rp, P, t_obs, T_eff and t_crit per quantity under the bars. log_noise / log_bias: logarithmic noise / bias axes.
@@ -317,7 +327,7 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
         for xi, v in zip(x, verdict): bp[0].text(xi, 1.01, v, transform=bp[0].get_xaxis_transform(), ha="center", va="bottom", fontsize=8, **_VERDICT_STYLE[v])
         if log_bias: a0.set_yscale("log")
         a0.set_ylabel(ylab)
-        hidden = "unconstrained planets hidden" if hide_unconstrained else f"hatched: {name} not measured at all"
+        hidden = "unconstrained planets hidden" if hide_unconstrained else f"hatched: {name} unconstrained (Fisher $\\sigma \\geq$ flat-prior std)"
         bp[0].set_title(f"{pre}bias vs. Fisher uncertainty  (bias is measurable where the {blab} bar exceeds the {slab} bar; {hidden})", fontsize=11, pad=16)
 
         a0.legend(fontsize=9, loc="upper left")
@@ -328,7 +338,7 @@ def plot_planet_bias_bars(tab, bias_label=None, sigma_label=None, fmt_bias="{:+.
         b4 = a1.bar(x + w / 2, crit, w, color=MUTED, hatch=hatch, label=r"required $\sigma_{1\rm min, crit}$  (bias $=1\,\sigma$)")
         _bar_values(a1, b3, fmt_noise); _bar_values(a1, b4, fmt_noise)
         if log_noise: a1.set_yscale("log")
-        a1.set_ylabel("[ppm / min]")
+        a1.set_ylabel("[ppm]")
         a1.set_title(f"{pre}delivered vs. required photometric precision - hyperillumination matters where delivered $\\leq$ required (hatched: required is meaningless)", fontsize=11)
         a1.legend(fontsize=9, loc="upper left")
 
@@ -519,7 +529,8 @@ def plot_nightside_spectra(night, fits, pls, names, z_detect=2., noise_label=r"$
     """One column per planet, against wavelength (horizontal bars: band ranges). Top: the thermal nightside signal at mid-transit, edge-on and at
     the planet's inclination, the point-source value at the planet's inclination (the dayside seen past the pole; 0 edge-on) and sigma_amp.
     Bottom: T_b,night (edge-on, planet's inclination) and T_night^KL of the point-source fit with redistribution per band (filled: z_F >=
-    z_detect); a joint fit of several detectors is a line across their bands, a railed fit a grey "railed" mark. Returns fig."""
+    z_detect), each fit a line across its band (dashed, with a diamond, for a joint fit of several detectors), a railed fit a grey "railed"
+    mark. Returns fig."""
     fig, axs = plt.subplots(2, len(names), figsize=(6.2 * len(names), 8.5), sharex=True, sharey="row", squeeze=False)
     for j, nm in enumerate(names):
         ax, ax2 = axs[:, j]
@@ -561,7 +572,7 @@ def plot_sg_comparison(sg, band_label="MIRI/LRS"):
     (columns <key>_day / <key>_night of sg for pub, uniform, area, disk and band, and teske; see hemisphere_temperatures), and A_T. Returns fig."""
     names, y = list(sg["name"]), np.arange(len(sg))[::-1]
     fig, axs = plt.subplots(1, 3, figsize=(17, 5.), sharey=True, gridspec_kw=dict(width_ratios=(1.25, 1.25, 1.)))
-    series = [("pub", "*", INK, True, 12, "S&G 2026 Table 2 / eq. 18"),
+    series = [("pub", "*", INK, True, 12, "S&G 2026 Table 2 (A_T: their eq. 14)"),
               ("uniform", "o", INK, False, 9, "S&G recipe (eqs. 15-17, uniform weight), our insolation"),
               ("area", "o", C_REDIST, True, 7, "area mean of the flux"),
               ("disk", "o", C_HI, True, 7, "bolometric, disk-integrated (edge-on)"),
@@ -624,7 +635,7 @@ def plot_evidence_bins(cases, A_B_true, quad_half=0.1, title=None, figsize=None,
         axb.text(0.5, 0.97, rf"$\Sigma$ = {r2.sum():.2f} of $\chi^2_{{\min}}$ = {ev['chi2']:.2f}" + "\n" + ", ".join(f"{n} {v:.0f} %" for n, v in share.items()), transform=axb.transAxes, ha="center", va="top", fontsize=8,
                  bbox=dict(facecolor="#fcfcfb", edgecolor="none", alpha=0.85, pad=1.5), zorder=5)
         axb.set_xlabel("orbital phase (0 = transit)")
-    axes[0, 0].set_ylabel("residual [ppm]"); axes[1, 0].set_ylabel(r"$r_\perp^2$ per bin  (sums to $2\,\langle\ln B\rangle$)")
+    axes[0, 0].set_ylabel("residual [ppm]"); axes[1, 0].set_ylabel(r"$r_\perp^2$ per bin  (sums to $\chi^2_{\min} \approx 2\,\langle\ln B\rangle$)")
     axes[0, 0].legend(fontsize=8, loc="lower left")
     axes[1, 0].set_ylim(0., 1.45 * max(float((ev["r_perp"] ** 2).max()) for ev in evs.values()))   # head room for the budget text
     c0 = cols[0][1]
@@ -639,10 +650,10 @@ def plot_evidence_bins(cases, A_B_true, quad_half=0.1, title=None, figsize=None,
 
 def plot_bias_sweep(sweeps, A_B_true, xlabel, joint=False, mark=None, mark_label=None, title=None, figsize=(18., 5.)):
     """bias_sweep results per mode on shared axes, sweeps = {mode label: DataFrame}.
-    joint=False (A_B-only fit): the bias (right axis: % of the true A_B), |bias| / sigma, and <ln B> = chi2_min / 2.
+    joint=False (A_B-only fit): the bias (right axis: % of the true A_B), |bias| / sigma, and <ln B> ≈ chi2_min / 2.
     joint=True (sweep run with both models): the bias with redistribution (solid) next to the A_B-only fit (dashed), the spurious F, and
     z_F = sqrt(dchi2_F) (solid) next to |bias| / sigma of the fit with redistribution (dashed).
-    mark: the x value of the planet's own setting, drawn as the green star on every curve. Returns fig, axs."""
+    mark: the x value of the planet's own setting, drawn as the green star on every solid curve. Returns fig, axs."""
     fig, axs = plt.subplots(1, 3, figsize=figsize)
     colors = (C_HI, C_REDIST, INK_2, F_COLORS[0])
     star = lambda ax, t, col, **k: ax.plot(mark, np.interp(mark, t["value"].to_numpy()[np.argsort(t["value"].to_numpy())], t[col].to_numpy()[np.argsort(t["value"].to_numpy())]), **{**TARGET, "ms": 14, **k}) if mark is not None else None
@@ -667,7 +678,7 @@ def plot_bias_sweep(sweeps, A_B_true, xlabel, joint=False, mark=None, mark_label
     else:
         axs[1].axhline(1., color=INK, lw=.9, ls="--")
         axs[1].set_ylabel(r"$|\Delta A_B|\,/\,\sigma_{A_B}^{\rm Fisher}$"); axs[1].set_title("Significance of the bias")
-        axs[2].set_ylabel(r"$\langle\ln B\rangle = \chi^2_{\min}/2$"); axs[2].set_title("Expected evidence for the extended source")
+        axs[2].set_ylabel(r"$\langle\ln B\rangle \approx \chi^2_{\min}/2$"); axs[2].set_title("Expected evidence for the extended source")
     if mark is not None: axs[0].plot([], [], label=mark_label or "the planet's own value", **{**TARGET, "ms": 14})
     for a_ in axs: a_.set_xlabel(xlabel); a_.legend(fontsize=8)
     if title: fig.suptitle(title, y=1.02)

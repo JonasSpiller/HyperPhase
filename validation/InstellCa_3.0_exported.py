@@ -9,8 +9,8 @@
 #      INSTELLCA_U (default 0.6), so the u = 0 branch of the original code can be run without editing the file.
 #   2. The plotted arrays of the last planet are also written to a text file in outfiles/ next to this script (columns:
 #      angle from the substellar point [deg], geometric (extended-source) model [kW/m^2], inverse-square model [kW/m^2]),
-#      and the figure is saved there under the same name as a .png (the original saved it as <planet>.jpg in the working
-#      directory, or under a name typed in when several planets were plotted).
+#      and the figure is saved there as <tag>.png next to <tag>_instellca.txt (the original saved it as <planet>.jpg in the
+#      working directory, or under a name typed in when several planets were plotted).
 #   3. Numerical knobs for convergence tests, all defaulting to the original behaviour: INSTELLCA_EPSREL / INSTELLCA_EPSABS /
 #      INSTELLCA_LIMIT are passed to both scipy.integrate.quad calls (original: scipy defaults), INSTELLCA_NLAT sets the number
 #      of latitude points (original: 500), INSTELLCA_TAG is appended to the output file names.
