@@ -46,7 +46,7 @@ def noiseless_reference(cfg, data, models, A_B_true=None, insolation_truth=None,
     A_B_true = tr["A_B"] if A_B_true is None else A_B_true
     insolation_truth = tr.get("insolation_model", "hyperillum") if insolation_truth is None else insolation_truth
     truth_kw = truth_model_kw(data, cfg0) if truth_kw is None else dict(truth_kw)
-    F_truth = truth_kw.pop("F", None)                                 # only a "naive_redist" truth has one
+    F_truth = truth_kw.pop("F", None)                                 # only a redistribution truth has one
     off_inj = float(tr.get("offset", 0.))                             # the injected baseline, if any
     fit_kw = {} if xatol is None else dict(xatol=xatol)
 

@@ -98,7 +98,8 @@ per call (`A_B=`, `u_bol=`, ...) or per configuration (`dataclasses.replace(cfg,
 ## Conventions
 
 - **Models.** `"hyperillum"` is the extended star of the paper, `"naive"` the point source, and `"naive_redist"` the point source with the heat
-  redistribution $F$ of Kreidberg & Loeb (2016). `"hyperillum_redist"`, the extended star with $F$, serves only as a simulated truth.
+  redistribution $F$ of Kreidberg & Loeb (2016). `"hyperillum_redist"`, the extended star with $F$, serves as a simulated truth and can be sampled in the
+  retrievals (`MODELS` of `run_dynesty.py`); the noiseless fits use the two point-source models.
 - **Geometry.** `PlanetParams` names the planet radius `r1`, the stellar radius `r2` and the semi-major axis `R`, in any consistent units: only
   $R_p/R_\star$ = `r1/r2` and $a/R_\star$ = `R/r2` enter. `a_AU` is the semi-major axis in AU, for the light-travel time.
 - **Albedos and emissivities.** `A_B` is the Bond albedo of the energy balance, `A` the band-integrated albedo of the reflected light (the field

@@ -65,7 +65,8 @@ def _tabulate_insolation(planet, u_bol, insolation_model, n_tab=3000):
 
 # The insolation models: "hyperillum" (extended stellar disk), "naive" (point source), "naive_redist" (point source with the heat redistribution F
 # of Kreidberg & Loeb 2016, see Heat Redistribution below) and "hyperillum_redist" (extended disk with the same redistribution). The last is
-# truth-only: the hyper-illuminated planet that redistributes heat, for bias.sweeps.true_F_sweep; the fits and retrievals use "naive_redist".
+# the truth of bias.sweeps.true_F_sweep (the hyper-illuminated planet that redistributes heat) and a retrieval model (retrieval.likelihood);
+# the noiseless fits of hyperphase.bias fit the two point-source models only.
 INSOLATION_MODELS = ("hyperillum", "naive", "naive_redist", "hyperillum_redist")
 EXTENDED_SOURCE_MODELS = ("hyperillum", "hyperillum_redist")   # lit by the extended stellar disk (insolation map and reflected light)
 POINT_SOURCE_MODELS = ("naive", "naive_redist")                # irradiated by a point source
@@ -205,6 +206,7 @@ def check_redistribution(insolation_model, F):
         raise ValueError(f"heat redistribution parameter F must be in [0, 0.5], got F={F}")
 
 
+@lru_cache(maxsize=256)   # geometry and u_bol only: a retrieval of "hyperillum_redist" with fixed geometry asks for the same value at every call
 def mean_insolation(planet, insolation_model, u_bol=DEFAULT_U_BOL, n_tab=3000):
     """Mean insolation over the whole sphere [W m^-2], <I> = (1/2) int I(gamma1) sin(gamma1) dgamma1: the intercepted stellar power per unit
     surface area. S/4 for the point source (up to the quadrature), larger for the extended source."""
@@ -230,7 +232,8 @@ def temperature_from_insolation(insol, planet, insolation_model, A_B=DEFAULT_A_B
 
 def surface_temperature(gamma1, planet, insolation_model, u_bol=DEFAULT_U_BOL, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, F=None):
     """Surface temperature [K] at the angular distance gamma1 [rad] from the substellar point, in local radiative equilibrium (Eq. 6), with the heat
-    redistribution F of Kreidberg & Loeb (2016) for the redistribution models."""
+    redistribution F of Kreidberg & Loeb (2016) for the redistribution models (Eq. 9, its extension to the extended source, for
+    "hyperillum_redist")."""
     return temperature_from_insolation(insolation(gamma1, planet, insolation_model, u_bol=u_bol), planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F, u_bol=u_bol)
 
 

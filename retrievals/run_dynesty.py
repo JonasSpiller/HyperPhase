@@ -54,8 +54,11 @@ A_model = ConstantBandAlbedo(DEFAULT_A)   # band-integrated albedo A of the refl
 instruments = ("JWST_NIRSpec.G395H_NRS1",)   # e.g. ("JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2", "JWST_NIRSpec.G395H_joint", "MIRI/LRS", "MIRI/F1280W")
 
 INSOL_TRUTH = "hyperillum"   # insolation model the simulated data are drawn from (no redistribution in the truth: any fitted F is bias)
-F_TRUE = None                # heat redistribution of the truth, only for INSOL_TRUTH = "naive_redist" (None otherwise); the fitted F is then compared with it
+F_TRUE = None                # heat redistribution of the truth, only for a redistribution truth (irradiance.REDIST_MODELS; None otherwise); the fitted F is then compared with it
 MODELS = ("hyperillum", "naive", "naive_redist")  # insolation models fitted to those data; each one is sampled with its OWN pset (see PSETS)
+# A fourth model can be added or run alone: "hyperillum_redist", the extended source with the redistribution F (its fit joins the dataset of the others: same tag).
+# Fitted to a planet without redistribution, a model with F returns an A_B posterior below that of its bare-rock counterpart, also with the correct irradiance:
+# F cannot be negative and is anticorrelated with A_B (an effect of the boundary F = 0, not of the model).
 
 seed = 42
 
@@ -73,11 +76,13 @@ def offset_param(label=None):
     return Parameter("offset" if label is None else f"offset_{label}", Uniform(*OFFSET_BOUNDS), "offset [ppm]" if label is None else f"offset {label} [ppm]")
 
 def psets_for(labels=None):
-    """{model: ParameterSet} for a single band (labels=None) or the detectors `labels` of a joint fit; each model is sampled with its OWN set (only naive_redist has F)."""
+    """{model: ParameterSet} for a single band (labels=None) or the detectors `labels` of a joint fit; each model is sampled with its OWN set (only the two models with
+    redistribution have F)."""
     offsets = (offset_param(),) if labels is None else tuple(offset_param(l) for l in labels)
-    return {"hyperillum":   ParameterSet((_A_B, *offsets)),
-            "naive":        ParameterSet((_A_B, *offsets)),
-            "naive_redist": ParameterSet((_A_B, *offsets, _F))}
+    return {"hyperillum":        ParameterSet((_A_B, *offsets)),
+            "naive":             ParameterSet((_A_B, *offsets)),
+            "naive_redist":      ParameterSet((_A_B, *offsets, _F)),
+            "hyperillum_redist": ParameterSet((_A_B, *offsets, _F))}
 
 # Sampler. pfrac=0.8 -> effort on the posterior; pfrac=0 -> all effort on lnZ (for the Bayes factor)
 sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10, dlogz=0.01, nprocs=12)
@@ -144,21 +149,22 @@ def run_instrument(instrument):
 
     # Summary. The injected value of every parameter any model samples (every baseline is 0): without redistribution in the truth the injected F is 0,
     # so the posterior's distance from it IS the bias (posterior_summary only quotes a bias for parameters a model actually samples, so one base
-    # serves all three).
+    # serves every model).
     base = dict(A_B=A_B_true, F=0. if data["truth"]["F"] is None else data["truth"]["F"], **{p_.name: 0. for p_ in PSETS["hyperillum"].params if p_.name.startswith("offset")})
     print("\n" + "=" * 78)
     for f in fits.values():
         posterior_summary(f, base)
 
-    # Bayes factors, all against the truth's own model: "can these data tell hyperillumination from the naive alternative,
-    # and from the naive alternative that is allowed to hide the difference in a redistribution F?"
-    for den in ("naive", "naive_redist"):
-        if all(m in fits for m in ("hyperillum", den)):
-            bayes_factor(fits, "hyperillum", den, K=200)
+    # Bayes factors of hyperillum (the truth's model for INSOL_TRUTH = "hyperillum"): "can these data tell hyperillumination from the naive alternative,
+    # and from the naive alternative that is allowed to hide the difference in a redistribution F?" The last pair lets both irradiation models redistribute heat: the prior of F is
+    # the same in both, so it cancels (against "hyperillum" the F prior of "naive_redist" adds an Occam term).
+    for num, den in (("hyperillum", "naive"), ("hyperillum", "naive_redist"), ("hyperillum_redist", "naive_redist")):
+        if num in fits and den in fits:
+            bayes_factor(fits, num, den, K=200)
 
     print(f"\n{name}: {(time.perf_counter() - t0)/60:.1f} min")
     for m, f in fits.items():
-        print(f"   {m:11s} -> {f.meta.get('file', '(not saved)')}")
+        print(f"   {m:17s} -> {f.meta.get('file', '(not saved)')}")
     return fits
 
 

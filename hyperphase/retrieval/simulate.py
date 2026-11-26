@@ -17,7 +17,7 @@ TRUTH_KW = dict(k_truth=200, n_layers=80, n_lo=600, n_la=300)
 
 
 def truth_model_kw(data, cfg):
-    """The model_pcurve keywords the truth of `data` was computed with (n_t, n_layers, n_lo, n_la, and F for a "naive_redist" truth),
+    """The model_pcurve keywords the truth of `data` was computed with (n_t, n_layers, n_lo, n_la, and F for a redistribution truth),
     from data["truth"]["model_kw"]; data without this record are assumed to have TRUTH_KW."""
     tr = dict(data.get("truth") or {})
     kw = dict(tr.get("model_kw") or dict(n_t=TRUTH_KW["k_truth"] * cfg.n_bins, n_layers=TRUTH_KW["n_layers"], n_lo=TRUTH_KW["n_lo"], n_la=TRUTH_KW["n_la"]))
@@ -44,11 +44,12 @@ def simulate_data(cfg, A_B_true, insolation_model="hyperillum", seed=42, noise=T
     cfg      : FittingConfig, or a detector set (same planet and binning): one dataset per detector from the same truth and ONE noise
                stream, so the first detector's draws equal its single-band dataset of the same seed. The per-detector dicts are in
                data["detectors"], next to the concatenated "t", "y_obs", "sigma".
-    noise    : False gives the noiseless (Asimov) dataset; not for lnZ / Bayes factors (chi2 = 0 at the truth inflates Z).
+    noise    : False gives the noiseless (Asimov) dataset: each lnZ is inflated (chi2 = 0 at the truth), but ln B is the expected value,
+               ~chi2_min / 2.
     offset   : constant baseline added to the data [ppm].
     k_truth  : samples per bin of the truth (n_t = k_truth * n_bins).
     labels   : detector names for the plot of a detector set.
-    model_kw : further model_pcurve keywords of the truth, e.g. F for "naive_redist".
+    model_kw : further model_pcurve keywords of the truth, e.g. F for a redistribution model (irradiance.REDIST_MODELS).
     data["truth"] records A_B, model, F, offset, seed and the truth's model_pcurve settings, and travels into NestedFit.meta.
     """
     if is_detector_set(cfg):

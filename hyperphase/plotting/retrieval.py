@@ -67,7 +67,7 @@ def plot_simulated_data(cfg, A_B_true, data, insolation_model="hyperillum", labe
 ############################################################################################################################################
 #####   Posterior visualization
 ############################################################################################################################################
-_COLOR = {"naive": "C0", "hyperillum": "C3", "naive_redist": "C2"}
+_COLOR = {"naive": "C0", "hyperillum": "C3", "naive_redist": "C2", "hyperillum_redist": "C1"}
 
 
 def _density_levels(x, y, rng=None, bins=60, smooth=1.0, levels=(0.68, 0.95)):

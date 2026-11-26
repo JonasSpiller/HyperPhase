@@ -89,7 +89,7 @@ def load_fits(paths):
 DATASET_TAG = "{planet}_{instrument}_{A_label}_AB{A_B:g}_nbins{n_bins}_norbits{n_orbits}_rms1min{rms}_sigmascale{sigma_scaling:g}_seed{seed}_pfrac{pfrac:g}"
 _RESULT_FILE_RE = re.compile(r"^(?P<planet>[^_]+)_(?P<instrument>.+?)_(?P<A_label>(?:fixed|scaled)A[\d.]+)_AB(?P<A_B>[\d.]+)_nbins(?P<n_bins>\d+)_norbits(?P<n_orbits>\d+)"
                              r"_rms1min(?P<rms>[\d.+]+)_sigmascale(?P<sigma_scaling>[\d.]+)_seed(?P<seed>\d+)_pfrac(?P<pfrac>[\d.]+)"
-                             r"_(?P<insolation_model>hyperillum|naive_redist|naive)_priors-(?P<priors>.+)\.pkl$")
+                             r"_(?P<insolation_model>hyperillum_redist|hyperillum|naive_redist|naive)_priors-(?P<priors>.+)\.pkl$")   # the longer name first
 DATASET_COLUMNS = ["planet", "instrument", "A_B", "n_bins", "n_orbits", "seed", "pfrac", "sigma_scaling", "A_label", "rms", "models", "subfolder", "tag"]
 
 

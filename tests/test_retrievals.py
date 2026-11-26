@@ -7,7 +7,8 @@ import pytest
 
 from hyperphase.bias.detectors import detector_cfgs
 from hyperphase.retrieval.simulate import simulate_data
-from hyperphase.retrieval.storage import check_fit_current, load_fit, load_fits, logl_from_fit
+from hyperphase.retrieval.likelihood import make_logl
+from hyperphase.retrieval.storage import check_fit_current, load_fit, load_fits, logl_from_fit, parse_result_file
 
 FIXED_GEOMETRY = ["TOI-2431b_MIRI-LRS_*.pkl", "TOI-2431b_JWST_NIRSpec*.pkl"]
 FREE_GEOMETRY = ["free_geometry/TOI-2431b_MIRI-LRS_*.pkl"]
@@ -53,6 +54,26 @@ def test_example_runs_are_current(root, newera_cube, pattern):
         if pattern in FREE_GEOMETRY:
             theta, logl = best_sample(fit)
             assert logl_from_fit(fit)(theta) == pytest.approx(logl, abs=1e-6), model
+
+
+@pytest.mark.parametrize("pattern", FIXED_GEOMETRY)
+def test_extended_source_with_redistribution_is_a_retrieval_model(root, pattern):
+    """"hyperillum_redist" is sampled in (A_B, F) like "naive_redist". On the data and priors of a stored run its likelihood keeps both geometry
+    caches, equals that of "hyperillum" at F = 0 (the same temperature map), falls when a bare rock is given a redistribution of 5 %, and
+    cannot be built without F; a result file of the model is recognised as one."""
+    fits = example_fits(root, pattern)
+    bare, with_F = fits["hyperillum"], fits["naive_redist"]   # with_F: a stored ParameterSet that samples F
+    cfg, data, labels = with_F.meta["cfg"], with_F.meta["data"], with_F.meta["labels"]
+    logl = make_logl(cfg, data, "hyperillum_redist", with_F.pset, labels=labels)
+    assert logl.cache_used == ("refl", "insol")
+    theta, best = best_sample(bare)
+    at = lambda F: logl(np.array([{**dict(zip(bare.pset.names, theta)), "F": F}[name] for name in with_F.pset.names]))
+    assert at(0.) == pytest.approx(best, abs=1e-6)
+    assert at(0.05) < at(0.) - 10.
+    with pytest.raises(ValueError, match="needs F"):
+        make_logl(cfg, data, "hyperillum_redist", bare.pset, labels=labels)
+    name = Path(with_F.meta["file"]).name.replace("_naive_redist_priors-", "_hyperillum_redist_priors-")
+    assert parse_result_file(name)["insolation_model"] == "hyperillum_redist"
 
 
 def test_runs_from_another_machine_find_their_filters(root, tmp_path):

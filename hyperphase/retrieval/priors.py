@@ -115,6 +115,6 @@ class ParameterSet:
 _GEOMETRY = ("a_rs", "T_s", "rp_rs")
 
 # The orbital inclination, as "incl" [deg] or the impact parameter "b" (whichever the planet's source fitted: paper.GEOMETRY_PARAMS).
-# Not a model_pcurve keyword: _orbit_cfg puts it into the planet. F is for insolation_model="naive_redist" only.
+# Not a model_pcurve keyword: _orbit_cfg puts it into the planet. F is for the redistribution models ("naive_redist", "hyperillum_redist") only.
 _ORBIT = ("incl", "b")
 _KNOWN = ("A_B", "offset", "F") + _GEOMETRY + _ORBIT

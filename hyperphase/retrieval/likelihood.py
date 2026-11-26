@@ -8,6 +8,7 @@ from joblib import Parallel, delayed
 from hyperphase.bias.detectors import _blocks, is_detector_set
 from hyperphase.bias.fits import binned
 from hyperphase.defaults import DEFAULT_N_LA, DEFAULT_N_LO
+from hyperphase.irradiance import REDIST_MODELS
 from hyperphase.model import insolation_cache, model_pcurve, pcurve_params, reflected_unit, swept_planet
 from hyperphase.phasecurve import custom_temperature_grid, occultation_depth
 from hyperphase.retrieval.priors import _GEOMETRY, _KNOWN, _ORBIT
@@ -19,10 +20,12 @@ from hyperphase.retrieval.simulate import detector_data
 ############################################################################################################################################
 
 # Which sampled parameters invalidate which geometry-only cache. The insolation map does not depend on the inclination. "naive_redist"
-# reflects like "naive" and has no insolation map (its thermal part is the analytic Louden model).
+# reflects like "naive" and has no insolation map (its thermal part is the analytic Louden model). "hyperillum_redist" shares the reflected light
+# and the insolation map of "hyperillum": F redistributes the absorbed heat, not the irradiance.
 _CACHE_DEPS = {
-    "refl":  {"naive": ("a_rs", "rp_rs", "incl", "b"), "hyperillum": ("a_rs", "rp_rs", "incl", "b"), "naive_redist": ("a_rs", "rp_rs", "incl", "b")},
-    "insol": {"naive": ("a_rs", "T_s"),        "hyperillum": ("a_rs", "T_s", "rp_rs"),   "naive_redist": ()},
+    "refl":  {"naive": ("a_rs", "rp_rs", "incl", "b"), "hyperillum": ("a_rs", "rp_rs", "incl", "b"), "naive_redist": ("a_rs", "rp_rs", "incl", "b"),
+              "hyperillum_redist": ("a_rs", "rp_rs", "incl", "b")},
+    "insol": {"naive": ("a_rs", "T_s"),        "hyperillum": ("a_rs", "T_s", "rp_rs"),   "naive_redist": (),   "hyperillum_redist": ("a_rs", "T_s", "rp_rs")},
 }
 
 
@@ -57,8 +60,8 @@ class GaussianLogL:
         if clash: raise ValueError(f"parameter(s) {clash} are both sampled and fixed")
         if "A_B" not in self.names and "A_B" not in self.fixed: raise ValueError("A_B must be either sampled (in `names`) or supplied in `fixed`")
         has_F = "F" in self.names or "F" in self.fixed
-        if insolation_model == "naive_redist" and not has_F: raise ValueError('insolation_model="naive_redist" needs F either sampled (in `names`) or supplied in `fixed`')
-        if has_F and insolation_model != "naive_redist": raise ValueError(f'F is only defined for insolation_model="naive_redist", not {insolation_model!r}')
+        if insolation_model in REDIST_MODELS and not has_F: raise ValueError(f'insolation_model="{insolation_model}" needs F either sampled (in `names`) or supplied in `fixed`')
+        if has_F and insolation_model not in REDIST_MODELS: raise ValueError(f'F is only defined for the redistribution models {REDIST_MODELS}, not {insolation_model!r}')
         if all(any(n in s for s in (self.names, self.fixed)) for n in _ORBIT): raise ValueError('give the inclination either as "incl" or as "b", not both')
         geom_in_kw = [k for k in self.model_kw if k in _GEOMETRY + _ORBIT]
         if geom_in_kw: raise ValueError(f"pass geometry {geom_in_kw} via `fixed`, not as model_kw")
@@ -75,13 +78,13 @@ class GaussianLogL:
         self._const = float(np.sum(np.log(2. * np.pi * self.sigma ** 2)))  # theta-independent
         self.data = {"t": self.t, "y_obs": self.y, "sigma": self.sigma, "truth": dict(self.truth)}   # what run_nested_fit stores with the fit
 
-        # Geometry-only caches (bit-identical speed-ups): each is dropped as soon as ANY parameter it depends on is sampled,
-        # so it is never used at a geometry it was not built at.
+        # Geometry-only caches (bit-identical speed-ups): each is built at the fixed geometry (and inclination) and dropped as soon as ANY
+        # parameter it depends on is sampled, so it is never used at a geometry it was not built at.
         geom = {k: v for k, v in self.fixed.items() if k in _GEOMETRY}
         self._live = {k: cache and not any(n in self.names for n in deps[insolation_model]) for k, deps in _CACHE_DEPS.items()}
         self._live["refl"] &= cfg.reflected  # nothing to cache when the reflected part is switched off
         self._live["insol"] &= insolation_model != "naive_redist"
-        self.refl_unit = reflected_unit(cfg, insolation_model, n_t=self.model_kw.get("n_t"), **geom) if self._live["refl"] else None
+        self.refl_unit = reflected_unit(_orbit_cfg(cfg, self.fixed), insolation_model, n_t=self.model_kw.get("n_t"), **geom) if self._live["refl"] else None
         self.insol = insolation_cache(cfg, insolation_model, n_lo=self.model_kw.get("n_lo", DEFAULT_N_LO), n_la=self.model_kw.get("n_la", DEFAULT_N_LA), **geom) if self._live["insol"] else None
 
     @classmethod
@@ -402,7 +405,7 @@ def derived_samples(logl, thetas, n_jobs=-1):
 
     T_sub, T_term, T_anti : equatorial temperature [K] at the substellar point, the terminator (90 deg) and the antistellar point, interpolated
         on the map. Under "naive" T_anti is 0 K and T_term lies between the last day- and the first nightside node; under "naive_redist"
-        T_anti is the uniform nightside of Kreidberg & Loeb eq. 1.
+        T_anti is the uniform nightside of Kreidberg & Loeb eq. 1, under "hyperillum_redist" that of the same redistribution of the extended source.
     depth_th, depth_refl, depth : occultation depth [ppm], thermal / reflected / total, in the fit's band. A joint fit gives them per detector
         ("depth:<label>", ...), the un-suffixed keys being the first detector's; pass depth_th to brightness_temperature with that detector's cfg.
     A_B : the sampled (or fixed) Bond albedo.
