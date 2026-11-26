@@ -89,15 +89,16 @@ def rms_1min_pandexo(result, T14, lambda_range, visualize=False, extra=False):
 
 
 def pandexo_params(planet_name, **overrides):
-    """Everything PandExo needs about one planet, by name, from the archive table (curated planets applied). A required value that is
-    neither there nor overridden raises ValueError."""
+    """Everything PandExo needs about one planet, by name, from the archive table (curated planets applied). A planet the table does not have
+    raises NoNoiseLevelError; a required value that is neither there nor overridden raises ValueError."""
     bad = set(overrides) - set(PANDEXO_PARAM_KEYS)
     if bad:
         raise TypeError(f"unknown override(s) {sorted(bad)}; valid keys are {list(PANDEXO_PARAM_KEYS)}")
 
     row = _archive().pipe(lambda d: d[d["_key"] == _normalise(planet_name)])
     if row.empty:
-        raise KeyError(f"{planet_name!r} not found in {INPUT_GLOB}")
+        raise NoNoiseLevelError(f"no noise level for {planet_name!r}: the PandExo inputs are read by name from the archive snapshot ({INPUT_GLOB}), "
+                                f"which does not have this planet. Give its FittingConfig a sigma_1min [ppm] of your own.")
     row = row.iloc[0]
 
     params = {key: row[col] for key, col in PANDEXO_COLUMNS.items()}
@@ -327,7 +328,9 @@ def _pandexo_cache_store(entries):
 
 
 def rms_1min(planet, instrument, lrs_range=None, use_cache=True, **overrides):
-    """Noise level sigma_1min [ppm/min] of one planet on one instrument (a FILTER_LAMBDA_UM key).
+    """Noise level sigma_1min [ppm] of one planet on one instrument (a FILTER_LAMBDA_UM key). The PandExo inputs (star, radius, magnitude) are
+    read from the archive by planet.name, with the curated values applied (pandexo_params), and only T14 from planet itself: a PlanetParams
+    changed with dataclasses.replace gets the noise of the catalogued planet, and one the archive does not have raises NoNoiseLevelError.
 
     A mode in UNOBSERVABLE raises NoNoiseLevelError. A band without a PandExo mode takes its value from CUSTOM_SIGMA_1MIN (lrs_range and
     overrides then do not apply), or raises NoNoiseLevelError. Otherwise the value comes from the PandExo cache, else from run_pandexo +

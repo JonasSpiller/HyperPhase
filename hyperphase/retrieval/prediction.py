@@ -246,9 +246,9 @@ def series_table(results_dir, series, K=200, n_jobs=-1, redist=False):
 
     series : {series name: [find_dataset keyword dicts]}.
     redist : evidence_reference(..., redist=True), for the columns of the fit with redistribution.
-    Runs that are missing or lack one of the two models are skipped and listed, so the table can be rebuilt as runs finish. The noiseless
-    reference is computed once per configuration (seed and pfrac aside); configurations and runs run in parallel.
-    Returns (table, missing), missing = [(series name, keywords, reason)].
+    Runs that are missing or lack one of the two models are skipped and listed, so the table can be rebuilt as runs finish; none at all
+    raises FileNotFoundError. The noiseless reference is computed once per configuration (seed and pfrac aside); configurations and runs run in
+    parallel. Returns (table, missing), missing = [(series name, keywords, reason)].
     """
     runs, missing = [], []
     for name, entries in series.items():
@@ -259,7 +259,8 @@ def series_table(results_dir, series, K=200, n_jobs=-1, redist=False):
             models = sorted(d["insolation_model"] for d in map(parse_result_file, glob.glob(pattern)) if d)
             if not {"hyperillum", "naive"} <= set(models): missing.append((name, kw, f"incomplete: only {', '.join(models)}")); continue
             runs.append((name, kw, stem, pattern))
-    if not runs: return pd.DataFrame(), missing
+    if not runs: raise FileNotFoundError(f"none of the {len(missing)} runs of these series is in {results_dir!r}. The stored retrievals are not part of "
+                                         f"the repository: run retrievals/paper_runs/ first (README, Reproducing the retrievals).")
     config = lambda stem: re.sub(r"_seed\d+_pfrac[\d.]+$", "", stem)   # what the noiseless reference depends on
     first = {}
     for _, _, stem, pattern in runs: first.setdefault(config(stem), pattern)

@@ -1,5 +1,6 @@
 """Planet parameters, instrument bands, noise levels and the definition of the paper's retrievals."""
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -84,6 +85,12 @@ def test_noise_levels_without_pandexo(toi2431b):
         rms_1min(hi_planets_by_name("K2-141 b"), "MIRI/F1280W")
     with pytest.raises(NoNoiseLevelError):
         rms_1min(hi_planets_by_name("55 Cnc e"), "JWST_NIRSpec.G395H_NRS1")
+
+
+def test_a_planet_the_archive_lacks_has_no_noise_level(toi2431b):
+    """The PandExo inputs are read by name, so a planet of one's own raises NoNoiseLevelError, which the tables and run_dynesty.py handle."""
+    with pytest.raises(NoNoiseLevelError, match="sigma_1min"):
+        rms_1min(replace(toi2431b, name="My planet"), "MIRI/LRS")
 
 
 def test_paper_runs_define_every_retrieval(root):

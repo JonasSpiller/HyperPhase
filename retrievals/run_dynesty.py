@@ -177,7 +177,7 @@ if __name__ == "__main__":
         print("\n" + "#" * 100 + f"\n### {instrument if isinstance(instrument, str) else joint_name(instrument)}   ({k} / {len(instruments)})\n" + "#" * 100)
         try:
             results[instrument] = run_instrument(instrument)
-        except NoNoiseLevelError as e:   # no PandExo mode and no CUSTOM_SIGMA_1MIN entry for this planet: nothing to simulate, so the band is skipped and the others still run
+        except NoNoiseLevelError as e:   # no noise level for this planet in this band (no PandExo mode or CUSTOM_SIGMA_1MIN entry, unobservable, or fully saturated): skipped, the others still run
             skipped[instrument] = str(e)
             print(f"\nWARNING: {instrument} skipped for {planet.name} - no noise level: {e}", file=sys.stderr, flush=True)
         except Exception as e:   # any other failure of one band must not cost the other bands their run - as separate runs would not
@@ -188,8 +188,8 @@ if __name__ == "__main__":
     nm = lambda ins: ins if isinstance(ins, str) else joint_name(ins)
     for instrument, fits in results.items():
         print(f"   {nm(instrument):26s} " + ", ".join(f"{m} lnZ = {f.meta['lnZ']:.3f}" for m, f in fits.items()))
-    for instrument in skipped:
-        print(f"   {nm(instrument):26s} SKIPPED: no noise level for {planet.name} (no PandExo mode, no CUSTOM_SIGMA_1MIN entry)")
+    for instrument, reason in skipped.items():
+        print(f"   {nm(instrument):26s} SKIPPED: {reason}")
     for instrument, err in failed.items():
         print(f"   {nm(instrument):26s} FAILED: {err}")
     if failed: sys.exit(1)

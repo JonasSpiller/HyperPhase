@@ -93,7 +93,9 @@ register_band("NIRCam/F444W", 3.9e-6, 5.0e-6, "/path/to/f444w_throughput.dat")  
 ```
 
 Single values of a catalogued planet change with `dataclasses.replace(hi_planets_by_name("TOI-2431 b"), incl=75.)`, and the baseline settings
-per call (`A_B=`, `u_bol=`, ...) or per configuration (`dataclasses.replace(cfg, u_bol=0.6)`).
+per call (`A_B=`, `u_bol=`, ...) or per configuration (`dataclasses.replace(cfg, u_bol=0.6)`). The noise levels are the exception: `rms_1min`
+reads its PandExo inputs from the archive by the planet's name, so a planet the archive does not have raises `NoNoiseLevelError`, and a
+modified catalogued planet keeps the catalogued noise. Give such a configuration a `sigma_1min` [ppm] of your own.
 
 ## Conventions
 

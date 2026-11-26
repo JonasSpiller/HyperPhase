@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from hyperphase.bias.detectors import detector_cfgs
+from hyperphase.retrieval.prediction import series_table
 from hyperphase.retrieval.simulate import simulate_data
 from hyperphase.retrieval.likelihood import make_logl
 from hyperphase.retrieval.storage import check_fit_current, load_fit, load_fits, logl_from_fit, parse_result_file
@@ -104,3 +105,9 @@ def test_runs_with_another_spelling_of_the_filter_path_take_the_canonical_one(ro
         pickle.dump(fit, f)
     for cfg in detector_cfgs(load_fit(moved).meta["cfg"]):
         assert Path(cfg.filter_path).parent == root / "inputs" / "filters" / "Spiderman"
+
+
+def test_series_table_without_stored_runs_says_where_they_come_from(tmp_path):
+    """Without the stored retrievals (not part of the repository) the series table stops with a message that names their source."""
+    with pytest.raises(FileNotFoundError, match="paper_runs"):
+        series_table(str(tmp_path), {"one run": [dict(planet="TOI-2431 b", instrument="MIRI/LRS", seed=44)]})
