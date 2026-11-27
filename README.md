@@ -1,7 +1,6 @@
 # HyperPhase
 
 Phase curves of rocky exoplanets that orbit so close to their star that it can no longer be treated as a point source.
-
 At $2 < a/R_\star < 3$ the star subtends an angular radius of 20°–30° as seen from the planet and illuminates two thirds to three quarters of its
 surface, so a bare rock emits from beyond the classical terminator. HyperPhase computes the irradiance of the extended stellar disk
 ("hyper-illumination"), the resulting surface-temperature maps, and thermal and reflected phase curves in the JWST bands. It then quantifies
@@ -13,7 +12,7 @@ nuisance parameters, and nested-sampling retrievals of simulated observations.
   <img src="docs/temperature_maps_TOI-2431b.png" width="560" alt="Surface temperature maps of TOI-2431 b for a point source and an extended star">
 </p>
 
-*Surface temperature of the bare rock TOI-2431 b ($a/R_\star = 2.08$, Bond albedo 0.2) for a point-source star (top) and the extended star
+*Surface temperature of the bare rock TOI-2431 b ($`a/R_\star = 2.08`$, Bond albedo 0.2) for a point-source star (top) and the extended star
 (bottom), seen edge-on at quadrature (left) and at transit (right). The extended star heats a ring beyond the terminator, which is visible even when
 the nightside faces the observer.*
 
