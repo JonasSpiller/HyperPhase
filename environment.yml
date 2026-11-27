@@ -11,6 +11,7 @@ channels:
 dependencies:
   - python=3.11
   - pip
+  - setuptools<81                     # ExoTiC-LD 3.2.0 imports pkg_resources, which setuptools 81 removed
   - jupyterlab
   - pip:
       - numpy==2.4.6

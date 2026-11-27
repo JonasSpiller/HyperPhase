@@ -16,7 +16,8 @@ dependencies = ["numpy>=2", "scipy", "matplotlib", "pandas", "astropy", "joblib"
 
 [project.optional-dependencies]
 noise = ["pandexo.engine", "pandeia.engine", "synphot", "stsynphot"]   # PandExo noise levels beyond the shipped cache
-limb-darkening = ["exotic-ld"]
+limb-darkening = ["exotic-ld", "setuptools<81"]   # ExoTiC-LD 3.2.0 imports pkg_resources, which setuptools 81 removed
+validation = ["colorama"]   # validation/instellca_comparison.ipynb: InstellCa imports colorama
 newera = ["h5py"]   # inputs/stellar_model/NewEra/build_newera.ipynb, which builds the NewEra cube
 test = ["pytest"]
 
