@@ -277,9 +277,9 @@ def custom_temperature_grid(planet, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la
 def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insolation_model="hyperillum", F=None, stellar_model=STELLAR_MODEL, filter_path=False, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, emissivity=DEFAULT_EMISSIVITY, N_LAYERS=None, include_transit=True, include_occultation=True, spman="fast", spman_kw=None):
     """Thermal phase curve from SPIDERMAN's direct_T model with the temperature map of insolation_model ("naive_redist": see Louden_PhaseCurve).
 
-    lambda_range: band edges [m]; SPIDERMAN integrates a top-hat over them for filter_path=False, else the throughput file. F: heat redistribution
-    of the redistribution models. emissivity_bol sets the temperature map with A_B. emissivity scales the planet flux and the depth, not the
-    transit: SPIDERMAN emits the Planck function, so the thermal flux is exactly linear in it. N_LAYERS: radial layers of SPIDERMAN's map, by
+    lambda_range: band edges [m]; SPIDERMAN integrates a top-hat over them for filter_path=False (or None), else the throughput file. F: heat
+    redistribution of the redistribution models. emissivity_bol sets the temperature map with A_B. emissivity scales the planet flux and the depth,
+    not the transit: SPIDERMAN emits the Planck function, so the thermal flux is exactly linear in it. N_LAYERS: radial layers of SPIDERMAN's map, by
     default 40 for the extended source and 60 for the point source, whose terminator lies on the limb at full phase, so its occultation depth
     converges more slowly; use >= 120 to compare depths between models. spman="fast" interpolates the phase modulation (fast_lightcurve, options in
     spman_kw), "normal" evaluates every time.
@@ -325,7 +325,7 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=D
 
     spider_params.l1, spider_params.l2 = lambda_range  # band edges [m]
 
-    spider_params.filter = filter_path
+    spider_params.filter = filter_path or False   # None and False: a top-hat
     stellar_grid = stellar_spidergrid(lambda_range, filter_path, planet.logg, planet.feh, stellar_model=stellar_model)
     check_teff_nodes(stellar_grid, T2_eff)
 
@@ -373,7 +373,7 @@ def louden_params(planet, lambda_range, F, t0=0., filter_path=False, A_B=DEFAULT
     sp_louden.T_int = 0. # no internal heating
     sp_louden.l1, sp_louden.l2 = lambda_range
 
-    sp_louden.filter = filter_path
+    sp_louden.filter = filter_path or False
     return sp_louden
 
 

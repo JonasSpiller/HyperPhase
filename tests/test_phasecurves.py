@@ -10,6 +10,7 @@ from scipy.constants import c, h, k
 from hyperphase.stellar import T_bright
 from hyperphase.phasecurve import full_PhaseCurve, Louden_PhaseCurve, nightside_flux, reflected_PhaseCurve, thermal_PhaseCurve
 from hyperphase.irradiance import surface_temperature
+from hyperphase.model import model_pcurve
 
 
 def thermal(planet, band, model, **kw):
@@ -100,6 +101,16 @@ def test_extended_star_brightens_the_planet(toi2431b, lrs):
     night = {m: nightside_flux(toi2431b, lrs[0], insolation_model=m, **kw)[0] for m in ("hyperillum", "naive")}
     assert depth["hyperillum"] > depth["naive"]
     assert night["hyperillum"] > night["naive"]
+
+
+def test_top_hat_band(toi2431b, cfg_lrs):
+    """filter_path=None is a top-hat over the band, as False is: in the phase curves and in a FittingConfig, for direct_T and the Louden model."""
+    kw = dict(filter_path=None, stellar_model="blackbody")
+    for model, F in (("hyperillum", None), ("naive_redist", 0.1)):
+        none = full_PhaseCurve(toi2431b, (5e-6, 12e-6), insolation_model=model, F=F, **kw)
+        false = full_PhaseCurve(toi2431b, (5e-6, 12e-6), insolation_model=model, F=F, **{**kw, "filter_path": False})
+        assert np.array_equal(none[1], false[1]) and none[2] == false[2], model
+        assert np.all(np.isfinite(model_pcurve(replace(cfg_lrs, filter_path=None), model, 0.2, F=F)[1])), model
 
 
 INSIDE_THE_STAR = """

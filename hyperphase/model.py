@@ -46,7 +46,7 @@ class FittingConfig:
     with_planet moves one to another planet; both give the planet its own part of the band where its host saturates the rest
     (bands.filter_lambda)."""
     planet: object          # PlanetParams: geometry, orbit and host star
-    filter_path: str = None   # throughput file; None with l1 = l2 = nan: a band-less template for instrument_cfg
+    filter_path: str = None   # throughput file; None: a top-hat over (l1, l2), or with l1 = l2 = nan a band-less template for instrument_cfg
     l1: float = np.nan      # band blue edge [m]
     l2: float = np.nan      # band red edge [m]
     A_: object = ConstantBandAlbedo()   # band albedo A as a function of the Bond albedo A_B (used when reflected=True)
@@ -163,7 +163,7 @@ def pcurve_params(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_r
     p.p_u1 = p.p_u2 = 0.
     p.T_s, p.l1, p.l2 = planet.T2_eff, cfg.l1, cfg.l2
     p.grid = sp.format_grid(LO, LA, Tg.T)   # no temperature floor, see thermal_PhaseCurve
-    p.filter, p.eclipse = cfg.filter_path, True
+    p.filter, p.eclipse = cfg.filter_path or False, True   # None: a top-hat over (l1, l2)
     return p
 
 
