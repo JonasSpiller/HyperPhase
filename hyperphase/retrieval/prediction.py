@@ -24,7 +24,7 @@ from hyperphase.retrieval.likelihood import theta_of
 from hyperphase.retrieval.priors import Normal, TruncNormal, _GEOMETRY, _ORBIT
 from hyperphase.retrieval.sampler import bayes_factor, posterior_summary
 from hyperphase.retrieval.simulate import truth_model_kw
-from hyperphase.retrieval.storage import check_fit_current, find_dataset, load_fits, logl_from_fit, parse_result_file
+from hyperphase.retrieval.storage import check_fit_current, find_dataset, load_fits, logl_from_fit, parse_result_file, run_subfolder
 
 
 ############################################################################################################################################
@@ -82,13 +82,10 @@ def noiseless_reference(cfg, data, models, A_B_true=None, insolation_truth=None,
 
 
 def run_kind(fits):
-    """What a stored run is beyond its tag, read from its pickles: "null_test" (any truth but "hyperillum", e.g. the point source), "free_geometry"
-    (any geometry parameter sampled: a_rs, T_s, rp_rs, incl or b) or "" (hyperillumination truth, fixed geometry). It must match the
-    run's subfolder (series_table checks)."""
+    """What a stored run is beyond its tag, read from its pickles: storage.run_subfolder of its truth and its sampled parameters ("" for a
+    hyperillumination truth with fixed geometry). It must match the run's subfolder (series_table checks)."""
     f = next(iter(fits.values()))
-    if f.meta["data"]["truth"]["insolation_model"] != "hyperillum": return "null_test"
-    if any(n in f.pset.names for n in _GEOMETRY + _ORBIT): return "free_geometry"
-    return ""
+    return run_subfolder(f.meta["data"]["truth"], f.pset.names)
 
 
 def alternative_model(fits):

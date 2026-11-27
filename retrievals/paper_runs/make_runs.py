@@ -11,7 +11,8 @@ the files side by side and moves each finished one to done/.
     python make_runs.py --outdir DIR    # save the results to DIR instead of retrievals/dynesty_results, where 03_retrieval_series.ipynb reads them
                                         # (01_retrieval_example.ipynb with RESULTS_DIR = "dynesty_results")
 
-A run saves its fits under its dataset tag and overwrites a stored run with the same tag, so use --outdir to rerun into a fresh folder.
+A run saves its fits under its dataset tag. It replaces a stored run of the same tag only if that has the same setup, and stops with an error
+otherwise; use --outdir to rerun into a fresh folder.
 
 The runs (249 datasets with three fits each, in 132 run files):
   retrievals          every paper planet in the joint NIRSpec/G395H fit and in MIRI/LRS (55 Cnc e: MIRI/LRS only), seeds 40-69 for TOI-2431 b and K2-141 b
@@ -160,9 +161,8 @@ def make_run(description, planet, instruments, seed=None, n_bins=None, n_orbits=
         src = _sub(src, r'^(sampler = dict\([^\n]*\n)', r"\g<1>" + FREE_LOGL_KW, "sampler")
         src = _sub(src, r'make_logl\(cfg, data, m, PSETS\[m\], labels=labels\)', "make_logl(cfg, data, m, PSETS[m], labels=labels, **LOGL_KW.get(m, {}))", "make_logl")
         src = _sub(src, r'^(    base = dict\([^\n]*\n)', r"\g<1>    base.update({p_.name: p_.prior.mu for p_ in _GEOM})   # the injected geometry\n", "summary base")
-    root = repr(os.path.abspath(outdir)) if outdir else 'REPO_ROOT, "retrievals", "dynesty_results"'
-    subfolder = ', "free_geometry"' if free_geometry else ', "null_test"' if truth is not None else ""
-    src = _sub(src, r'^OUTDIR = [^\n]*', f"OUTDIR = os.path.join({root}{subfolder})   # set by make_runs.py", "OUTDIR")
+    if outdir:   # run_dynesty.py puts null tests and free-geometry runs into their subfolders of OUTDIR itself
+        src = _sub(src, r'^OUTDIR = [^\n]*', f"OUTDIR = {os.path.abspath(outdir)!r}   # set by make_runs.py", "OUTDIR")
     return f"# {description}   (written by make_runs.py from run_dynesty.py; run by run_all.sh, moved to done/ when finished)\n" + src
 
 

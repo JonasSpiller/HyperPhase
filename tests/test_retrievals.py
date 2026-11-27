@@ -1,4 +1,5 @@
 """Simulated observations and the stored nested-sampling retrievals (Section 3.4 and Appendix E)."""
+import copy
 import pickle
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from hyperphase.bias.detectors import detector_cfgs
 from hyperphase.retrieval.prediction import series_table
 from hyperphase.retrieval.simulate import simulate_data
 from hyperphase.retrieval.likelihood import make_logl
-from hyperphase.retrieval.storage import check_fit_current, load_fit, load_fits, logl_from_fit, parse_result_file
+from hyperphase.retrieval.storage import check_fit_current, load_fit, load_fits, logl_from_fit, parse_result_file, run_subfolder, setup_differences
 
 FIXED_GEOMETRY = ["TOI-2431b_MIRI-LRS_*.pkl", "TOI-2431b_JWST_NIRSpec*.pkl"]
 FREE_GEOMETRY = ["free_geometry/TOI-2431b_MIRI-LRS_*.pkl"]
@@ -117,3 +118,19 @@ def test_series_table_without_stored_runs_says_where_they_come_from(tmp_path):
     """Without the stored retrievals (not part of the repository) the series table stops with a message that names their source."""
     with pytest.raises(FileNotFoundError, match="paper_runs"):
         series_table(str(tmp_path), {"one run": [dict(planet="TOI-2431 b", instrument="MIRI/LRS", seed=44)]})
+
+
+def test_runs_the_tag_does_not_tell_apart_get_a_folder_and_are_not_overwritten(root):
+    """The dataset tag does not record the truth, a sampled geometry or the FittingConfig's other settings: run_dynesty.py saves null tests,
+    redistribution truths and free-geometry runs in subfolders (run_subfolder), and replaces a stored fit only by a repeat of its setup."""
+    assert run_subfolder(dict(insolation_model="hyperillum", F=None), ("A_B", "offset")) == ""
+    assert run_subfolder(dict(insolation_model="hyperillum", F=None), ("A_B", "offset", "a_rs", "b")) == "free_geometry"
+    assert run_subfolder(dict(insolation_model="naive", F=None), ("A_B", "offset")) == "null_test"
+    assert run_subfolder(dict(insolation_model="hyperillum_redist", F=0.1), ("A_B", "offset", "F")) == "redist_truth_F0.1"
+    fit = example_fits(root, FIXED_GEOMETRY[0])["hyperillum"]
+    data, cfg = fit.meta["data"], fit.meta["cfg"]
+    assert setup_differences(fit, data, cfg) == []
+    assert setup_differences(fit, {**data, "truth": {**data["truth"], "insolation_model": "naive"}}, cfg) == ["truth insolation_model: 'hyperillum' -> 'naive'"]
+    other_u = copy.copy(cfg)   # not replace(), which rebuilds the stellar grid and so needs the NewEra cube
+    other_u.u = (0.3, 0.2)
+    assert [d.split(":")[0] for d in setup_differences(fit, data, other_u)] == ["u"]

@@ -13,10 +13,12 @@ import pandas as pd
 from hyperphase.bands import joint_name, observed_band, resolve_instrument
 from hyperphase.bias.detectors import detector_cfgs
 from hyperphase.defaults import DEFAULT_A, DEFAULT_A_B, DEFAULT_N_BINS, DEFAULT_N_ORBITS
+from hyperphase.irradiance import POINT_SOURCE_MODELS
 from hyperphase.model import ConstantBandAlbedo, FittingConfig
 from hyperphase.newera import CUBE_FLUX
 from hyperphase.paths import FILTER_DIR
 from hyperphase.retrieval.likelihood import make_logl
+from hyperphase.retrieval.priors import _GEOMETRY, _ORBIT
 from hyperphase.retrieval.sampler import SamplerConfig
 from hyperphase.stellar import stellar_spidergrid
 
@@ -130,6 +132,36 @@ def parse_result_file(path):
     return d
 
 
+def run_subfolder(truth, sampled):
+    """The subfolder of a run whose difference from a baseline run the tag does not record, from its injected truth (simulate_data's
+    data["truth"]) and the parameters it samples: "null_test" for a point-source truth, "redist_truth" for "hyperillum_redist" (both with
+    "_F<F>" when the truth redistributes heat), "free_geometry" when the geometry is sampled, joined by "_"; "" for a baseline run."""
+    model, F = truth["insolation_model"], truth.get("F")
+    parts = [] if model == "hyperillum" else ["null_test" if model in POINT_SOURCE_MODELS else "redist_truth"]
+    if parts and F is not None: parts[0] += f"_F{F:g}"
+    if any(n in sampled for n in _GEOMETRY + _ORBIT): parts.append("free_geometry")
+    return "_".join(parts)
+
+
+def setup_differences(fit, data, cfg):
+    """What a new run would change against the stored fit of the same tag: its injected truth and the settings of its FittingConfig (per
+    detector) that the tag does not record. An empty list: the new run repeats the stored one."""
+    diffs = []
+    old, new = fit.meta["data"].get("truth") or {}, data.get("truth") or {}
+    for k in sorted(set(old) & set(new)):
+        if old[k] != new[k]: diffs.append(f"truth {k}: {old[k]!r} -> {new[k]!r}")
+    olds, news = detector_cfgs(fit.meta["cfg"]), detector_cfgs(cfg)
+    if len(olds) != len(news): return diffs + [f"{len(olds)} detector(s) -> {len(news)}"]
+    for co, cn in zip(olds, news):
+        for f in fields(FittingConfig):
+            if f.name in ("stellar_grid", "sigma_1min"): continue   # derived from the other fields; the noise is in the tag
+            a, b = getattr(co, f.name), getattr(cn, f.name)
+            if f.name == "filter_path": a, b = (os.path.basename(x) if x else x for x in (a, b))   # stored: the path on the machine that ran it
+            same = np.allclose(a, b, rtol=1e-12, atol=0.) if f.name in ("l1", "l2", "u") else a == b
+            if not same: diffs.append(f"{f.name}: {a!r} -> {b!r}")
+    return diffs
+
+
 def list_datasets(results_dir):
     """Every dataset in `results_dir` and its subfolders as a DataFrame (DATASET_COLUMNS), one row per folder and tag; subfolder '' is
     the main folder. Files that are not result files are ignored."""
@@ -150,7 +182,7 @@ def find_dataset(results_dir, planet, instrument, subfolder=None, **settings):
     whatever its noise levels, as a stem: f"{results_dir}/{stem}_*.pkl" finds its files. Raises when none or several match.
 
     subfolder : runs whose difference from the baseline is not in the tag sit in a subfolder of `results_dir`: "null_test" (data drawn
-                from the point-source model) or "free_geometry" (geometry sampled); the stem is then 'subfolder/tag'.
+                from the point-source model) or "free_geometry" (geometry sampled), see run_subfolder; the stem is then 'subfolder/tag'.
     """
     pattern = dataset_tag(planet, instrument, None, **settings)
     folder = os.path.join(results_dir, subfolder) if subfolder else results_dir

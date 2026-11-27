@@ -28,7 +28,7 @@ from hyperphase.retrieval.likelihood import make_logl
 from hyperphase.retrieval.priors import Parameter, ParameterSet, Uniform
 from hyperphase.retrieval.sampler import bayes_factor, posterior_summary, run_nested_fit, SamplerConfig
 from hyperphase.retrieval.simulate import simulate_data
-from hyperphase.retrieval.storage import dataset_tag
+from hyperphase.retrieval.storage import dataset_tag, load_fit, run_subfolder, setup_differences
 
 
 ####################################################################################################
@@ -93,7 +93,7 @@ sampler = dict(dynamic=True, pfrac=0.8, nlive=500, nlive_batch=250, maxbatch=10,
 ####################################################################################################
 
 
-OUTDIR = os.path.join(REPO_ROOT, "retrievals", "dynesty_results")   # every run saves here, also those of paper_runs/ (make_runs.py; its free-geometry runs in free_geometry/, its null tests in null_test/)
+OUTDIR = os.path.join(REPO_ROOT, "retrievals", "dynesty_results")   # every run saves here, also those of paper_runs/ (make_runs.py); null tests, free geometry etc. in subfolders (run_subfolder)
 
 
 def run_instrument(instrument):
@@ -136,8 +136,17 @@ def run_instrument(instrument):
     # overwrite each other.
     tag = dataset_tag(planet, instrument, sigmas, A_label=A_model.label, A_B=A_B_true, n_bins=n_bins, n_orbits=n_orbits, sigma_scaling=sigma_1min_scaling, seed=seed, pfrac=sampler["pfrac"])
 
+    # What the tag does not record decides the subfolder: the truth (null test, redistribution) and a sampled geometry
+    outdir = os.path.join(OUTDIR, run_subfolder(data["truth"], {n for m in MODELS for n in PSETS[m].names}))
+
     def outfile_of(pset):
-        return os.path.join(OUTDIR, tag + "_{insolation_model}" + f"_priors-{'+'.join(pset.names)}.pkl")   # {insolation_model} stays a placeholder for run_nested_fit
+        return os.path.join(outdir, tag + "_{insolation_model}" + f"_priors-{'+'.join(pset.names)}.pkl")   # {insolation_model} stays a placeholder for run_nested_fit
+
+    # A stored fit of this tag is replaced only by a repeat of the same setup (truth, limb darkening, stellar model, ...), never by another experiment
+    for m in MODELS:
+        path = outfile_of(PSETS[m]).format(insolation_model=m)
+        diffs = setup_differences(load_fit(path), data, cfg) if os.path.exists(path) else []
+        if diffs: raise FileExistsError(f"{os.path.relpath(path)} holds a run with another setup ({'; '.join(diffs)}): delete it, or set OUTDIR to another folder")
 
     t0 = time.perf_counter()
     fits = {}
