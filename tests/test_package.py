@@ -3,6 +3,7 @@ import ast
 import os
 import subprocess
 import sys
+import warnings
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import pytest
 import hyperphase.bands as bands
 from hyperphase.bands import band_of, filter_lambda, filter_loc, observed_band, register_band
 from hyperphase.model import FittingConfig, with_planet
+from hyperphase.phasecurve import Louden_PhaseCurve
 from hyperphase.targets import CUSTOM, hi_planets_by_name, register_planet
 
 PACKAGE = Path(__file__).resolve().parents[1] / "hyperphase"
@@ -98,6 +100,18 @@ def test_a_registered_planet_is_found_by_name(toi2431b):
             register_planet(twin)
     finally:
         del CUSTOM["Test-1 b"]
+
+
+def test_a_phase_curve_of_an_eccentric_planet_raises_a_warning(toi2431b):
+    """The light curves assume a circular orbit: a phase curve of a planet with ecc != 0 warns, that of a circular one does not."""
+    curve = lambda planet: Louden_PhaseCurve(planet, filter_lambda("MIRI/LRS"), t=np.linspace(0., planet.period, 50), filter_path=filter_loc("MIRI/LRS"),
+                                             stellar_model="blackbody")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        curve(toi2431b)
+    assert not [w for w in caught if "circular orbit" in str(w.message)]
+    with pytest.warns(UserWarning, match="circular orbit"):
+        curve(replace(toi2431b, name="Test-eccentric b", ecc=0.1))
 
 
 def test_a_config_keeps_its_band_and_with_planet_takes_the_planets_own_part(toi2431b):

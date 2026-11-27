@@ -1,4 +1,5 @@
 """PlanetParams: the planet, its orbit and its host star."""
+import warnings
 from dataclasses import dataclass, fields
 
 import numpy as np
@@ -11,13 +12,15 @@ from hyperphase.irradiance import insolation_fullyilluminated_hyperillum, naive_
 H_PLANCK = const.h.value
 C_LIGHT = const.c.value
 K_B = const.k_B.value
+_WARNED_ECCENTRIC = set()   # (name, ecc) of the planets warn_if_eccentric has warned about
 
 
 @dataclass(frozen=True)
 class PlanetParams:
     """A planet and its star. r1 is the planet radius, r2 the stellar radius and R the semi-major axis, in any consistent units: only the ratios
     r1/r2 and R/r2 enter. a_AU is the semi-major axis in AU, for the light-travel-time correction. targets.hi_planets_by_name builds one for
-    a known planet."""
+    a known planet. The model assumes a circular orbit (see the phasecurve module): a phase curve of a planet with ecc != 0 raises a warning
+    (warn_if_eccentric)."""
     name: str                # Exoplanet Name
     period: float       # orbital period [days]
     incl:   float       # inclination [deg]
@@ -31,6 +34,14 @@ class PlanetParams:
     T14: float  # Transit Duration [h]
     logg: float = 4.5  # stellar surface gravity [log10 cgs], for the stellar spectrum and limb darkening
     feh: float = 0.0  # stellar metallicity [Fe/H] [dex], for the stellar spectrum and limb darkening
+
+    def warn_if_eccentric(self):
+        """Warn, once per planet and eccentricity, when ecc != 0: the light curves assume a circular orbit. Called by every function that builds
+        a phase curve from the planet."""
+        if self.ecc != 0. and (self.name, self.ecc) not in _WARNED_ECCENTRIC:
+            _WARNED_ECCENTRIC.add((self.name, self.ecc))
+            warnings.warn(f"{self.name}: ecc = {self.ecc:g}, but the model assumes a circular orbit (irradiance at the fixed distance R, occultation timing "
+                          f"of fast_lightcurve), so its phase curves are not valid; dataclasses.replace(planet, ecc=0.) gives the circular approximation.", stacklevel=3)
 
     @property
     def args(self):

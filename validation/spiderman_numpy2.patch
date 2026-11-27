@@ -1,6 +1,7 @@
 Compatibility patch for upstream SPIDERMAN (Louden & Kreidberg 2018, https://github.com/tomlouden/spiderman), commit 379a5b6, so that it builds
 and runs with numpy >= 2, matplotlib >= 3.3 and current setuptools. It changes no physics: the patched SPIDERMAN is the baseline of section 7 of
-validation/speed_accuracy.ipynb. SPIDERMAN is under the GNU GPL v3, and so is this patch.
+validation/speed_accuracy.ipynb. SPIDERMAN is distributed under the MIT License of its LICENSE.txt, reproduced at the end of this header (its
+setup.py names the GNU GPL v3; the patch keeps that metadata and only turns it into a string). This patch is under the same MIT License.
 
     git clone https://github.com/tomlouden/spiderman.git
     cd spiderman
@@ -12,6 +13,22 @@ The changes: NPY_IN_ARRAY -> NPY_ARRAY_IN_ARRAY in c_src/_web.c and c_src/_heron
 numpy.distutils (removed in numpy 2) and with the licence as a string, plus a pyproject.toml that builds against numpy >= 2; in spiderman/,
 matplotlib.image.imread for the removed matplotlib._png.read_png (plot.py), an object array for the ragged grid (read_model.py), and a boolean
 mask instead of a list holding one (stellar_grid.py).
+
+SPIDERMAN's LICENSE.txt:
+
+    Copyright (c) 2016 Tom Louden
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+    following conditions:
+
+    The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 diff --git a/c_src/_heron.c b/c_src/_heron.c
 index 9c9546f..d4674e9 100644

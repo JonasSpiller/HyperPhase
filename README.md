@@ -172,6 +172,7 @@ from there. The three stored retrievals in `retrievals/example_runs/` can be rea
 - The planet is a bare rock in instantaneous radiative equilibrium: uniform Bond albedo and emissivity, no thermal inertia, no internal heat.
   Heat transport enters only as the uniform-nightside redistribution $F$ of Kreidberg & Loeb (2016).
 - Orbits are circular: the irradiance uses a fixed star–planet distance, and the fast light-curve evaluation times the occultation for $e = 0$.
+  A phase curve of a planet with $e \neq 0$ (some archive planets keep their published eccentricity) raises a warning.
 - The star's limb darkening is linear for the irradiance. The reflected light is grey and Lambertian, and its penumbral irradiance uses the
   bolometric `u_bol` rather than the limb darkening of the band.
 - The planet emits as a blackbody scaled by the band emissivity, without spectral features of the surface.
@@ -184,6 +185,10 @@ from there. The three stored retrievals in `retrievals/example_runs/` can be rea
   2026 August 4. This research has made use of the NASA Exoplanet Archive, which is operated by the California Institute of Technology,
   under contract with the National Aeronautics and Space Administration under the Exoplanet Exploration Program. The derived columns and the
   curated parameters in `inputs/planets/curated_planets.csv` are not archive values; each entry cites its source.
+- Unconfirmed TESS candidates (`bias_analysis/07_tess_candidates.ipynb`): the TOI table of ExoFOP, downloaded on 2026 October 20, with the
+  host stars of the TESS Input Catalog v8 (Stassun et al. 2019). This research has made use of the Exoplanet Follow-up Observation Program
+  (ExoFOP; DOI: 10.26134/ExoFOP5) website, which is operated by the California Institute of Technology, under contract with the National
+  Aeronautics and Space Administration under the Exoplanet Exploration Program.
 - Filter throughputs: SVO Filter Profile Service (Rodrigo et al. 2012, 2020, 2024). This research has made use of the SVO Filter Profile
   Service "Carlos Rodrigo", funded by MCIN/AEI/10.13039/501100011033/ through grant PID2023-146210NB-I00. The MIRI/LRS throughput is taken
   from the Pandeia reference data (Pontoppidan et al. 2016).
@@ -199,6 +204,7 @@ If you use this code, please cite the paper above (see also `CITATION.cff`) and 
 
 ## License
 
-MIT, see `LICENSE`. There are two exceptions. `validation/InstellCa_3.0_exported.py` is a modified copy of InstellCa,
-Copyright (c) 2021 Mradumay137, also under the MIT License; its header lists the changes. `validation/spiderman_numpy2.patch` is a patch to
-SPIDERMAN (Louden & Kreidberg 2018) and, like SPIDERMAN, under the GNU GPL v3.
+MIT, see `LICENSE`. Two files build on the code of others, also under the MIT License. `validation/InstellCa_3.0_exported.py` is a modified
+copy of InstellCa, Copyright (c) 2021 Mradumay137; its header lists the changes. `validation/spiderman_numpy2.patch` is a patch to SPIDERMAN
+(Louden & Kreidberg 2018), Copyright (c) 2016 Tom Louden, whose `LICENSE.txt` is the MIT License (its `setup.py` names the GNU GPL v3); the
+patch's header reproduces that licence.

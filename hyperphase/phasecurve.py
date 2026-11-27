@@ -194,6 +194,7 @@ def reflected_PhaseCurve(planet, t=None, t0=0., u=DEFAULT_U, u_bol=DEFAULT_U_BOL
 
     Returns (t, flux, depth): the times [days] corrected for the light travel time, the flux relative to the star alone (1 + planet - transit; the
     planet flux only for include_transit=False), and the reflected flux at full phase [ppm]."""
+    planet.warn_if_eccentric()
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     if t is None: t = np.linspace(0., period, 1000, endpoint=False)
@@ -286,6 +287,7 @@ def thermal_PhaseCurve(planet, lambda_range, t=None, t0=0., u=DEFAULT_U, u_bol=D
     Returns (t, flux, depth, params): the times [days], the flux relative to the star alone (1 + planet - transit; the planet flux only for
     include_transit=False), the occultation depth [ppm], and the SPIDERMAN ModelParams."""
     check_redistribution(insolation_model, F)
+    planet.warn_if_eccentric()
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     if N_LAYERS is None:
@@ -379,6 +381,7 @@ def Louden_PhaseCurve(planet, lambda_range, t=None, t0=0., F=0., u=DEFAULT_U, st
     """Thermal phase curve of "naive_redist": the point-source map with the heat redistribution F in [0, 0.5] (Kreidberg & Loeb 2016, eq. 1) is
     analytic, so SPIDERMAN's Louden model evaluates it instead of a direct_T grid (u_bol, n_lo and n_la do not apply). With F = 0 it equals
     thermal_PhaseCurve(..., insolation_model="naive"), but faster. Parameters and returns as in thermal_PhaseCurve."""
+    planet.warn_if_eccentric()
     period, incl, ecc, w, r1, r2, R, T2_eff, a_AU = planet.args
 
     sp_louden = louden_params(planet, lambda_range, F, t0=t0, filter_path=filter_path, A_B = A_B, emissivity_bol=emissivity_bol, N_LAYERS=N_LAYERS)

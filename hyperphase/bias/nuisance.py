@@ -259,33 +259,61 @@ def nuisance_both_fits_uniform(problem, problem_redist, A_B_true, nuisances, pri
     likelihood-ratio statistic of the best fits within the limits; where the best fit with redistribution has F <= 0 it is the A_B-only fit.
     Returns the keys of nuisance_both_fits (fit, fit_J with posterior medians, sds and means), plus best (nuisance_both_fits with the range as
     hard limits) and posterior (bounded_posterior of ps, ps_J and ext)."""
-    if len(uniform) != 1: raise ValueError(f"nuisance_both_fits_uniform: one nuisance with a flat bounded prior, got {list(uniform)}")
-    (name, (lo, hi)), = uniform.items()
+    (name, (lo, hi)), = _one_uniform(uniform)
     pri = {**(priors or {}), name: None}   # flat: the range is the prior
     best = nuisance_both_fits(problem, problem_redist, A_B_true, nuisances, pri, time_factor, limits=uniform)
-    a, f = nuisance_solve(problem, nuisances, pri, time_factor), nuisance_solve(problem_redist, nuisances, pri, time_factor)
-    ps, ext = bounded_posterior(a, name, lo, hi), bounded_posterior(a, name, lo, hi, peak=[A_B_true] + [0.] * len(a["names"]))
-    post = lambda s, p: {**s, "A_B_fit": p["median"][0], "sigma_A_B": p["sd"][0], "delta": p["delta"], "sigma_post": p["sigma_post"], "on_limit": [], "posterior": True,
-                         **({"F_fit": p["median"][1], "sigma_F": p["sd"][1]} if len(p["median"]) == 2 else {})}
-    fit = post(a, ps)
+    u = nuisance_uniform(problem, A_B_true, nuisances, uniform, priors, time_factor)
+    fit, ps, ext = u["fit"], u["posterior"]["ps"], u["posterior"]["ext"]
     if best["F_fit"] <= 0.: fit_J, ps_J = {**fit, "F_fit": 0., "sigma_F": np.nan}, ps
-    else: ps_J = bounded_posterior(f, name, lo, hi); fit_J = post(f, ps_J)
-    ref = ext["median"][0]
-    bias, bias_J = fit["A_B_fit"] - ref, fit_J["A_B_fit"] - ref
-    return dict(bias=bias, sigma=fit["sigma_A_B"], bias_sigma=abs(bias) / fit["sigma_A_B"], lnB_mean=0.5 * a["chi2"] + float(np.log(ext["mass"] / ps["mass"])),
+    else:
+        f = nuisance_solve(problem_redist, nuisances, pri, time_factor)
+        ps_J = bounded_posterior(f, name, lo, hi); fit_J = _posterior_solution(f, ps_J)
+    bias_J = fit_J["A_B_fit"] - ext["median"][0]
+    return dict(bias=u["bias"], sigma=u["sigma"], bias_sigma=u["bias_sigma"], lnB_mean=u["lnB_mean"],
                 bias_J=bias_J, sigma_J=fit_J["sigma_A_B"], bias_sigma_J=abs(bias_J) / fit_J["sigma_A_B"], F_fit=fit_J["F_fit"], z_F=best["z_F"], fit=fit, fit_J=fit_J,
                 best=best, posterior=dict(ps=ps, ps_J=ps_J, ext=ext))
 
 
+def nuisance_uniform(problem, A_B_true, nuisances, uniform, priors=None, time_factor=1.):
+    """The A_B-only half of nuisance_both_fits_uniform (see there): the posterior of `problem` with a flat prior on the shift of one nuisance,
+    uniform = {name: (lo, hi)}. Returns bias, sigma, bias_sigma, lnB_mean, fit (the posterior solution), free (the solve with that nuisance flat
+    and unbounded) and posterior (bounded_posterior of ps and ext)."""
+    (name, (lo, hi)), = _one_uniform(uniform)
+    a = nuisance_solve(problem, nuisances, {**(priors or {}), name: None}, time_factor)
+    ps, ext = bounded_posterior(a, name, lo, hi), bounded_posterior(a, name, lo, hi, peak=[A_B_true] + [0.] * len(a["names"]))
+    fit = _posterior_solution(a, ps)
+    bias = fit["A_B_fit"] - ext["median"][0]
+    return dict(bias=bias, sigma=fit["sigma_A_B"], bias_sigma=abs(bias) / fit["sigma_A_B"], lnB_mean=0.5 * a["chi2"] + float(np.log(ext["mass"] / ps["mass"])),
+                fit=fit, free=a, posterior=dict(ps=ps, ext=ext))
+
+
+def _one_uniform(uniform):
+    if len(uniform) != 1: raise ValueError(f"uniform: one nuisance with a flat bounded prior, got {list(uniform)}")
+    return uniform.items()
+
+
+def _posterior_solution(s, p):
+    """The nuisance_solve result s with the posterior p of bounded_posterior in place of the best fit (shrinkage from the posterior sd)."""
+    prior_sd = {n: s["sigma_post"][n] / s["shrinkage"][n] for n in s["names"]}
+    return {**s, "A_B_fit": p["median"][0], "sigma_A_B": p["sd"][0], "delta": p["delta"], "sigma_post": p["sigma_post"], "on_limit": [], "posterior": True,
+            "shrinkage": {n: p["sigma_post"][n] / prior_sd[n] for n in s["names"]}, **({"F_fit": p["median"][1], "sigma_F": p["sd"][1]} if len(p["median"]) == 2 else {})}
+
+
 def nuisance_table(problem, A_B_true, rows):
-    """Nuisance table of one configuration, one row per entry of `rows` ({label: tuple of nuisances}): sigma_A_B, bias_A_B, bias_sigma, chi2 and
-    lnB_mean, and per nuisance: for the geometry its shrinkage sigma_post / sigma_prior ("shrink <name>") or, with a flat prior, its fitted shift
-    and sigma ("<name>", "sig <name>"); for an amplitude its fitted value and sigma (stellar in ppm, planetary as delta = (a1 - a2) / a2), plus
-    the shrinkage with a prior."""
+    """Nuisance table of one configuration, one row per entry of `rows` ({label: tuple of nuisances, or dict(nuisances=..., uniform={name: (lo, hi)})
+    for a flat bounded prior on one of them, nuisance_uniform}): sigma_A_B, bias_A_B, bias_sigma, chi2 and lnB_mean, and per nuisance: for the
+    geometry its shrinkage sigma_post / sigma_prior ("shrink <name>") or, with a flat prior, its fitted shift and sigma ("<name>", "sig <name>");
+    for an amplitude its fitted value and sigma (stellar in ppm, planetary as delta = (a1 - a2) / a2), plus the shrinkage with a prior. A row with
+    a flat bounded prior gives posterior quantities (bias the difference of the posterior medians, chi2 that of the unbounded solve)."""
     out = []
     for label, nuis in rows.items():
-        s = nuisance_solve(problem, nuis)
-        row = {"row": label, "sigma_A_B": s["sigma_A_B"], "bias_A_B": s["A_B_fit"] - A_B_true, "bias_sigma": abs(s["A_B_fit"] - A_B_true) / s["sigma_A_B"], "chi2": s["chi2"], "lnB_mean": s["lnB_mean"]}
+        if isinstance(nuis, dict):
+            u = nuisance_uniform(problem, A_B_true, nuis["nuisances"], nuis["uniform"])
+            s = u["fit"]
+            row = {"row": label, "sigma_A_B": u["sigma"], "bias_A_B": u["bias"], "bias_sigma": u["bias_sigma"], "chi2": u["free"]["chi2"], "lnB_mean": u["lnB_mean"]}
+        else:
+            s = nuisance_solve(problem, nuis)
+            row = {"row": label, "sigma_A_B": s["sigma_A_B"], "bias_A_B": s["A_B_fit"] - A_B_true, "bias_sigma": abs(s["A_B_fit"] - A_B_true) / s["sigma_A_B"], "chi2": s["chi2"], "lnB_mean": s["lnB_mean"]}
         for n in s["names"]:
             shrink = s["shrinkage"][n]
             if n in problem["values"]:   # geometry: shrinkage, or shift and sigma under a flat prior

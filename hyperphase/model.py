@@ -144,6 +144,7 @@ def pcurve_params(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_r
             n_layers = 60
 
     planet = swept_planet(cfg, a_rs=a_rs, T_s=T_s, rp_rs=rp_rs)
+    planet.warn_if_eccentric()
 
     # "naive_redist": the Louden model (see phasecurve.Louden_PhaseCurve)
     if insolation_model == "naive_redist":
