@@ -46,15 +46,21 @@ def test_example_runs_reproduce_their_likelihood(root, pattern, tmp_path, monkey
         assert logl_from_fit(fit)(theta) == pytest.approx(logl, abs=1e-6), model
 
 
+def test_free_geometry_runs_keep_their_stellar_grid(root, tmp_path, monkeypatch):
+    """A sampled inclination changes the planet, not the star, so the free-geometry likelihood uses the grid saved with the run: it rebuilds no
+    stellar grid (and so needs no NewEra cube) and reproduces the stored best fit."""
+    monkeypatch.setattr("hyperphase.retrieval.storage.CUBE_FLUX", tmp_path / "no_cube.npy")
+    monkeypatch.setattr("hyperphase.model.stellar_spidergrid", lambda *a, **k: pytest.fail("the stellar grid was rebuilt"))
+    for model, fit in example_fits(root, FREE_GEOMETRY[0]).items():
+        theta, logl = best_sample(fit)
+        assert logl_from_fit(fit)(theta) == pytest.approx(logl, abs=1e-6), model
+
+
 @pytest.mark.parametrize("pattern", FIXED_GEOMETRY + FREE_GEOMETRY)
 def test_example_runs_are_current(root, newera_cube, pattern):
-    """With the NewEra cube: every shipped retrieval was run with the stellar grid the current code builds (check_fit_current = 0). The
-    free-geometry runs rebuild the stellar grid at every sampled geometry, so their likelihood is checked here too."""
+    """With the NewEra cube: every shipped retrieval was run with the stellar grid the current code builds (check_fit_current = 0)."""
     for model, fit in example_fits(root, pattern).items():
         assert check_fit_current(fit) == 0., model
-        if pattern in FREE_GEOMETRY:
-            theta, logl = best_sample(fit)
-            assert logl_from_fit(fit)(theta) == pytest.approx(logl, abs=1e-6), model
 
 
 @pytest.mark.parametrize("pattern", FIXED_GEOMETRY)

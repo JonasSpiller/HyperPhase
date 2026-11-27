@@ -1,4 +1,5 @@
 """Gaussian likelihoods of one band or a detector set, and scans of the likelihood."""
+import copy
 import warnings
 from dataclasses import replace
 
@@ -179,7 +180,9 @@ def _orbit_cfg(cfg, p):
         if not x < 1.: raise FloatingPointError(f"impact parameter b = {p['b']} >= a/R*")
         incl = float(np.degrees(np.arccos(x)))
     else: return cfg
-    return replace(cfg, planet=replace(cfg.planet, incl=incl))   # FittingConfig rebuilds its stellar grid from the lru cache: cheap
+    c = copy.copy(cfg)   # not replace(): that would rebuild the stellar grid, which the inclination does not change, and needs the NewEra cube
+    c.planet = replace(cfg.planet, incl=incl)
+    return c
 
 
 class JointGaussianLogL:

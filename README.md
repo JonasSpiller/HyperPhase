@@ -45,8 +45,8 @@ Data that are not in the repository:
   Jupyter, which makes it the default of every function and notebook. The albedo biases stay the same, but the uncertainties and the
   evidence scale with the stellar flux in the band, so the numbers differ from the stored notebook outputs (for TOI-2431 b in MIRI/LRS
   the uncertainty of $A_B$ is about 9 % larger and the expected $\ln B$ about 15 % lower). The stored retrievals in
-  `retrievals/example_runs/` were run with the NewEra star: without the cube their fixed-geometry likelihoods are rebuilt from the
-  pickles, while the free-geometry example, the last section of `retrievals/01_retrieval_example.ipynb` and
+  `retrievals/example_runs/` were run with the NewEra star: without the cube their likelihoods are rebuilt from the stellar grid saved
+  in each pickle, while the last section of `retrievals/01_retrieval_example.ipynb` (derived quantities) and
   `validation/blackbody_vs_newera.ipynb` need the cube.
 - **Noise levels.** `inputs/noise/pandexo_cache.csv` holds the PandExo precision of the planets and bands of the paper, computed with
   PandExo and Pandeia 2026.7. Without PandExo installed these values are used as they are; with another version installed they are recomputed.
