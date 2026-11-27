@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from hyperphase.bands import FILTER_FILES, filter_lambda, filter_loc, full_lambda
-from hyperphase.noise import _package_version, _pandexo_cache_store, _pandexo_key, NoNoiseLevelError, pandexo_params, rms_1min
+from hyperphase.noise import _package_version, _pandexo_cache_store, _pandexo_key, NoNoiseLevelError, observable, pandexo_params, rms_1min
 from hyperphase.paper import PAPER_PLANETS
 from hyperphase.paths import ARCHIVE_DIR
 from hyperphase.targets import CUSTOM, INPUT_GLOB, hi_planets_by_name, planet_archive_value
@@ -83,6 +83,18 @@ def test_missing_shipped_cache_runs_pandexo(toi2431b, empty_user_cache, tmp_path
     monkeypatch.setattr("hyperphase.noise.run_pandexo", run_pandexo)
     with pytest.raises(Ran):
         rms_1min(toi2431b, "MIRI/LRS", verbose=False)
+
+
+@pytest.mark.parametrize("name", sorted(CUSTOM))
+def test_shipped_cache_covers_the_curated_planets(name, empty_user_cache, monkeypatch):
+    """Every curated planet has its PandExo noise in the shipped cache, in NRS1, NRS2 and MIRI/LRS where it is observable, so the tables
+    need no PandExo run."""
+    if _package_version("pandexo.engine") != "2026.7" or _package_version("pandeia.engine") != "2026.7":
+        pytest.skip("the cache holds PandExo/Pandeia 2026.7 values")
+    monkeypatch.setattr("hyperphase.noise.run_pandexo", lambda *a, **k: pytest.fail(f"PandExo ran for {name}"))
+    planet = hi_planets_by_name(name)
+    for band in ("JWST_NIRSpec.G395H_NRS1", "JWST_NIRSpec.G395H_NRS2", "MIRI/LRS"):
+        if observable(name, band): assert rms_1min(planet, band, verbose=False) > 0., band
 
 
 def test_noise_levels_without_pandexo(toi2431b):
