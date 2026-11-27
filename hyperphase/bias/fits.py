@@ -57,7 +57,9 @@ def fit_residual(cfg, yb_truth, insolation_model, A_B_, free_offset=True, **kw):
 
 def truth_curves(cfg, A_B_true, F_true=None, **kw):
     """The noiseless extended-source truth model_pcurve(cfg, "hyperillum", A_B_true)[1], or one curve per detector of a set. F_true: a truth that
-    redistributes heat ("hyperillum_redist" at that F); None is the bare rock."""
+    redistributes heat ("hyperillum_redist" at that F); None is the bare rock. The geometry caches insol and refl_unit in kw belong to the fitted
+    model, so the truth builds its own."""
+    kw = {k: v for k, v in kw.items() if k not in ("insol", "refl_unit")}
     model, kw = ("hyperillum", kw) if F_true is None else ("hyperillum_redist", {**kw, "F": float(F_true)})
     return [model_pcurve(c, model, A_B_true, **kw)[1] for c in cfg] if is_detector_set(cfg) else model_pcurve(cfg, model, A_B_true, **kw)[1]
 

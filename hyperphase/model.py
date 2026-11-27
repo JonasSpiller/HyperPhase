@@ -12,7 +12,7 @@ from hyperphase.bands import observed_band
 from hyperphase.defaults import (DEFAULT_A, DEFAULT_EMISSIVITY, DEFAULT_EMISSIVITY_BOL, DEFAULT_N_BINS, DEFAULT_N_LA, DEFAULT_N_LO, DEFAULT_N_ORBITS,
                                  DEFAULT_U, DEFAULT_U_BOL, STELLAR_MODEL)
 from hyperphase.irradiance import EXTENDED_SOURCE_MODELS, check_redistribution
-from hyperphase.phasecurve import custom_temperature_grid, fast_lightcurve, insolation_grid, louden_params, reflected_PhaseCurve
+from hyperphase.phasecurve import check_cache_key, custom_temperature_grid, fast_lightcurve, insolation_grid, louden_params, reflected_PhaseCurve
 from hyperphase.stellar import check_teff_nodes, stellar_spidergrid
 from hyperphase.transit import flux_transit
 
@@ -116,10 +116,44 @@ def model_times(period, n_t):
     return np.linspace(0., period, int(n_t), endpoint=False) + 0.5 * period / int(n_t)
 
 
+class ReflectedUnit(np.ndarray):
+    """The curve of reflected_unit, carrying the setup it was built for (reflected_key), so that model_pcurve refuses it for another source or
+    geometry. Arithmetic on it and slices of it give plain arrays."""
+
+    def __new__(cls, y, key):
+        obj = np.asarray(y, float).view(cls)
+        obj.key = key
+        return obj
+
+    def __array_finalize__(self, obj):
+        self.key = None
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        plain = lambda xs: tuple(x.view(np.ndarray) if isinstance(x, ReflectedUnit) else x for x in xs)
+        if "out" in kwargs: kwargs["out"] = plain(kwargs["out"])
+        return getattr(ufunc, method)(*plain(inputs), **kwargs)
+
+    def __reduce__(self):
+        f, args, state = super().__reduce__()
+        return f, args, (state, self.key)
+
+    def __setstate__(self, state):
+        state, self.key = state
+        super().__setstate__(state)
+
+
+def reflected_key(planet, insolation_model, u_bol, n_t):
+    """What the reflected light depends on: the source (extended or point), a/R*, Rp/R*, the inclination, the period and the time grid; for the
+    extended source also u_bol."""
+    ext = insolation_model in EXTENDED_SOURCE_MODELS
+    return ("extended" if ext else "point", planet.R / planet.r2, planet.r1 / planet.r2, float(planet.incl), float(planet.period),
+            float(u_bol) if ext else None, int(n_t))
+
+
 def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_rs=None, n_t=None, **_):
     """Reflected planet flux [ppm] at unit band albedo (A = 1) on model_times, without the transit: the reflected light is linear in A, so
     model_pcurve scales it. a_rs, T_s, rp_rs as in swept_planet. **_ takes the other model_pcurve keywords, which do not affect the reflected
-    light."""
+    light. Returns a ReflectedUnit."""
     pl = cfg.planet
     a_rs = pl.R / pl.r2  if a_rs is None else a_rs   # default a/Rs from PlanetParams
     T_s = pl.T2_eff      if T_s is None else T_s
@@ -130,7 +164,7 @@ def reflected_unit(cfg, insolation_model, a_rs=None, T_s=None, rp_rs=None, n_t=N
     # a_AU is left as is: it enters only the returned times, which are not used
     planet = replace(pl, r1=rp_rs * pl.r2, R=a_rs * pl.r2, T2_eff=T_s)
     _, refl, _ = reflected_PhaseCurve(planet, t=t_, include_transit=False, A=1., u_bol=cfg.u_bol, insolation_model=insolation_model)
-    return refl * 1e6
+    return ReflectedUnit(refl * 1e6, reflected_key(planet, insolation_model, cfg.u_bol, n_t))
 
 
 def pcurve_params(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_rs=None, n_layers=None, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insol=None):
@@ -196,5 +230,7 @@ def model_pcurve(cfg, insolation_model, A_B_, F=None, a_rs=None, T_s=None, rp_rs
     A = cfg.A_(A_B_)
     if refl_unit is None:
         refl_unit = reflected_unit(cfg, insolation_model, a_rs=planet.R / planet.r2, T_s=planet.T2_eff, rp_rs=planet.r1 / planet.r2, n_t=n_t)
+    elif isinstance(refl_unit, ReflectedUnit):
+        check_cache_key(refl_unit.key, reflected_key(planet, insolation_model, cfg.u_bol, n_t), "refl_unit")
 
-    return t_, thermal + A * refl_unit + f_transit
+    return t_, thermal + A * np.asarray(refl_unit) + f_transit

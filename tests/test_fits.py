@@ -2,7 +2,8 @@
 import numpy as np
 import pytest
 
-from hyperphase.model import model_pcurve
+from hyperphase.model import insolation_cache, model_pcurve, reflected_unit
+from hyperphase.bias.fisher import fit_truth
 from hyperphase.bias.fits import chi2_landscape, fit_AB_only, fit_naive, fit_redist, truth_curves
 
 
@@ -29,3 +30,17 @@ def test_redistribution_fit_finds_the_grid_minimum(cfg_lrs):
     assert F > 0.
     grid = chi2_landscape(cfg_lrs, truth, A_B + np.linspace(-0.05, 0.05, 11), np.linspace(0., 2. * F, 11))
     assert chi2 <= grid.min() + 1e-6
+
+
+def test_geometry_caches_are_exact_and_refuse_another_setup(cfg_lrs):
+    """insol and refl_unit reproduce the uncached curve bit for bit, serve the redistribution model of the same source, and are refused for
+    another source or geometry; the truth of fit_truth builds its own instead of taking the fitted model's."""
+    y = model_pcurve(cfg_lrs, "hyperillum", 0.2)[1]
+    caches = dict(insol=insolation_cache(cfg_lrs, "hyperillum"), refl_unit=reflected_unit(cfg_lrs, "hyperillum"))
+    assert np.array_equal(model_pcurve(cfg_lrs, "hyperillum", 0.2, **caches)[1], y)
+    assert np.array_equal(model_pcurve(cfg_lrs, "hyperillum_redist", 0.2, F=0.1, **caches)[1], model_pcurve(cfg_lrs, "hyperillum_redist", 0.2, F=0.1)[1])
+    for wrong in (dict(insol=insolation_cache(cfg_lrs, "naive")), dict(insol=insolation_cache(cfg_lrs, "hyperillum", a_rs=3.)),
+                  dict(refl_unit=reflected_unit(cfg_lrs, "naive")), dict(refl_unit=reflected_unit(cfg_lrs, "hyperillum", rp_rs=0.03))):
+        with pytest.raises(ValueError, match="was built for"):
+            model_pcurve(cfg_lrs, "hyperillum", 0.2, **wrong)
+    assert fit_truth(cfg_lrs, 0.2, refl_unit=reflected_unit(cfg_lrs, "naive")) == fit_truth(cfg_lrs, 0.2)

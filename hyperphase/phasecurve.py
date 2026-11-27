@@ -241,24 +241,56 @@ def occultation_depth(spider_params, stellar_grid, emissivity=DEFAULT_EMISSIVITY
     return emissivity * (f_unblocked_occ - f_blocked_occ)*1e6 # Fp/Fs(alpha=0) in ppm
 
 
+class InsolationGrid(tuple):
+    """(lo, la, I) of insolation_grid, carrying the setup it was built for (insolation_key), so that custom_temperature_grid refuses it for
+    another irradiance model, geometry or grid."""
+
+    def __new__(cls, lo, la, I, key):
+        obj = super().__new__(cls, (lo, la, I))
+        obj.key = key
+        return obj
+
+    def __reduce__(self):
+        return InsolationGrid, (*self, self.key)
+
+
+def insolation_key(planet, insolation_model, u_bol, n_lo, n_la):
+    """What an irradiance map depends on: the source (extended or point), a/R*, T_eff and the grid; for the extended source also Rp/R* and u_bol."""
+    ext = insolation_model in EXTENDED_SOURCE_MODELS
+    return ("extended" if ext else "point", planet.R / planet.r2, float(planet.T2_eff), planet.r1 / planet.r2 if ext else None,
+            float(u_bol) if ext else None, int(n_lo), int(n_la))
+
+
+def check_cache_key(cached, expected, what):
+    """Raise if a cache's key (insolation_key, model.reflected_key) differs from the one the call needs; numbers compared to 1e-9."""
+    def equal(a, b):
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)): return bool(np.isclose(a, b, rtol=1e-9, atol=0.))
+        return a == b
+    same = len(cached) == len(expected) and all(equal(a, b) for a, b in zip(cached, expected))
+    if not same: raise ValueError(f"the cached {what} was built for {cached}, but this call needs {expected}: build it for this model and geometry")
+
+
 def insolation_grid(planet, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insolation_model="hyperillum"):
     """The A_B-independent part of custom_temperature_grid: the irradiance map on the (lo, la) grid. It depends on the geometry only, so a fit that
     varies only A_B builds it once (model.insolation_cache, model.model_pcurve(insol=...)).
 
-    Returns (lo, la, I): longitudes [deg] (0 = substellar meridian), latitudes [deg], and the irradiance [W m^-2] with shape (len(la), len(lo))."""
+    Returns (lo, la, I) as an InsolationGrid: longitudes [deg] (0 = substellar meridian), latitudes [deg], and the irradiance [W m^-2] with shape
+    (len(la), len(lo))."""
     lo = np.linspace(-180, 180, n_lo)  # longitude [deg], 0 = substellar meridian
     la = np.linspace(-90, 90, n_la)  # latitude [deg], 0 = equator
     LO, LA = np.meshgrid(np.radians(lo), np.radians(la))  # shape (n_la, n_lo), radians
 
     gamma1_grid = np.arccos(np.cos(LA) * np.cos(LO))  # angular distance from substellar point
-    return lo, la, insolation(gamma1_grid, planet, insolation_model, u_bol=u_bol)
+    I = insolation(gamma1_grid, planet, insolation_model, u_bol=u_bol)
+    return InsolationGrid(lo, la, I, insolation_key(planet, insolation_model, u_bol, n_lo, n_la))
 
 
 def custom_temperature_grid(planet, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la=DEFAULT_N_LA, insolation_model="hyperillum", F=None, A_B=DEFAULT_A_B, emissivity_bol=DEFAULT_EMISSIVITY_BOL, insol=None):
     """Surface-temperature map of insolation_model on a longitude-latitude grid, the input of SPIDERMAN's direct_T model.
 
     insol: optional precomputed (lo, la, irradiance map) from insolation_grid / model.insolation_cache; then only the
-    ((1-A_B)/emissivity_bol)^(1/4) rescale is done. It holds for any F. F: heat redistribution of the redistribution models.
+    ((1-A_B)/emissivity_bol)^(1/4) rescale is done. It holds for any F, and is refused if built for another source, geometry or grid (a plain
+    tuple is not checked). F: heat redistribution of the redistribution models.
 
     Returns (lo, la, T): longitudes [deg] (0 = substellar meridian), latitudes [deg], and the temperature [K] with shape (len(la), len(lo))."""
     check_redistribution(insolation_model, F)
@@ -268,6 +300,7 @@ def custom_temperature_grid(planet, u_bol=DEFAULT_U_BOL, n_lo=DEFAULT_N_LO, n_la
         lo, la, insol_grid = insol
         if (len(lo), len(la)) != (n_lo, n_la) or insol_grid.shape != (len(la), len(lo)):
             raise ValueError(f"cached insol is on a {(len(lo), len(la))} grid but n_lo, n_la = {(n_lo, n_la)}")
+        if isinstance(insol, InsolationGrid): check_cache_key(insol.key, insolation_key(planet, insolation_model, u_bol, n_lo, n_la), "insol")
 
     temp_grid = temperature_from_insolation(insol_grid, planet, insolation_model, A_B = A_B, emissivity_bol=emissivity_bol, F=F, u_bol=u_bol)
 
